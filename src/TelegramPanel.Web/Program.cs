@@ -13,6 +13,18 @@ using TelegramPanel.Web.Services;
 var builder = WebApplication.CreateBuilder(args);
 
 // 可选的本地覆盖配置（不要提交到仓库）
+// Docker 部署时该文件通常是指向 /data/appsettings.local.json 的符号链接；首次启动可能是“悬空链接”，
+// 直接加载会抛 FileNotFoundException 导致容器不断重启，因此这里先确保文件存在一个空 JSON。
+try
+{
+    var localOverridePath = Path.Combine(builder.Environment.ContentRootPath, "appsettings.local.json");
+    if (!File.Exists(localOverridePath))
+        File.WriteAllText(localOverridePath, "{}", new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine($"Failed to ensure appsettings.local.json exists: {ex.Message}");
+}
 builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: true);
 
 // 配置 Serilog
