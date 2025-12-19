@@ -314,6 +314,9 @@ public class AccountImportService
             _ = TryGetLong(root, out var userId, "user_id", "uid");
             _ = TryGetString(root, out var username, "username");
             username = string.IsNullOrWhiteSpace(username) ? null : username.Trim();
+            _ = TryGetString(root, out var firstName, "first_name", "firstName");
+            _ = TryGetString(root, out var lastName, "last_name", "lastName");
+            var nickname = BuildNickname(firstName, lastName, username);
 
             var dir = Path.GetDirectoryName(jsonPath) ?? extractDirFallback();
             var baseName = Path.GetFileNameWithoutExtension(jsonPath);
@@ -340,6 +343,7 @@ public class AccountImportService
             {
                 existing.UserId = userId ?? existing.UserId;
                 existing.Username = username ?? existing.Username;
+                existing.Nickname = nickname ?? existing.Nickname;
                 existing.SessionPath = targetSessionPath;
                 existing.ApiId = apiId;
                 existing.ApiHash = apiHash.Trim();
@@ -353,6 +357,7 @@ public class AccountImportService
                 {
                     Phone = phone,
                     UserId = userId ?? 0,
+                    Nickname = nickname,
                     Username = username,
                     SessionPath = targetSessionPath,
                     ApiId = apiId,
@@ -375,6 +380,16 @@ public class AccountImportService
         }
 
         string extractDirFallback() => Path.GetTempPath();
+    }
+
+    private static string? BuildNickname(string? firstName, string? lastName, string? username)
+    {
+        firstName = string.IsNullOrWhiteSpace(firstName) ? null : firstName.Trim();
+        lastName = string.IsNullOrWhiteSpace(lastName) ? null : lastName.Trim();
+        var display = string.Join(" ", new[] { firstName, lastName }.Where(s => !string.IsNullOrWhiteSpace(s)));
+        if (!string.IsNullOrWhiteSpace(display))
+            return display;
+        return string.IsNullOrWhiteSpace(username) ? null : username.Trim();
     }
 
     private static bool TryGetString(System.Text.Json.JsonElement root, out string? value, params string[] names)

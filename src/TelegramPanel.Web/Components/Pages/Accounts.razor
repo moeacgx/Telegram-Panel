@@ -22,6 +22,7 @@
             </ToolBarContent>
             <HeaderContent>
                 <MudTh>手机号</MudTh>
+                <MudTh>昵称</MudTh>
                 <MudTh>用户名</MudTh>
                 <MudTh>用户ID</MudTh>
                 <MudTh>分类</MudTh>
@@ -32,6 +33,7 @@
             </HeaderContent>
             <RowTemplate>
                 <MudTd DataLabel="手机号">@context.Phone</MudTd>
+                <MudTd DataLabel="昵称">@(context.Nickname ?? "-")</MudTd>
                 <MudTd DataLabel="用户名">@(context.Username ?? "-")</MudTd>
                 <MudTd DataLabel="用户ID">@context.UserId</MudTd>
                 <MudTd DataLabel="分类">
@@ -86,6 +88,7 @@
             ? accounts
             : accounts.Where(a =>
                 a.Phone.Contains(searchString, StringComparison.OrdinalIgnoreCase) ||
+                (a.Nickname?.Contains(searchString, StringComparison.OrdinalIgnoreCase) ?? false) ||
                 (a.Username?.Contains(searchString, StringComparison.OrdinalIgnoreCase) ?? false) ||
                 a.UserId.ToString().Contains(searchString));
 

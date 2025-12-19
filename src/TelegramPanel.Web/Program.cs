@@ -119,6 +119,13 @@ using (var scope = app.Services.CreateScope())
                 tables.Add(reader.GetString(0));
         }
 
+        // 兜底：开发阶段允许轻量演进 schema（避免已有库无迁移历史时无法自动更新）
+        // 仅做“新增列”这种非破坏性变更。
+        if (tables.Contains("Accounts", StringComparer.Ordinal))
+        {
+            EnsureSqliteColumn(conn, tableName: "Accounts", columnName: "Nickname", columnType: "TEXT");
+        }
+
         // 兜底：若 Accounts 仍不存在（常见于库被创建为空文件/仅有历史表），给出可恢复的自愈
         if (!tables.Contains("Accounts", StringComparer.Ordinal))
         {
@@ -137,6 +144,39 @@ using (var scope = app.Services.CreateScope())
             else
             {
                 Log.Error("Accounts table missing. Existing tables: {Tables}", string.Join(", ", tables));
+            }
+        }
+
+        void EnsureSqliteColumn(System.Data.Common.DbConnection connection, string tableName, string columnName, string columnType)
+        {
+            try
+            {
+                var existingColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                using (var pragma = connection.CreateCommand())
+                {
+                    pragma.CommandText = $"PRAGMA table_info('{tableName}');";
+                    using var r = pragma.ExecuteReader();
+                    while (r.Read())
+                    {
+                        var name = r.GetString(1);
+                        existingColumns.Add(name);
+                    }
+                }
+
+                if (existingColumns.Contains(columnName))
+                    return;
+
+                using (var alter = connection.CreateCommand())
+                {
+                    alter.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {columnType};";
+                    alter.ExecuteNonQuery();
+                }
+
+                Log.Information("Applied schema patch: {Table}.{Column} added", tableName, columnName);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to ensure sqlite column {Table}.{Column}", tableName, columnName);
             }
         }
     }

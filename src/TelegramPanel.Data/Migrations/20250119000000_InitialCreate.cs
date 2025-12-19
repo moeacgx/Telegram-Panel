@@ -74,6 +74,7 @@ namespace TelegramPanel.Data.Migrations
                         .Annotation("Sqlite:Autoincrement", true),
                     Phone = table.Column<string>(type: "TEXT", maxLength: 20, nullable: false),
                     UserId = table.Column<long>(type: "INTEGER", nullable: false),
+                    Nickname = table.Column<string>(type: "TEXT", maxLength: 100, nullable: true),
                     Username = table.Column<string>(type: "TEXT", maxLength: 100, nullable: true),
                     SessionPath = table.Column<string>(type: "TEXT", maxLength: 500, nullable: false),
                     ApiId = table.Column<int>(type: "INTEGER", nullable: false),

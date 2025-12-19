@@ -259,6 +259,7 @@
             {
                 // 更新现有账号
                 existingAccount.Username = accountInfo.Username;
+                existingAccount.Nickname = BuildNickname(accountInfo);
                 existingAccount.IsActive = true;
                 existingAccount.ApiId = telegramApiId;
                 existingAccount.ApiHash = telegramApiHash;
@@ -274,6 +275,7 @@
                 {
                     Phone = accountInfo.Phone!,
                     UserId = accountInfo.TelegramUserId,
+                    Nickname = BuildNickname(accountInfo),
                     Username = accountInfo.Username,
                     SessionPath = System.IO.Path.Combine(sessionsPath, $"{accountInfo.Phone}.session"),
                     ApiId = telegramApiId,
@@ -301,5 +303,16 @@
         {
             Snackbar.Add($"保存账号失败：{ex.Message}", Severity.Error);
         }
+    }
+
+    private static string? BuildNickname(TelegramPanel.Core.Models.AccountInfo accountInfo)
+    {
+        var first = accountInfo.FirstName?.Trim();
+        var last = accountInfo.LastName?.Trim();
+        var display = string.Join(" ", new[] { first, last }.Where(s => !string.IsNullOrWhiteSpace(s)));
+        if (!string.IsNullOrWhiteSpace(display))
+            return display;
+
+        return string.IsNullOrWhiteSpace(accountInfo.Username) ? null : accountInfo.Username.Trim();
     }
 }

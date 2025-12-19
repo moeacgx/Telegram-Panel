@@ -8,6 +8,10 @@ public class Account
     public int Id { get; set; }
     public string Phone { get; set; } = null!;
     public long UserId { get; set; }
+    /// <summary>
+    /// 账号昵称（Telegram 显示名称）
+    /// </summary>
+    public string? Nickname { get; set; }
     public string? Username { get; set; }
     public string SessionPath { get; set; } = null!;
     public int ApiId { get; set; }
