@@ -52,7 +52,7 @@ public class BotTelegramService
         if (result.ValueKind != JsonValueKind.Array)
             return 0;
 
-        // Telegram 会针对同一个频道连续产生多条 my_chat_member（例如 member -> administrator），
+        // Telegram 会针对同一个 chat 连续产生多条 my_chat_member（例如 member -> administrator），
         // 这里按 chat_id 去重并只应用“最后一次状态”，避免“新增两个”的错觉/重复写库。
         var changesByChatId = new Dictionary<long, BotChatMemberChange>();
         long? maxUpdateId = null;
@@ -76,10 +76,6 @@ public class BotTelegramService
             if (!TryParseChatMemberUpdate(myChatMember, out var chat, out var status))
                 continue;
 
-            // 仅同步“频道”（不包含群组/超级群组），避免把讨论群等误当成频道条目
-            if (chat.Type is not "channel")
-                continue;
-
             changesByChatId[chat.Id] = new BotChatMemberChange(chat, status);
         }
 
@@ -90,6 +86,14 @@ public class BotTelegramService
 
             var chatId = kv.Key;
             var change = kv.Value;
+
+            // 本系统 Bot 只管理频道（channel）；如果收到群组/超级群组更新，则仅用于“清理旧数据”，避免列表统计被污染。
+            if (change.Chat.Type is not "channel")
+            {
+                await _botManagement.DeleteChannelByTelegramIdAsync(bot.Id, chatId);
+                affected++;
+                continue;
+            }
 
             // 只把“具备管理员/创建者权限”的频道纳入 Bot 列表；
             // left/kicked 或降权为 member 等，直接从列表移除（否则导出邀请会失败且列表不准）。

@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using TelegramPanel.Data.Entities;
 using TelegramPanel.Data.Repositories;
@@ -75,7 +76,14 @@ public class BotManagementService
         if (bot == null)
             return;
 
-        await _botRepository.DeleteAsync(bot);
+        try
+        {
+            await _botRepository.DeleteAsync(bot);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // 视为已被删除（幂等）
+        }
     }
 
     public async Task<IEnumerable<BotChannelCategory>> GetCategoriesAsync(int botId)
@@ -119,7 +127,9 @@ public class BotManagementService
 
     public async Task<IEnumerable<BotChannel>> GetChannelsAsync(int botId, int? categoryId = null)
     {
-        return await _botChannelRepository.GetForBotAsync(botId, categoryId);
+        // Bot 频道列表仅展示“频道”（不展示群组/超级群组）
+        var list = await _botChannelRepository.GetForBotAsync(botId, categoryId);
+        return list.Where(x => x.IsBroadcast);
     }
 
     public async Task<BotChannel> UpsertChannelAsync(BotChannel channel)
