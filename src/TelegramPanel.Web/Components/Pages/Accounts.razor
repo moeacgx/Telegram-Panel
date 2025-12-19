@@ -36,6 +36,10 @@
                            Disabled="@loading" OnClick="InvertSelection" Class="ml-2">
                     反选
                 </MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Default" StartIcon="@Icons.Material.Filled.Clear"
+                           Disabled="@(loading || selectedAccounts.Count == 0)" OnClick="ClearSelection" Class="ml-2">
+                    清空选择
+                </MudButton>
                 <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete"
                            Disabled="@(loading || selectedAccounts.Count == 0)" OnClick="DeleteSelectedAccounts" Class="ml-2">
                     删除已选
@@ -294,6 +298,12 @@
         return Task.CompletedTask;
     }
 
+    private Task ClearSelection()
+    {
+        selectedAccounts.Clear();
+        return Task.CompletedTask;
+    }
+
     private async Task DeleteSelectedAccounts()
     {
         var targets = selectedAccounts.ToList();
@@ -305,7 +315,7 @@
 
         bool? result = await DialogService.ShowMessageBox(
             "确认删除",
-            $"确定要删除已选账号（{targets.Count} 个）吗？将同时清理 sessions 文件，且不可恢复。",
+            $"确定要删除已选账号（{targets.Count} 个）吗？将同时清理 sessions 文件，且不可恢复。若部分账号删除失败，将继续删除剩余账号并汇总失败原因。",
             yesText: "删除", cancelText: "取消");
 
         if (result != true)
@@ -314,12 +324,41 @@
         loading = true;
         try
         {
+            var success = 0;
+            var failures = new List<string>();
             foreach (var a in targets)
-                await AccountManagement.DeleteAccountAsync(a.Id);
+            {
+                try
+                {
+                    await AccountManagement.DeleteAccountAsync(a.Id);
+                    success++;
+                }
+                catch (Exception ex)
+                {
+                    failures.Add($"{a.Phone}：{ex.Message}");
+                }
+            }
 
             selectedAccounts.Clear();
             await LoadAccounts();
-            Snackbar.Add("删除完成", Severity.Success);
+
+            if (failures.Count == 0)
+            {
+                Snackbar.Add($"删除完成：成功 {success}/{targets.Count}", Severity.Success);
+                return;
+            }
+
+            Snackbar.Add($"删除完成：成功 {success}/{targets.Count}，失败 {failures.Count}", Severity.Warning);
+
+            // 避免 Snackbar 过长，失败原因集中弹窗展示
+            var details = string.Join(Environment.NewLine, failures.Take(50));
+            if (failures.Count > 50)
+                details += Environment.NewLine + $"... 仅展示前 50 条（共 {failures.Count} 条）";
+
+            await DialogService.ShowMessageBox(
+                "删除失败明细",
+                details,
+                yesText: "知道了");
         }
         catch (Exception ex)
         {
