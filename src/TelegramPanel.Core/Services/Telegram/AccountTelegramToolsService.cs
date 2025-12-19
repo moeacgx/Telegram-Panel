@@ -364,7 +364,7 @@ public class AccountTelegramToolsService
                 return new CreateChannelProbeResult(false, true, "Telegram 返回 FROZEN_METHOD_INVALID（创建频道接口被冻结）");
             }
 
-            var channel = updates.Chats.Values.OfType<Channel>().FirstOrDefault();
+            var channel = updates.Chats.Values.OfType<TL.Channel>().FirstOrDefault();
             if (channel == null)
                 return new CreateChannelProbeResult(false, false, "创建测试频道失败：未返回 Channel");
 
@@ -372,7 +372,7 @@ public class AccountTelegramToolsService
             {
                 // 立即删除，避免留下垃圾频道
                 var input = new InputChannel(channel.id, channel.access_hash);
-                await client.Invoke(new TL.Channels_DeleteChannel { channel = input });
+                await client.Channels_DeleteChannel(input);
             }
             catch (Exception ex)
             {
