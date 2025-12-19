@@ -1,0 +1,183 @@
+@namespace TelegramPanel.Web.Components.Dialogs
+@inject GroupManagementService GroupManagement
+@inject AccountManagementService AccountManagement
+@inject TelegramPanel.Core.Interfaces.IGroupService GroupService
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+@using TelegramPanel.Data.Entities
+@using TelegramPanel.Core.Models
+
+<MudDialog>
+    <DialogContent>
+        @if (loading)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else if (group == null)
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined">未找到群组数据</MudAlert>
+        }
+        else
+        {
+            <MudStack Spacing="2">
+                <MudText Typo="Typo.h6">@group.Title</MudText>
+
+                <MudGrid>
+                    <MudItem xs="12" md="6">
+                        <MudText Typo="Typo.body2"><strong>TelegramId：</strong>@group.TelegramId</MudText>
+                        <MudText Typo="Typo.body2"><strong>用户名：</strong>@(string.IsNullOrWhiteSpace(group.Username) ? "（私密）" : "@" + group.Username)</MudText>
+                        <MudText Typo="Typo.body2"><strong>成员数：</strong>@group.MemberCount</MudText>
+                    </MudItem>
+                    <MudItem xs="12" md="6">
+                        <MudText Typo="Typo.body2"><strong>创建者：</strong>@creatorDisplay</MudText>
+                        <MudText Typo="Typo.body2"><strong>创建时间：</strong>@(group.CreatedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "（未知）")</MudText>
+                        <MudText Typo="Typo.body2"><strong>最后同步：</strong>@group.SyncedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText>
+                    </MudItem>
+                </MudGrid>
+
+                @if (!string.IsNullOrWhiteSpace(group.About))
+                {
+                    <MudText Typo="Typo.body2"><strong>简介：</strong></MudText>
+                    <MudPaper Class="pa-3" Elevation="0" Style="background: rgba(0,0,0,0.03);">
+                        <MudText Typo="Typo.body2" Style="white-space: pre-wrap;">@group.About</MudText>
+                    </MudPaper>
+                }
+
+                <MudDivider />
+
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudText Typo="Typo.h6">管理员</MudText>
+                    <MudSpacer />
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Refresh"
+                               Disabled="@adminsLoading" OnClick="LoadAdmins">
+                        刷新
+                    </MudButton>
+                </MudStack>
+
+                @if (adminsLoading)
+                {
+                    <MudProgressLinear Indeterminate="true" />
+                }
+                else if (admins.Count == 0)
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Secondary">暂无管理员数据（或无权限获取）</MudText>
+                }
+                else
+                {
+                    <MudTable Items="@admins" Dense="true" Hover="true" Breakpoint="Breakpoint.Sm">
+                        <HeaderContent>
+                            <MudTh>身份</MudTh>
+                            <MudTh>昵称</MudTh>
+                            <MudTh>用户名</MudTh>
+                            <MudTh>头衔</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd DataLabel="身份">
+                                <MudChip T="string" Size="Size.Small" Color="@(context.IsCreator ? Color.Success : Color.Default)">
+                                    @(context.IsCreator ? "创建者" : "管理员")
+                                </MudChip>
+                            </MudTd>
+                            <MudTd DataLabel="昵称">@context.DisplayName</MudTd>
+                            <MudTd DataLabel="用户名">@(!string.IsNullOrWhiteSpace(context.Username) ? "@" + context.Username : "-")</MudTd>
+                            <MudTd DataLabel="头衔">@(string.IsNullOrWhiteSpace(context.Rank) ? "-" : context.Rank)</MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+            </MudStack>
+        }
+    </DialogContent>
+    <DialogActions>
+        @if (group != null)
+        {
+            <MudButton Variant="Variant.Text" Color="Color.Primary" OnClick="CopyLink">复制链接</MudButton>
+        }
+        <MudButton Variant="Variant.Text" Color="Color.Default" OnClick="Close">关闭</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code
+{
+    [CascadingParameter] private MudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public int GroupDbId { get; set; }
+
+    private bool loading = true;
+    private Group? group;
+    private string creatorDisplay = "-";
+
+    private bool adminsLoading;
+    private List<ChannelAdminInfo> admins = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadGroup();
+        await LoadAdmins();
+    }
+
+    private async Task LoadGroup()
+    {
+        loading = true;
+        try
+        {
+            group = await GroupManagement.GetGroupAsync(GroupDbId);
+            if (group == null)
+                return;
+
+            var creator = await AccountManagement.GetAccountAsync(group.CreatorAccountId);
+            creatorDisplay = creator == null
+                ? $"账号 {group.CreatorAccountId}"
+                : $"{creator.Phone}（{creator.Nickname ?? creator.Username ?? creator.UserId.ToString()}）";
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"加载群组失败：{ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private async Task LoadAdmins()
+    {
+        if (group == null)
+            return;
+
+        adminsLoading = true;
+        try
+        {
+            admins = await GroupService.GetAdminsAsync(group.CreatorAccountId, group.TelegramId);
+        }
+        catch (Exception ex)
+        {
+            admins.Clear();
+            Snackbar.Add($"加载管理员失败：{ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            adminsLoading = false;
+        }
+    }
+
+    private async Task CopyLink()
+    {
+        if (group == null)
+            return;
+
+        try
+        {
+            var link = await GroupService.ExportJoinLinkAsync(group.CreatorAccountId, group.TelegramId);
+            await JS.InvokeVoidAsync("telegramPanel.copyText", link);
+            Snackbar.Add("已复制链接", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"复制失败：{ex.Message}", Severity.Error);
+        }
+    }
+
+    private void Close()
+    {
+        MudDialog.Close();
+    }
+}
+

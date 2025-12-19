@@ -111,6 +111,148 @@ public class GroupService : IGroupService
         return groups.FirstOrDefault(g => g.TelegramId == groupId);
     }
 
+    public async Task<string> ExportJoinLinkAsync(int accountId, long groupId)
+    {
+        var client = await GetOrCreateConnectedClientAsync(accountId);
+        var dialogs = await client.Messages_GetAllDialogs();
+
+        // 基础群组（Chat）
+        var basic = dialogs.chats.Values.OfType<Chat>().FirstOrDefault(c => c.IsActive && c.id == groupId);
+        if (basic != null)
+        {
+            var invite = await client.Messages_ExportChatInvite(basic);
+            var link = invite switch
+            {
+                ChatInviteExported e => e.link,
+                _ => null
+            };
+
+            if (string.IsNullOrWhiteSpace(link))
+                throw new InvalidOperationException("无法导出群组邀请链接（可能无权限）");
+
+            return link;
+        }
+
+        // 超级群组（Channel 但 megagroup=true，即 !IsChannel）
+        var mega = dialogs.chats.Values.OfType<Channel>().FirstOrDefault(c => c.IsActive && !c.IsChannel && c.id == groupId);
+        if (mega != null)
+        {
+            if (!string.IsNullOrWhiteSpace(mega.MainUsername))
+                return $"https://t.me/{mega.MainUsername}";
+
+            var invite = await client.Messages_ExportChatInvite(mega);
+            var link = invite switch
+            {
+                ChatInviteExported e => e.link,
+                _ => null
+            };
+
+            if (string.IsNullOrWhiteSpace(link))
+                throw new InvalidOperationException("无法导出群组邀请链接（可能无权限）");
+
+            return link;
+        }
+
+        throw new InvalidOperationException($"群组 {groupId} not found");
+    }
+
+    public async Task<List<ChannelAdminInfo>> GetAdminsAsync(int accountId, long groupId)
+    {
+        var client = await GetOrCreateConnectedClientAsync(accountId);
+        var dialogs = await client.Messages_GetAllDialogs();
+
+        // 基础群组（Chat）
+        var basic = dialogs.chats.Values.OfType<Chat>().FirstOrDefault(c => c.IsActive && c.id == groupId);
+        if (basic != null)
+        {
+            var fullChat = await client.Messages_GetFullChat(basic.id);
+            if (fullChat.full_chat is not ChatFull cf || cf.participants is not ChatParticipants cp)
+                return new List<ChannelAdminInfo>();
+
+            var list = new List<ChannelAdminInfo>();
+            foreach (var p in cp.participants)
+            {
+                long userId;
+                var isCreator = p is ChatParticipantCreator;
+
+                if (p is ChatParticipantCreator creator)
+                {
+                    userId = creator.user_id;
+                }
+                else if (p is ChatParticipantAdmin admin)
+                {
+                    userId = admin.user_id;
+                }
+                else
+                {
+                    continue;
+                }
+
+                fullChat.users.TryGetValue(userId, out var u);
+                list.Add(new ChannelAdminInfo(
+                    UserId: userId,
+                    Username: u?.MainUsername,
+                    FirstName: u?.first_name,
+                    LastName: u?.last_name,
+                    IsCreator: isCreator,
+                    Rank: null
+                ));
+            }
+
+            return list
+                .OrderByDescending(x => x.IsCreator)
+                .ThenBy(x => x.DisplayName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        // 超级群组（Channel but !IsChannel）
+        var mega = dialogs.chats.Values.OfType<Channel>().FirstOrDefault(c => c.IsActive && !c.IsChannel && c.id == groupId);
+        if (mega != null)
+        {
+            var participants = await client.Channels_GetParticipants(mega, new ChannelParticipantsAdmins());
+            var list = new List<ChannelAdminInfo>();
+
+            foreach (var p in participants.participants)
+            {
+                long userId;
+                string? rank = null;
+                var isCreator = p is ChannelParticipantCreator;
+
+                if (p is ChannelParticipantAdmin admin)
+                {
+                    userId = admin.user_id;
+                    rank = string.IsNullOrWhiteSpace(admin.rank) ? null : admin.rank;
+                }
+                else if (p is ChannelParticipantCreator creator)
+                {
+                    userId = creator.user_id;
+                    rank = string.IsNullOrWhiteSpace(creator.rank) ? null : creator.rank;
+                }
+                else
+                {
+                    continue;
+                }
+
+                participants.users.TryGetValue(userId, out var u);
+                list.Add(new ChannelAdminInfo(
+                    UserId: userId,
+                    Username: u?.MainUsername,
+                    FirstName: u?.first_name,
+                    LastName: u?.last_name,
+                    IsCreator: isCreator,
+                    Rank: rank
+                ));
+            }
+
+            return list
+                .OrderByDescending(x => x.IsCreator)
+                .ThenBy(x => x.DisplayName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        throw new InvalidOperationException($"群组 {groupId} not found");
+    }
+
     private async Task<WTelegram.Client> GetOrCreateConnectedClientAsync(int accountId)
     {
         var existing = _clientPool.GetClient(accountId);

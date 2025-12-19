@@ -1,10 +1,13 @@
 @page "/groups"
 @inject GroupManagementService GroupManagement
 @inject AccountManagementService AccountManagement
+@inject IGroupService GroupService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject NavigationManager Navigation
+@inject IJSRuntime JS
 @using TelegramPanel.Data.Entities
+@using TelegramPanel.Web.Components.Dialogs
 
 <PageTitle>群组列表 - Telegram Panel</PageTitle>
 
@@ -73,7 +76,7 @@
                     <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small">
                         <MudMenuItem Icon="@Icons.Material.Filled.Info" OnClick="@(() => ShowDetails(context))">查看详情</MudMenuItem>
                         <MudMenuItem Icon="@Icons.Material.Filled.PersonAdd" OnClick="@(() => InviteMembers(context))">邀请成员</MudMenuItem>
-                        <MudMenuItem Icon="@Icons.Material.Filled.Link" OnClick="@(() => CopyLink(context))">复制链接</MudMenuItem>
+                        <MudMenuItem Icon="@Icons.Material.Filled.Link" OnClick="@(async () => await CopyLink(context))">复制链接</MudMenuItem>
                         <MudDivider />
                         <MudMenuItem Icon="@Icons.Material.Filled.Delete" IconColor="Color.Error" OnClick="@(() => DeleteGroup(context.Id))">删除群组</MudMenuItem>
                     </MudMenu>
@@ -152,7 +155,9 @@
 
     private void ShowDetails(Group group)
     {
-        Snackbar.Add($"查看群组详情：{group.Title}", Severity.Info);
+        var parameters = new DialogParameters { ["GroupDbId"] = group.Id };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Large, FullWidth = true };
+        DialogService.Show<GroupDetailsDialog>("群组详情", parameters, options);
     }
 
     private void InviteMembers(Group group)
@@ -160,12 +165,18 @@
         Navigation.NavigateTo($"/batch/invite?groupId={group.Id}");
     }
 
-    private void CopyLink(Group group)
+    private async Task CopyLink(Group group)
     {
-        var link = string.IsNullOrEmpty(group.Username)
-            ? $"私密群组（邀请链接待实现）"
-            : $"https://t.me/{group.Username}";
-        Snackbar.Add($"链接：{link}", Severity.Info);
+        try
+        {
+            var link = await GroupService.ExportJoinLinkAsync(group.CreatorAccountId, group.TelegramId);
+            await JS.InvokeVoidAsync("telegramPanel.copyText", link);
+            Snackbar.Add("已复制链接", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"复制失败：{ex.Message}", Severity.Error);
+        }
     }
 
     private async Task DeleteGroup(int id)
