@@ -81,6 +81,8 @@ docker compose up -d --build
 
 Blazor Server 需要 WebSocket（`/_blazor`），反代必须支持 `Upgrade`。
 
+说明：项目已兼容部分“默认反代不透传 Host/Proto”导致的登录跳转问题（不会再跳到 `http://localhost/...`），但 WebSocket 与部分场景仍建议把 `X-Forwarded-*` 头透传完整。
+
 Nginx 示例（完整说明见 `docs/reverse-proxy.md`）：
 
 ```nginx
@@ -90,6 +92,9 @@ location / {
   proxy_set_header Upgrade $http_upgrade;
   proxy_set_header Connection "Upgrade";
   proxy_set_header Host $host;
+  proxy_set_header X-Forwarded-Host $host;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 }
 ```
 
