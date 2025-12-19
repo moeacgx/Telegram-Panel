@@ -268,6 +268,14 @@ public class ChannelService : IChannelService
         }
         catch (Exception ex)
         {
+            if (LooksLikeSessionApiMismatchOrCorrupted(ex))
+            {
+                throw new InvalidOperationException(
+                    $"该账号的 Session 文件无法解析（通常是 ApiId/ApiHash 与生成 session 时不一致，或 session 文件已损坏）。" +
+                    "请到【账号-手机号登录】重新登录生成新的 sessions/*.session 后再操作。",
+                    ex);
+            }
+
             throw new InvalidOperationException($"Telegram 会话加载失败：{ex.Message}", ex);
         }
 
@@ -275,6 +283,14 @@ public class ChannelService : IChannelService
             throw new InvalidOperationException("账号未登录或 session 已失效，请重新登录生成新的 session");
 
         return client;
+    }
+
+    private static bool LooksLikeSessionApiMismatchOrCorrupted(Exception ex)
+    {
+        var msg = ex.Message ?? string.Empty;
+        return msg.Contains("Can't read session block", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("Use the correct api_hash", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("Use the correct api_hash/id/key", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool LooksLikeSqliteSession(string filePath)

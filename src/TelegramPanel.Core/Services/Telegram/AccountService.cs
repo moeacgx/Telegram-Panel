@@ -42,11 +42,24 @@ public class AccountService : IAccountService
         // 这里先自动备份，确保“手机号登录”能顺利重新生成 WTelegram 的 session。
         TryBackupSqliteSessionIfExists(sessionPath);
 
-        var client = await _clientPool.GetOrCreateClientAsync(accountId, apiId, apiHash, sessionPath);
-
         _logger.LogInformation("Starting login for phone {Phone}", phone);
 
-        var result = await client.Login(phone);
+        var client = await _clientPool.GetOrCreateClientAsync(accountId, apiId, apiHash, sessionPath);
+
+        string result;
+        try
+        {
+            result = await client.Login(phone);
+        }
+        catch (Exception ex) when (LooksLikeSessionApiMismatchOrCorrupted(ex))
+        {
+            // session 与 ApiId/ApiHash 不匹配或损坏，备份后重新开始登录流程
+            TryBackupCorruptedSessionIfExists(sessionPath);
+            await _clientPool.RemoveClientAsync(accountId);
+
+            client = await _clientPool.GetOrCreateClientAsync(accountId, apiId, apiHash, sessionPath);
+            result = await client.Login(phone);
+        }
 
         return result switch
         {
@@ -56,6 +69,14 @@ public class AccountService : IAccountService
             _ when client.User != null => new LoginResult(true, null, "登录成功", MapToAccountInfo(accountId, client)),
             _ => new LoginResult(false, null, $"未知状态: {result}")
         };
+    }
+
+    private static bool LooksLikeSessionApiMismatchOrCorrupted(Exception ex)
+    {
+        var msg = ex.Message ?? string.Empty;
+        return msg.Contains("Can't read session block", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("Use the correct api_hash", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("Use the correct api_hash/id/key", StringComparison.OrdinalIgnoreCase);
     }
 
     private void TryBackupSqliteSessionIfExists(string sessionPath)
@@ -79,6 +100,27 @@ public class AccountService : IAccountService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to backup sqlite session: {SessionPath}", sessionPath);
+        }
+    }
+
+    private void TryBackupCorruptedSessionIfExists(string sessionPath)
+    {
+        try
+        {
+            var fullPath = Path.GetFullPath(sessionPath);
+            if (!File.Exists(fullPath))
+                return;
+
+            var dir = Path.GetDirectoryName(fullPath) ?? Directory.GetCurrentDirectory();
+            var name = Path.GetFileNameWithoutExtension(fullPath);
+            var ext = Path.GetExtension(fullPath);
+            var backupPath = Path.Combine(dir, $"{name}.corrupt.bak{ext}");
+            File.Move(fullPath, backupPath, overwrite: true);
+            _logger.LogWarning("Detected corrupted/mismatched session, backed up from {SessionPath} to {BackupPath}", fullPath, backupPath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to backup corrupted session: {SessionPath}", sessionPath);
         }
     }
 

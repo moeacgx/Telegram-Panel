@@ -1,4 +1,11 @@
 @page "/"
+@inject AccountManagementService AccountManagement
+@inject ChannelManagementService ChannelManagement
+@inject GroupManagementService GroupManagement
+@inject BatchTaskManagementService BatchTaskManagement
+@inject IChannelService ChannelService
+@inject IGroupService GroupService
+@inject ISnackbar Snackbar
 
 <PageTitle>Telegram Panel - 仪表盘</PageTitle>
 
@@ -68,7 +75,9 @@
                 <MudButton Variant="Variant.Filled" Color="Color.Tertiary" StartIcon="@Icons.Material.Filled.PersonAdd" Href="/batch/invite">
                     批量邀请
                 </MudButton>
-                <MudButton Variant="Variant.Filled" Color="Color.Info" StartIcon="@Icons.Material.Filled.Sync" OnClick="@SyncAllAccounts">
+                <MudButton Variant="Variant.Filled" Color="Color.Info" StartIcon="@Icons.Material.Filled.Sync"
+                           Disabled="@_syncing"
+                           OnClick="@(async (MouseEventArgs _) => await SyncAllAccounts())">
                     同步数据
                 </MudButton>
             </MudStack>
@@ -129,16 +138,119 @@
     private int _limitedAccountCount = 0;
     private int _bannedAccountCount = 0;
     private List<TaskItem> _recentTasks = new();
+    private bool _syncing = false;
 
     protected override async Task OnInitializedAsync()
     {
-        // TODO: 从服务获取真实数据
-        await Task.CompletedTask;
+        await LoadDashboardAsync();
     }
 
-    private void SyncAllAccounts()
+    private async Task LoadDashboardAsync()
     {
-        // TODO: 实现同步逻辑
+        var accounts = (await AccountManagement.GetAllAccountsAsync()).ToList();
+        var activeAccounts = (await AccountManagement.GetActiveAccountsAsync()).ToList();
+
+        _accountCount = accounts.Count;
+        _onlineAccountCount = activeAccounts.Count;
+        _limitedAccountCount = 0;
+        _bannedAccountCount = 0;
+
+        _channelCount = await ChannelManagement.GetTotalChannelCountAsync();
+        _groupCount = await GroupManagement.GetTotalGroupCountAsync();
+
+        var runningTasks = (await BatchTaskManagement.GetRunningTasksAsync()).ToList();
+        _activeTaskCount = runningTasks.Count;
+
+        var recent = (await BatchTaskManagement.GetRecentTasksAsync(10)).ToList();
+        _recentTasks = recent
+            .OrderByDescending(t => t.CreatedAt)
+            .Select(t => new TaskItem(
+                Name: $"{t.TaskType} #{t.Id}",
+                Type: t.TaskType,
+                Status: MapTaskStatus(t.Status),
+                Progress: Math.Min(t.Completed + t.Failed, t.Total),
+                Total: t.Total,
+                CreatedAt: t.CreatedAt
+            ))
+            .ToList();
+    }
+
+    private async Task SyncAllAccounts()
+    {
+        if (_syncing)
+        {
+            Snackbar.Add("正在同步中，请稍候...", Severity.Warning);
+            return;
+        }
+
+        _syncing = true;
+        Snackbar.Add("开始同步频道和群组信息...", Severity.Info);
+
+        try
+        {
+            var accounts = (await AccountManagement.GetActiveAccountsAsync()).ToList();
+            int totalChannelsSynced = 0;
+            int totalGroupsSynced = 0;
+
+            foreach (var account in accounts)
+            {
+                try
+                {
+                    var channels = await ChannelService.GetOwnedChannelsAsync(account.Id);
+                    foreach (var channelInfo in channels)
+                    {
+                        var channel = new TelegramPanel.Data.Entities.Channel
+                        {
+                            TelegramId = channelInfo.TelegramId,
+                            AccessHash = channelInfo.AccessHash,
+                            Title = channelInfo.Title,
+                            Username = channelInfo.Username,
+                            IsBroadcast = channelInfo.IsBroadcast,
+                            MemberCount = channelInfo.MemberCount,
+                            About = channelInfo.About,
+                            CreatorAccountId = account.Id
+                        };
+                        await ChannelManagement.CreateOrUpdateChannelAsync(channel);
+                        totalChannelsSynced++;
+                    }
+
+                    var groups = await GroupService.GetOwnedGroupsAsync(account.Id);
+                    foreach (var groupInfo in groups)
+                    {
+                        var group = new TelegramPanel.Data.Entities.Group
+                        {
+                            TelegramId = groupInfo.TelegramId,
+                            AccessHash = groupInfo.AccessHash,
+                            Title = groupInfo.Title,
+                            Username = groupInfo.Username,
+                            MemberCount = groupInfo.MemberCount,
+                            About = null,
+                            CreatorAccountId = account.Id
+                        };
+                        await GroupManagement.CreateOrUpdateGroupAsync(group);
+                        totalGroupsSynced++;
+                    }
+
+                    await AccountManagement.UpdateLastSyncTimeAsync(account.Id);
+                }
+                catch (Exception ex)
+                {
+                    Snackbar.Add($"账号 {account.Phone} 同步失败：{ex.Message}", Severity.Warning);
+                }
+            }
+
+            Snackbar.Add($"同步完成：{totalChannelsSynced} 个频道，{totalGroupsSynced} 个群组", Severity.Success);
+            await LoadDashboardAsync();
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"同步失败：{ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _syncing = false;
+        }
     }
 
     private Color GetStatusColor(string status) => status switch
@@ -147,6 +259,15 @@
         "已完成" => Color.Success,
         "失败" => Color.Error,
         _ => Color.Default
+    };
+
+    private static string MapTaskStatus(string status) => status switch
+    {
+        "running" => "运行中",
+        "completed" => "已完成",
+        "failed" => "失败",
+        "pending" => "等待中",
+        _ => status
     };
 
     private record TaskItem(string Name, string Type, string Status, int Progress, int Total, DateTime CreatedAt);
