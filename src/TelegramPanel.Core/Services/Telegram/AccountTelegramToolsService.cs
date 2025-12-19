@@ -35,13 +35,18 @@ public class AccountTelegramToolsService
     /// <summary>
     /// 刷新账号状态（可选深度探测：检测“创建频道接口是否被冻结”，会创建并删除一个测试频道）
     /// </summary>
-    public async Task<TelegramAccountStatusResult> RefreshAccountStatusAsync(int accountId, bool probeCreateChannel = false)
+    public async Task<TelegramAccountStatusResult> RefreshAccountStatusAsync(int accountId, bool probeCreateChannel = false, CancellationToken cancellationToken = default)
     {
         var checkedAt = DateTime.UtcNow;
         try
         {
-            var client = await GetOrCreateConnectedClientAsync(accountId);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var client = await GetOrCreateConnectedClientAsync(accountId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
             var users = await client.Users_GetUsers(InputUser.Self);
+            cancellationToken.ThrowIfCancellationRequested();
             var self = users.OfType<User>().FirstOrDefault();
 
             if (self == null)
@@ -51,7 +56,7 @@ public class AccountTelegramToolsService
                     Summary: "无法获取账号资料",
                     Details: "Users_GetUsers(Self) 未返回 User",
                     CheckedAtUtc: checkedAt);
-                await TryPersistStatusAsync(accountId, missingProfile);
+                await TryPersistStatusAsync(accountId, missingProfile, cancellationToken: cancellationToken);
                 return missingProfile;
             }
 
@@ -83,7 +88,7 @@ public class AccountTelegramToolsService
 
             if (probeCreateChannel)
             {
-                var probe = await ProbeCreateChannelCapabilityAsync(client, accountId);
+                var probe = await ProbeCreateChannelCapabilityAsync(client, accountId, cancellationToken);
                 if (probe.IsFrozen)
                 {
                     var frozen = new TelegramAccountStatusResult(
@@ -92,7 +97,7 @@ public class AccountTelegramToolsService
                         Details: $"创建频道探测：{probe.Message}{Environment.NewLine}{BuildProfileDetails(profile)}",
                         CheckedAtUtc: checkedAt,
                         Profile: profile);
-                    await TryPersistStatusAsync(accountId, frozen, account, persistProfile: true);
+                    await TryPersistStatusAsync(accountId, frozen, account, persistProfile: true, cancellationToken: cancellationToken);
                     return frozen;
                 }
 
@@ -104,7 +109,7 @@ public class AccountTelegramToolsService
                         Details: $"创建频道探测：{probe.Message}{Environment.NewLine}{BuildProfileDetails(profile)}",
                         CheckedAtUtc: checkedAt,
                         Profile: profile);
-                    await TryPersistStatusAsync(accountId, failed, account, persistProfile: true);
+                    await TryPersistStatusAsync(accountId, failed, account, persistProfile: true, cancellationToken: cancellationToken);
                     return failed;
                 }
 
@@ -115,7 +120,7 @@ public class AccountTelegramToolsService
                     Details: $"创建频道探测：可用（已自动清理测试频道）{Environment.NewLine}{BuildProfileDetails(profile)}",
                     CheckedAtUtc: checkedAt,
                     Profile: profile);
-                await TryPersistStatusAsync(accountId, okWithProbe, account, persistProfile: true);
+                await TryPersistStatusAsync(accountId, okWithProbe, account, persistProfile: true, cancellationToken: cancellationToken);
                 return okWithProbe;
             }
 
@@ -125,8 +130,25 @@ public class AccountTelegramToolsService
                 Details: BuildProfileDetails(profile),
                 CheckedAtUtc: checkedAt,
                 Profile: profile);
-            await TryPersistStatusAsync(accountId, ok, account, persistProfile: true);
+            await TryPersistStatusAsync(accountId, ok, account, persistProfile: true, cancellationToken: cancellationToken);
             return ok;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new TelegramAccountStatusResult(
+                Ok: false,
+                Summary: "已取消",
+                Details: "操作已取消（页面关闭/刷新导致取消）",
+                CheckedAtUtc: checkedAt);
+        }
+        catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Blazor 页面刷新/断连时，Scoped 的 DbContext 可能已被释放；把它视为取消而不是错误。
+            return new TelegramAccountStatusResult(
+                Ok: false,
+                Summary: "已取消",
+                Details: "页面已关闭/刷新，操作被中断",
+                CheckedAtUtc: checkedAt);
         }
         catch (Exception ex)
         {
@@ -137,15 +159,23 @@ public class AccountTelegramToolsService
                 Summary: summary,
                 Details: details,
                 CheckedAtUtc: checkedAt);
-            await TryPersistStatusAsync(accountId, failed);
+            await TryPersistStatusAsync(accountId, failed, cancellationToken: cancellationToken);
             return failed;
         }
     }
 
-    private async Task TryPersistStatusAsync(int accountId, TelegramAccountStatusResult result, Account? account = null, bool persistProfile = false)
+    private async Task TryPersistStatusAsync(
+        int accountId,
+        TelegramAccountStatusResult result,
+        Account? account = null,
+        bool persistProfile = false,
+        CancellationToken cancellationToken = default)
     {
         try
         {
+            if (cancellationToken.IsCancellationRequested)
+                return;
+
             account ??= await _accountManagement.GetAccountAsync(accountId);
             if (account == null)
                 return;
@@ -160,9 +190,15 @@ public class AccountTelegramToolsService
 
             await _accountManagement.UpdateAccountAsync(account);
         }
+        catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
+        {
+            // 页面/作用域已销毁导致的 DbContext 释放，忽略即可
+        }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to persist Telegram status cache for account {AccountId}", accountId);
+            // 取消场景不需要噪声日志
+            if (!cancellationToken.IsCancellationRequested)
+                _logger.LogWarning(ex, "Failed to persist Telegram status cache for account {AccountId}", accountId);
         }
     }
 
@@ -265,14 +301,18 @@ public class AccountTelegramToolsService
         }
     }
 
-    private async Task<Client> GetOrCreateConnectedClientAsync(int accountId)
+    private async Task<Client> GetOrCreateConnectedClientAsync(int accountId, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var existing = _clientPool.GetClient(accountId);
         if (existing?.User != null)
             return existing;
 
         var account = await _accountManagement.GetAccountAsync(accountId)
             ?? throw new InvalidOperationException($"账号不存在：{accountId}");
+
+        cancellationToken.ThrowIfCancellationRequested();
 
         var apiId = ResolveApiId(account);
         var apiHash = ResolveApiHash(account);
@@ -284,6 +324,8 @@ public class AccountTelegramToolsService
         var absoluteSessionPath = Path.GetFullPath(account.SessionPath);
         if (File.Exists(absoluteSessionPath) && SessionDataConverter.LooksLikeSqliteSession(absoluteSessionPath))
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             var ok = await SessionDataConverter.TryConvertSqliteSessionFromJsonAsync(
                 phone: account.Phone,
                 apiId: account.ApiId,
@@ -301,6 +343,8 @@ public class AccountTelegramToolsService
         }
 
         await _clientPool.RemoveClientAsync(accountId);
+        cancellationToken.ThrowIfCancellationRequested();
+
         var client = await _clientPool.GetOrCreateClientAsync(
             accountId: accountId,
             apiId: apiId,
@@ -313,6 +357,7 @@ public class AccountTelegramToolsService
         try
         {
             await client.ConnectAsync();
+            cancellationToken.ThrowIfCancellationRequested();
             if (client.User == null && (client.UserId != 0 || account.UserId != 0))
                 await client.LoginUserIfNeeded(reloginOnFailedResume: false);
         }
@@ -381,7 +426,7 @@ public class AccountTelegramToolsService
         return $"昵称：{profile.DisplayName}；用户名：{profile.Username ?? "-"}；UserId：{profile.UserId}；标记：{flagText}";
     }
 
-    private async Task<CreateChannelProbeResult> ProbeCreateChannelCapabilityAsync(Client client, int accountId)
+    private async Task<CreateChannelProbeResult> ProbeCreateChannelCapabilityAsync(Client client, int accountId, CancellationToken cancellationToken = default)
     {
         // 注意：这是“深度探测”，会创建并删除一个测试频道。
         var title = $"tp-check-{DateTime.UtcNow:MMddHHmmss}";
@@ -389,6 +434,8 @@ public class AccountTelegramToolsService
 
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             UpdatesBase updates;
             try
             {
@@ -398,6 +445,8 @@ public class AccountTelegramToolsService
             {
                 return new CreateChannelProbeResult(false, true, "Telegram 返回 FROZEN_METHOD_INVALID（创建频道接口被冻结）");
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             var channel = updates.Chats.Values.OfType<TL.Channel>().FirstOrDefault();
             if (channel == null)

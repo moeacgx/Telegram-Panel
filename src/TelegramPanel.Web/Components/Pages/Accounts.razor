@@ -6,6 +6,7 @@
 @inject IDialogService DialogService
 @inject NavigationManager Navigation
 @using TelegramPanel.Data.Entities
+@implements IDisposable
 
 <PageTitle>账号列表 - Telegram Panel</PageTitle>
 
@@ -144,6 +145,7 @@
     private int filterCategoryId = 0;
     private readonly Dictionary<int, TelegramAccountStatusResult> telegramStatus = new();
     private HashSet<Account> selectedAccounts = new();
+    private readonly CancellationTokenSource _pageCts = new();
 
     private IEnumerable<Account> filteredAccounts =>
         accounts.Where(a =>
@@ -244,7 +246,7 @@
                 cancelText: "普通刷新");
 
             var probe = probeResult == true;
-            var result = await AccountTelegramTools.RefreshAccountStatusAsync(account.Id, probeCreateChannel: probe);
+            var result = await AccountTelegramTools.RefreshAccountStatusAsync(account.Id, probeCreateChannel: probe, cancellationToken: _pageCts.Token);
             telegramStatus[account.Id] = result;
 
             // 资料刷新后重新加载（昵称/用户名/用户ID 可能更新）
@@ -285,7 +287,7 @@
             {
                 try
                 {
-                    var result = await AccountTelegramTools.RefreshAccountStatusAsync(a.Id, probeCreateChannel: probe);
+                    var result = await AccountTelegramTools.RefreshAccountStatusAsync(a.Id, probeCreateChannel: probe, cancellationToken: _pageCts.Token);
                     telegramStatus[a.Id] = result;
                 }
                 catch (Exception ex)
@@ -310,6 +312,22 @@
         finally
         {
             loading = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            _pageCts.Cancel();
+        }
+        catch
+        {
+            // ignore
+        }
+        finally
+        {
+            _pageCts.Dispose();
         }
     }
 
