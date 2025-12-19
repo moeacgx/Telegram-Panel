@@ -18,8 +18,6 @@
             <ToolBarContent>
                 <MudText Typo="Typo.h6">频道 (@channels.Count)</MudText>
                 <MudSpacer />
-                <MudSwitch @bind-Value="showAllChannels" @bind-Value:after="LoadChannels" Color="Color.Primary" Class="mr-2"
-                           Label="显示全部（含仅管理员）" />
                 <MudSelect @bind-Value="filterAccount" @bind-Value:after="LoadChannels" Label="筛选账号" Variant="Variant.Outlined" Dense="true" Class="mr-2" Style="min-width: 220px;">
                     <MudSelectItem Value="0">全部账号</MudSelectItem>
                     @foreach (var account in accounts)
@@ -33,8 +31,12 @@
                     <MudSelectItem Value='@("private")'>私密</MudSelectItem>
                 </MudSelect>
                 <MudButton Variant="Variant.Outlined" Color="Color.Info" StartIcon="@Icons.Material.Filled.Sync" Class="mr-2"
-                           Disabled="@loading" OnClick="SyncChannels">
-                    同步频道
+                           Disabled="@(loading || filterAccount <= 0)" OnClick="SyncCurrentAccountChannels">
+                    同步当前账号
+                </MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Info" StartIcon="@Icons.Material.Filled.Sync" Class="mr-2"
+                           Disabled="@loading" OnClick="SyncAllAccountsChannels">
+                    同步全部账号
                 </MudButton>
                 <MudTextField @bind-Value="searchString" Placeholder="搜索频道..." Adornment="Adornment.Start"
                               AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0" />
@@ -88,7 +90,7 @@
                     }
                     else
                     {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Default">仅管理员</MudChip>
+                        <span>-</span>
                     }
                 </MudTd>
                 <MudTd DataLabel="最后同步">@context.SyncedAt.ToString("yyyy-MM-dd HH:mm")</MudTd>
@@ -121,7 +123,6 @@
     private string searchString = "";
     private int filterAccount = 0;
     private string filterType = "all";
-    private bool showAllChannels;
 
     protected override async Task OnInitializedAsync()
     {
@@ -147,7 +148,7 @@
         loading = true;
         try
         {
-            var channelList = await ChannelManagement.GetChannelsForViewAsync(filterAccount, showAllChannels);
+            var channelList = await ChannelManagement.GetChannelsForViewAsync(filterAccount, includeNonCreator: false);
             channels = channelList.ToList();
         }
         catch (Exception ex)
@@ -191,7 +192,40 @@
         return namePart;
     }
 
-    private async Task SyncChannels()
+    private async Task SyncCurrentAccountChannels()
+    {
+        if (loading)
+            return;
+
+        if (filterAccount <= 0)
+        {
+            Snackbar.Add("请先选择一个账号再同步", Severity.Info);
+            return;
+        }
+
+        loading = true;
+        try
+        {
+            var summary = await DataSync.SyncAccountAsync(filterAccount, CancellationToken.None);
+
+            foreach (var failure in summary.AccountFailures)
+                Snackbar.Add($"账号 {failure.Phone} 同步失败：{failure.Error}", Severity.Warning);
+
+            Snackbar.Add($"同步完成：{summary.TotalChannelsSynced} 个频道，{summary.TotalGroupsSynced} 个群组", summary.AccountFailures.Count == 0 ? Severity.Success : Severity.Warning);
+
+            await LoadChannels();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"同步失败：{ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private async Task SyncAllAccountsChannels()
     {
         if (loading)
             return;
@@ -199,9 +233,7 @@
         loading = true;
         try
         {
-            var summary = filterAccount > 0
-                ? await DataSync.SyncAccountAsync(filterAccount, CancellationToken.None)
-                : await DataSync.SyncAllActiveAccountsAsync(CancellationToken.None);
+            var summary = await DataSync.SyncAllActiveAccountsAsync(CancellationToken.None);
 
             foreach (var failure in summary.AccountFailures)
                 Snackbar.Add($"账号 {failure.Phone} 同步失败：{failure.Error}", Severity.Warning);

@@ -57,8 +57,8 @@ public class DataSyncService
 
             try
             {
-                // 同步频道：包含“非本系统创建但账号为管理员”的频道
-                var channelInfos = await _channelService.GetAdminedChannelsAsync(account.Id);
+                // 同步频道：仅同步“频道创建人=本账号”的频道
+                var channelInfos = await _channelService.GetOwnedChannelsAsync(account.Id);
                 var keepChannelIds = new List<int>(capacity: channelInfos.Count);
 
                 foreach (var channelInfo in channelInfos)
@@ -74,24 +74,15 @@ public class DataSyncService
                         IsBroadcast = channelInfo.IsBroadcast,
                         MemberCount = channelInfo.MemberCount,
                         About = channelInfo.About,
-                        CreatorAccountId = channelInfo.IsCreator ? account.Id : null,
+                        CreatorAccountId = account.Id,
                         CreatedAt = channelInfo.CreatedAt
                     };
 
                     var saved = await _channelManagement.CreateOrUpdateChannelAsync(channel);
                     keepChannelIds.Add(saved.Id);
 
-                    await _channelManagement.UpsertAccountChannelAsync(
-                        accountId: account.Id,
-                        channelId: saved.Id,
-                        isCreator: channelInfo.IsCreator,
-                        isAdmin: channelInfo.IsAdmin,
-                        syncedAtUtc: DateTime.UtcNow);
-
                     summary.TotalChannelsSynced++;
                 }
-
-                await _channelManagement.DeleteStaleAccountChannelsAsync(account.Id, keepChannelIds);
 
                 // 同步群组：保持原逻辑（仅创建的群组）
                 var groups = await _groupService.GetOwnedGroupsAsync(account.Id);
@@ -133,4 +124,3 @@ public class DataSyncService
         public List<(int AccountId, string Phone, string Error)> AccountFailures { get; } = new();
     }
 }
-

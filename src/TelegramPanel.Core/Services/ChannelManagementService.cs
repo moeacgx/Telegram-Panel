@@ -33,16 +33,14 @@ public class ChannelManagementService
     }
 
     /// <summary>
-    /// 用于列表展示：可选按账号筛选，并可选是否包含“仅管理员（非本系统创建）”频道
+    /// 用于列表展示：可选按账号筛选（仅展示“本系统创建/创建者为该账号”的频道）
     /// </summary>
     public async Task<IEnumerable<Channel>> GetChannelsForViewAsync(int accountId, bool includeNonCreator)
     {
         if (accountId <= 0)
-            return includeNonCreator ? await _channelRepository.GetAllAsync() : await _channelRepository.GetCreatedAsync();
+            return await _channelRepository.GetCreatedAsync();
 
-        return includeNonCreator
-            ? await _channelRepository.GetForAccountAsync(accountId, includeNonCreator: true)
-            : await _channelRepository.GetForAccountAsync(accountId, includeNonCreator: false);
+        return await _channelRepository.GetByCreatorAccountAsync(accountId);
     }
 
     public async Task<IEnumerable<Channel>> GetChannelsByCreatorAsync(int accountId)

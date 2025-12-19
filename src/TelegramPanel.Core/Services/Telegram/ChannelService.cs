@@ -32,10 +32,59 @@ public class ChannelService : IChannelService
 
     public async Task<List<ChannelInfo>> GetOwnedChannelsAsync(int accountId)
     {
-        var all = await GetAdminedChannelsAsync(accountId);
-        var owned = all.Where(c => c.IsCreator).ToList();
-        _logger.LogInformation("Found {Count} owned channels for account {AccountId}", owned.Count, accountId);
-        return owned;
+        var client = await GetOrCreateConnectedClientAsync(accountId);
+
+        var channels = new List<ChannelInfo>();
+        var dialogs = await client.Messages_GetAllDialogs();
+
+        foreach (var (_, chat) in dialogs.chats)
+        {
+            if (chat is not Channel channel || !channel.IsActive)
+                continue;
+
+            try
+            {
+                var isCreator = ReadBool(channel, "creator", "Creator", "is_creator", "IsCreator");
+                if (!isCreator)
+                    continue;
+
+                var memberCount = ReadInt(channel, 0, "participants_count", "ParticipantsCount", "participantsCount", "memberCount", "MemberCount");
+                string? about = null;
+                try
+                {
+                    var fullChannel = await client.Channels_GetFullChannel(channel);
+                    memberCount = fullChannel.full_chat.ParticipantsCount;
+                    about = (fullChannel.full_chat as ChannelFull)?.about;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to get full channel info for {ChannelId}", channel.id);
+                }
+
+                channels.Add(new ChannelInfo
+                {
+                    TelegramId = channel.id,
+                    AccessHash = channel.access_hash,
+                    Title = channel.title,
+                    Username = channel.MainUsername,
+                    IsBroadcast = channel.IsChannel,
+                    MemberCount = memberCount,
+                    About = about,
+                    CreatorAccountId = accountId,
+                    IsCreator = true,
+                    IsAdmin = true,
+                    CreatedAt = channel.date,
+                    SyncedAt = DateTime.UtcNow
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to get owned channel info for {ChannelId}", channel.id);
+            }
+        }
+
+        _logger.LogInformation("Found {Count} owned channels for account {AccountId}", channels.Count, accountId);
+        return channels;
     }
 
     public async Task<List<ChannelInfo>> GetAdminedChannelsAsync(int accountId)
