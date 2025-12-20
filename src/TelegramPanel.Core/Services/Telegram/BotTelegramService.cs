@@ -1,5 +1,8 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Jpeg;
+using SixLabors.ImageSharp.Processing;
 using TelegramPanel.Core.Services;
 using TelegramPanel.Data.Entities;
 
@@ -290,6 +293,70 @@ public class BotTelegramService
             ["chat_id"] = channelTelegramId.ToString(),
             ["description"] = about ?? ""
         }, cancellationToken);
+
+        return true;
+    }
+
+    public async Task<bool> SetChannelPhotoAsync(
+        int botId,
+        long channelTelegramId,
+        Stream fileStream,
+        string fileName,
+        CancellationToken cancellationToken)
+    {
+        var bot = await _botManagement.GetBotAsync(botId)
+            ?? throw new InvalidOperationException($"机器人不存在：{botId}");
+
+        if (!bot.IsActive)
+            throw new InvalidOperationException("该机器人已停用");
+
+        if (fileStream == null)
+            throw new ArgumentException("头像文件为空", nameof(fileStream));
+
+        fileName = (fileName ?? "photo.jpg").Trim();
+        if (string.IsNullOrWhiteSpace(fileName))
+            fileName = "photo.jpg";
+
+        // Bot API setChatPhoto 需要 multipart 上传 InputFile。
+        // 为了提高成功率：做“居中裁剪为正方形 + 缩放到 512x512 + JPEG 压缩”，避免原图过大/比例异常导致失败。
+        await using var raw = new MemoryStream();
+        if (fileStream.CanSeek)
+            fileStream.Position = 0;
+        await fileStream.CopyToAsync(raw, cancellationToken);
+        raw.Position = 0;
+
+        await using var encoded = new MemoryStream();
+        try
+        {
+            using var image = await Image.LoadAsync(raw, cancellationToken);
+            image.Mutate(x => x.AutoOrient());
+
+            const int targetSize = 512;
+            image.Mutate(x => x.Resize(new ResizeOptions
+            {
+                Mode = ResizeMode.Crop,
+                Size = new Size(targetSize, targetSize)
+            }));
+
+            await image.SaveAsJpegAsync(encoded, new JpegEncoder { Quality = 85 }, cancellationToken);
+            encoded.Position = 0;
+        }
+        catch (UnknownImageFormatException)
+        {
+            throw new InvalidOperationException("不支持的图片格式（建议使用 JPG/PNG）");
+        }
+
+        _ = await _api.CallWithFileAsync(
+            token: bot.Token,
+            method: "setChatPhoto",
+            parameters: new Dictionary<string, string?>
+            {
+                ["chat_id"] = channelTelegramId.ToString()
+            },
+            fileParameterName: "photo",
+            fileStream: encoded,
+            fileName: fileName,
+            cancellationToken: cancellationToken);
 
         return true;
     }

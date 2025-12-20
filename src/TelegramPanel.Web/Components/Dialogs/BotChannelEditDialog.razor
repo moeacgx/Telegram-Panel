@@ -3,6 +3,7 @@
 @inject TelegramPanel.Core.Services.Telegram.BotTelegramService BotTelegram
 @inject ISnackbar Snackbar
 @using TelegramPanel.Data.Entities
+@using Microsoft.AspNetCore.Components.Forms
 
 <MudDialog>
     <DialogContent>
@@ -15,6 +16,23 @@
             <MudStack Spacing="2">
                 <MudTextField @bind-Value="title" Label="频道标题" Variant="Variant.Outlined" Required="true" />
                 <MudTextField @bind-Value="about" Label="频道简介（可选）" Variant="Variant.Outlined" Lines="4" />
+
+                <MudSwitch @bind-Value="editAvatar" Label="修改频道头像" Color="Color.Primary" />
+                @if (editAvatar)
+                {
+                    <MudFileUpload T="IReadOnlyList<IBrowserFile>" FilesChanged="OnAvatarChanged" Accept="image/*" MaximumFileCount="1">
+                        <ActivatorContent>
+                            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Image">
+                                选择头像图片
+                            </MudButton>
+                        </ActivatorContent>
+                    </MudFileUpload>
+
+                    @if (avatarFile != null)
+                    {
+                        <MudText Typo="Typo.body2">已选择：@avatarFile.Name（@avatarFile.Size bytes）</MudText>
+                    }
+                }
             </MudStack>
         }
     </DialogContent>
@@ -46,6 +64,8 @@
     private string title = "";
     private string about = "";
     private TelegramPanel.Core.Services.Telegram.BotTelegramService.BotChatInfo? chatInfo;
+    private bool editAvatar;
+    private IBrowserFile? avatarFile;
 
     protected override async Task OnInitializedAsync()
     {
@@ -89,6 +109,16 @@
             var normalizedAbout = string.IsNullOrWhiteSpace(about) ? null : about.Trim();
             await BotTelegram.UpdateChannelInfoAsync(BotId, ChannelTelegramId, title, normalizedAbout, CancellationToken.None);
 
+            if (editAvatar)
+            {
+                if (avatarFile == null)
+                    throw new InvalidOperationException("请先选择头像图片");
+
+                const long maxBytes = 20 * 1024 * 1024;
+                await using var stream = avatarFile.OpenReadStream(maxBytes);
+                await BotTelegram.SetChannelPhotoAsync(BotId, ChannelTelegramId, stream, avatarFile.Name, CancellationToken.None);
+            }
+
             // 同步回本地 DB（用于列表展示）
             var dbChannel = await BotManagement.GetChannelByTelegramIdAsync(BotId, ChannelTelegramId);
             var username = chatInfo?.Username ?? dbChannel?.Username;
@@ -124,5 +154,9 @@
     {
         MudDialog.Cancel();
     }
-}
 
+    private void OnAvatarChanged(IReadOnlyList<IBrowserFile> files)
+    {
+        avatarFile = files?.FirstOrDefault();
+    }
+}
