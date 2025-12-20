@@ -1,0 +1,42 @@
+@namespace TelegramPanel.Web.Components.Dialogs
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="2">
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                该 URL 来自你当前访问面板的地址（包含真实域名/端口）。点击「复制」会复制完整命令（不会截断 X-API-Key）。
+            </MudAlert>
+
+            <MudTextField Value="@Curl" Label="curl" Variant="Variant.Outlined" ReadOnly="true" Lines="7"
+                          Style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;" />
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="Copy">复制</MudButton>
+        <MudButton Variant="Variant.Text" Color="Color.Default" OnClick="Close">关闭</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code
+{
+    [CascadingParameter] private MudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string Curl { get; set; } = "";
+
+    private async Task Copy()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("telegramPanel.copyText", Curl);
+            Snackbar.Add("已复制", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"复制失败：{ex.Message}", Severity.Error);
+        }
+    }
+
+    private void Close() => MudDialog.Close();
+}

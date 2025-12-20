@@ -1,0 +1,74 @@
+@namespace TelegramPanel.Web.Components.Dialogs
+@inject ISnackbar Snackbar
+@using System.Security.Cryptography
+@using TelegramPanel.Web.ExternalApi
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="2">
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                新建一个外部 API 配置项（可在同一个接口下创建多个配置，使用不同的 `X-API-Key` 区分）。
+            </MudAlert>
+
+            <MudTextField @bind-Value="name" Label="API 名称" Variant="Variant.Outlined" Required="true"
+                          HelperText="用于在面板中区分不同的 API 配置项" />
+
+            <MudSelect @bind-Value="type" Label="API 类型" Variant="Variant.Outlined" Dense="true">
+                <MudSelectItem Value="@ExternalApiTypes.Kick">踢人/封禁（/api/kick）</MudSelectItem>
+            </MudSelect>
+
+            <MudSwitch @bind-Value="enabled" Label="立即启用" Color="Color.Primary" />
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Text" Color="Color.Default" OnClick="Cancel">取消</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Confirm">创建</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code
+{
+    [CascadingParameter] private MudDialogInstance MudDialog { get; set; } = default!;
+
+    private string name = "";
+    private string type = ExternalApiTypes.Kick;
+    private bool enabled;
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Confirm()
+    {
+        var n = (name ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(n))
+        {
+            Snackbar.Add("API 名称不能为空", Severity.Warning);
+            return;
+        }
+
+        var apiKey = GenerateKey();
+        var def = new ExternalApiDefinition
+        {
+            Name = n,
+            Type = type,
+            Enabled = enabled,
+            ApiKey = apiKey,
+            Kick = new KickApiDefinition
+            {
+                BotId = 0,
+                UseAllChats = true,
+                ChatIds = new List<long>(),
+                PermanentBanDefault = false
+            }
+        };
+
+        MudDialog.Close(DialogResult.Ok(def));
+    }
+
+    private static string GenerateKey()
+    {
+        var bytes = RandomNumberGenerator.GetBytes(32);
+        var key = Convert.ToBase64String(bytes);
+        return key.Replace('+', '-').Replace('/', '_').TrimEnd('=');
+    }
+}
+

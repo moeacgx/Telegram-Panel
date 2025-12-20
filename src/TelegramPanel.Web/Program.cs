@@ -554,6 +554,9 @@ app.UseSerilogRequestLogging();
 app.UseAuthentication();
 app.UseAuthorization();
 
+// External API: /api/kick
+TelegramPanel.Web.ExternalApi.KickApi.MapKickApi(app);
+
 // 初始化后台登录凭据（首次启动会生成 admin_auth.json）
 var adminCredentials = app.Services.GetRequiredService<AdminCredentialStore>();
 await adminCredentials.EnsureInitializedAsync();

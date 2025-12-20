@@ -206,6 +206,50 @@ location / {
 dotnet run --project src/TelegramPanel.Web
 ```
 
+## 外部 API（可选）
+
+项目提供少量外部可调用接口，用于与其他系统联动。出于安全考虑，接口默认关闭，且使用请求头 `X-API-Key` 鉴权。
+
+在面板左侧菜单「API 管理」中可以：
+
+- 新建 API，并为该 API 配置项命名
+- 选择 API 类型（后续可扩展更多类型）
+- 为每个配置项生成独立的 `X-API-Key`（同一接口可创建多个配置项，通过 Key 区分）
+
+### 全局踢人/封禁：`POST /api/kick`
+
+用途：从配置的 Bot 管理的频道/群组中踢出或封禁指定用户（按 Telegram 用户 ID）。服务端会根据请求头 `X-API-Key` 匹配对应的 API 配置项并执行。
+
+请求头：
+
+- `Content-Type: application/json`
+- `X-API-Key: <KICK_API_KEY>`
+
+请求体：
+
+```json
+{ "user_id": 123456789 }
+```
+
+可选参数：
+
+```json
+{ "user_id": 123456789, "permanent_ban": true }
+```
+
+调用示例：
+
+```bash
+curl -X POST "http://localhost:5000/api/kick" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <KICK_API_KEY>" \
+  -d '{"user_id": 123456789}'
+```
+
+把 `http://localhost:5000` 替换为你实际访问面板的地址即可。
+
+配置入口：面板左侧菜单「API 管理」。
+
 ## 详细文档
 
 - `docs/README.md`（索引）

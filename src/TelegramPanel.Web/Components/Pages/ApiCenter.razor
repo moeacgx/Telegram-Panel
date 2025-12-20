@@ -1,0 +1,275 @@
+@page "/apis"
+@inject IConfiguration Configuration
+@inject BotManagementService BotManagement
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject NavigationManager Navigation
+@inject IWebHostEnvironment Environment
+@using System.Text.Json
+@using System.Text.Json.Nodes
+@using TelegramPanel.Web.ExternalApi
+@using TelegramPanel.Web.Services
+
+<PageTitle>API 管理 - Telegram Panel</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-4">API 管理</MudText>
+
+<MudCard>
+    <MudCardContent>
+        <MudTable Items="@apis" Dense="true" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@loading">
+            <ToolBarContent>
+                <MudText Typo="Typo.h6">API 列表 (@apis.Count)</MudText>
+                <MudSpacer />
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
+                           Disabled="@loading" OnClick="CreateApi">
+                    新建 API
+                </MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Default" StartIcon="@Icons.Material.Filled.Refresh"
+                           Disabled="@loading" OnClick="Reload">
+                    刷新
+                </MudButton>
+            </ToolBarContent>
+            <HeaderContent>
+                <MudTh>名称</MudTh>
+                <MudTh>类型</MudTh>
+                <MudTh>接口</MudTh>
+                <MudTh>状态</MudTh>
+                <MudTh>操作</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="名称">@context.Name</MudTd>
+                <MudTd DataLabel="类型">@GetTypeName(context.Type)</MudTd>
+                <MudTd DataLabel="接口">@(GetRoute(context.Type) ?? "-")</MudTd>
+                <MudTd DataLabel="状态">
+                    <MudChip T="string" Size="Size.Small" Color="@(context.Enabled ? Color.Success : Color.Default)">
+                        @(context.Enabled ? "启用" : "停用")
+                    </MudChip>
+                </MudTd>
+                <MudTd DataLabel="操作">
+                    <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Color="Color.Info"
+                                   OnClick="@(() => EditApi(context))" />
+                    <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" Color="Color.Primary"
+                                   OnClick="@(() => ShowCurlSample(context))" />
+                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                   OnClick="@(() => DeleteApi(context))" />
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText>暂无 API 配置。点击右上角「新建 API」开始创建。</MudText>
+            </NoRecordsContent>
+        </MudTable>
+    </MudCardContent>
+</MudCard>
+
+@code
+{
+    private bool loading = true;
+    private List<ExternalApiDefinition> apis = new();
+
+    private string LocalConfigPath => LocalConfigFile.ResolvePath(Configuration, Environment);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Reload();
+    }
+
+    private async Task Reload()
+    {
+        loading = true;
+        try
+        {
+            apis = LoadFromConfiguration();
+        }
+        catch (Exception ex)
+        {
+            apis = new List<ExternalApiDefinition>();
+            Snackbar.Add($"加载失败：{ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            loading = false;
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private List<ExternalApiDefinition> LoadFromConfiguration()
+    {
+        var list = Configuration.GetSection("ExternalApi:Apis").Get<List<ExternalApiDefinition>>() ?? new List<ExternalApiDefinition>();
+        foreach (var a in list)
+        {
+            a.Id = string.IsNullOrWhiteSpace(a.Id) ? Guid.NewGuid().ToString("N") : a.Id.Trim();
+            a.Name = (a.Name ?? "").Trim();
+            a.Type = (a.Type ?? "").Trim();
+            a.ApiKey = (a.ApiKey ?? "").Trim();
+            a.Kick ??= new KickApiDefinition();
+            a.Kick.ChatIds ??= new List<long>();
+        }
+
+        return list
+            .OrderByDescending(x => x.Enabled)
+            .ThenBy(x => x.Name)
+            .ToList();
+    }
+
+    private async Task CreateApi()
+    {
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = DialogService.Show<TelegramPanel.Web.Components.Dialogs.CreateExternalApiDialog>("新建 API", new DialogParameters(), options)!;
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not ExternalApiDefinition def)
+            return;
+
+        def.Id = string.IsNullOrWhiteSpace(def.Id) ? Guid.NewGuid().ToString("N") : def.Id.Trim();
+        def.Name = (def.Name ?? "").Trim();
+        def.Type = (def.Type ?? "").Trim();
+        def.ApiKey = (def.ApiKey ?? "").Trim();
+
+        if (apis.Any(a => string.Equals(a.ApiKey, def.ApiKey, StringComparison.Ordinal)))
+        {
+            Snackbar.Add("X-API-Key 已存在，请重新生成后再创建", Severity.Warning);
+            return;
+        }
+
+        apis.Add(def);
+        await SaveToLocalConfigAsync(apis);
+        await Reload();
+
+        // 创建后直接进入编辑（便于选 Bot / chats）
+        await EditApi(def);
+    }
+
+    private async Task EditApi(ExternalApiDefinition api)
+    {
+        if (string.Equals(api.Type, ExternalApiTypes.Kick, StringComparison.OrdinalIgnoreCase))
+        {
+            var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Large, FullWidth = true };
+            var parameters = new DialogParameters { ["Api"] = api };
+            var dialog = DialogService.Show<TelegramPanel.Web.Components.Dialogs.EditKickApiDialog>("编辑 API：踢人/封禁", parameters, options)!;
+            var result = await dialog.Result;
+            if (result is null || result.Canceled || result.Data is not ExternalApiDefinition updated)
+                return;
+
+            // Key 必须唯一
+            if (apis.Any(a => a.Id != api.Id && string.Equals(a.ApiKey, updated.ApiKey, StringComparison.Ordinal)))
+            {
+                Snackbar.Add("X-API-Key 已存在，请更换后保存", Severity.Warning);
+                return;
+            }
+
+            ReplaceInList(updated);
+            await SaveToLocalConfigAsync(apis);
+            await Reload();
+            return;
+        }
+
+        Snackbar.Add("该 API 类型暂未实现编辑器", Severity.Info);
+    }
+
+    private async Task DeleteApi(ExternalApiDefinition api)
+    {
+        bool? ok = await DialogService.ShowMessageBox(
+            "确认删除",
+            $"确定删除 API「{api.Name}」吗？此操作不可恢复。",
+            yesText: "删除", cancelText: "取消");
+
+        if (ok != true)
+            return;
+
+        apis.RemoveAll(a => a.Id == api.Id);
+        await SaveToLocalConfigAsync(apis);
+        await Reload();
+        Snackbar.Add("已删除", Severity.Success);
+    }
+
+    private void ReplaceInList(ExternalApiDefinition updated)
+    {
+        var idx = apis.FindIndex(x => x.Id == updated.Id);
+        if (idx >= 0)
+            apis[idx] = updated;
+        else
+            apis.Add(updated);
+    }
+
+    private async Task ShowCurlSample(ExternalApiDefinition api)
+    {
+        var route = GetRoute(api.Type);
+        if (string.IsNullOrWhiteSpace(route))
+        {
+            Snackbar.Add("未知 API 类型", Severity.Warning);
+            return;
+        }
+
+        var key = (api.ApiKey ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            Snackbar.Add("该 API 未配置 X-API-Key", Severity.Warning);
+            return;
+        }
+
+        var url = Navigation.ToAbsoluteUri(route).ToString();
+
+        var curl = $"curl -X POST \"{url}\" \\\n  -H \"Content-Type: application/json\" \\\n  -H \"X-API-Key: {key}\" \\\n  -d '{{\"user_id\": 123456789}}'";
+
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var parameters = new DialogParameters
+        {
+            ["Curl"] = curl
+        };
+        DialogService.Show<TelegramPanel.Web.Components.Dialogs.ExternalApiCurlSampleDialog>("调用示例（curl）", parameters, options);
+    }
+
+    private static string GetTypeName(string type) => type switch
+    {
+        ExternalApiTypes.Kick => "踢人/封禁",
+        _ => string.IsNullOrWhiteSpace(type) ? "-" : type
+    };
+
+    private static string? GetRoute(string type) => type switch
+    {
+        ExternalApiTypes.Kick => "/api/kick",
+        _ => null
+    };
+
+    private async Task SaveToLocalConfigAsync(List<ExternalApiDefinition> list)
+    {
+        var root = await LoadOrCreateLocalConfigAsync();
+        var external = EnsureObject(root, "ExternalApi");
+
+        var options = new JsonSerializerOptions { WriteIndented = true };
+        external["Apis"] = JsonSerializer.SerializeToNode(list, options) ?? new JsonArray();
+
+        await SaveLocalConfigAsync(root);
+        Snackbar.Add($"配置已写入：{LocalConfigPath}（重载后生效）", Severity.Success);
+    }
+
+    private async Task<JsonObject> LoadOrCreateLocalConfigAsync()
+    {
+        var path = LocalConfigPath;
+        if (!System.IO.File.Exists(path))
+            return new JsonObject();
+
+        var json = await System.IO.File.ReadAllTextAsync(path);
+        if (string.IsNullOrWhiteSpace(json))
+            return new JsonObject();
+
+        return JsonNode.Parse(json)?.AsObject() ?? new JsonObject();
+    }
+
+    private async Task SaveLocalConfigAsync(JsonObject root)
+    {
+        var json = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        var path = LocalConfigPath;
+        await LocalConfigFile.EnsureExistsAsync(path);
+        await LocalConfigFile.WriteJsonAtomicallyAsync(path, json);
+    }
+
+    private static JsonObject EnsureObject(JsonObject root, string key)
+    {
+        if (root[key] is JsonObject obj)
+            return obj;
+        var created = new JsonObject();
+        root[key] = created;
+        return created;
+    }
+}

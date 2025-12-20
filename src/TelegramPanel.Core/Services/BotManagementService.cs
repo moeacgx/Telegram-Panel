@@ -132,6 +132,14 @@ public class BotManagementService
         return list.Where(x => x.IsBroadcast);
     }
 
+    /// <summary>
+    /// 获取 Bot 可管理的聊天列表（包含频道/群组/超级群组）。
+    /// </summary>
+    public async Task<IEnumerable<BotChannel>> GetChatsAsync(int botId, int? categoryId = null)
+    {
+        return await _botChannelRepository.GetForBotAsync(botId, categoryId);
+    }
+
     public async Task<BotChannel?> GetChannelByTelegramIdAsync(int botId, long telegramId)
     {
         return await _botChannelRepository.GetByTelegramIdAsync(botId, telegramId);

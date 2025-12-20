@@ -1,0 +1,276 @@
+@namespace TelegramPanel.Web.Components.Dialogs
+@inject BotManagementService BotManagement
+@inject ISnackbar Snackbar
+@using System.Security.Cryptography
+@using TelegramPanel.Web.ExternalApi
+@using TelegramPanel.Data.Entities
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="2">
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                外部接口：<b>/api/kick</b>。通过请求头 <b>X-API-Key</b> 匹配对应配置项后执行。
+            </MudAlert>
+
+            <MudTextField @bind-Value="model.Name" Label="API 名称" Variant="Variant.Outlined" Required="true" />
+
+            <MudSwitch @bind-Value="model.Enabled" Label="启用" Color="Color.Primary" />
+
+            <MudTextField @bind-Value="model.ApiKey" Label="X-API-Key" Variant="Variant.Outlined"
+                          HelperText="外部调用时传入请求头 X-API-Key" />
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="RegenerateKey">
+                重新生成 Key
+            </MudButton>
+
+            <MudSwitch @bind-Value="model.Kick.PermanentBanDefault" Label="默认永久封禁" Color="Color.Error" />
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                仅踢出：会先封禁再立即解封；永久封禁：用户无法再次加入。
+            </MudText>
+
+            <MudDivider Class="my-2" />
+
+            <MudSelect @bind-Value="model.Kick.BotId" Label="工作机器人" Variant="Variant.Outlined" Dense="true" Style="min-width: 220px;">
+                <MudSelectItem Value="0">所有启用的机器人（全局）</MudSelectItem>
+                @foreach (var b in bots)
+                {
+                    <MudSelectItem Value="@b.Id">@b.Name (@(string.IsNullOrWhiteSpace(b.Username) ? "-" : "@" + b.Username))</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudSwitch @bind-Value="model.Kick.UseAllChats" Label="对该机器人管理的全部频道/群组生效" Color="Color.Primary"
+                       Disabled="@(model.Kick.BotId == 0)" />
+
+            @if (model.Kick.BotId > 0 && !model.Kick.UseAllChats)
+            {
+                <MudStack direction="Row" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudText Typo="Typo.subtitle2">选择频道/群组：@selectedChats.Count / @botChats.Count</MudText>
+                    <MudSpacer />
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="SelectAllChats" Disabled="@(botChats.Count == 0)">全选当前筛选</MudButton>
+                    <MudButton Variant="Variant.Text" Color="Color.Secondary" OnClick="ClearChats" Disabled="@(selectedChats.Count == 0)">清空</MudButton>
+                </MudStack>
+
+                <MudTextField @bind-Value="chatSearch" Placeholder="搜索（标题/用户名/ChatId）" Variant="Variant.Outlined"
+                              Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Immediate="true" />
+
+                <MudTable Items="@FilteredBotChats" Dense="true" Hover="true" Breakpoint="Breakpoint.Sm"
+                          MultiSelection="true" @bind-SelectedItems="selectedChats" Loading="@loadingChats">
+                    <HeaderContent>
+                        <MudTh>类型</MudTh>
+                        <MudTh>标题</MudTh>
+                        <MudTh>用户名</MudTh>
+                        <MudTh>ChatId</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="类型">
+                            <MudChip T="string" Size="Size.Small" Color="@(context.IsBroadcast ? Color.Info : Color.Default)">
+                                @(context.IsBroadcast ? "频道" : "群组")
+                            </MudChip>
+                        </MudTd>
+                        <MudTd DataLabel="标题">@context.Title</MudTd>
+                        <MudTd DataLabel="用户名">@(!string.IsNullOrWhiteSpace(context.Username) ? "@" + context.Username : "-")</MudTd>
+                        <MudTd DataLabel="ChatId">@context.TelegramId</MudTd>
+                    </RowTemplate>
+                    <NoRecordsContent>
+                        <MudText>暂无数据</MudText>
+                    </NoRecordsContent>
+                </MudTable>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Text" Color="Color.Default" OnClick="Cancel" Disabled="@saving">取消</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Save" Disabled="@saving">
+            @if (saving)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                <span>保存中...</span>
+            }
+            else
+            {
+                <span>保存</span>
+            }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code
+{
+    [CascadingParameter] private MudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public ExternalApiDefinition Api { get; set; } = new();
+
+    private bool saving;
+    private ExternalApiDefinition model = new();
+    private List<Bot> bots = new();
+
+    private bool loadingChats;
+    private List<BotChannel> botChats = new();
+    private string chatSearch = "";
+    private HashSet<BotChannel> selectedChats = new();
+
+    private IEnumerable<BotChannel> FilteredBotChats =>
+        botChats.Where(c =>
+        {
+            if (string.IsNullOrWhiteSpace(chatSearch))
+                return true;
+            var q = chatSearch.Trim();
+            return (c.Title?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                   || (c.Username?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                   || c.TelegramId.ToString().Contains(q, StringComparison.OrdinalIgnoreCase);
+        });
+
+    protected override async Task OnInitializedAsync()
+    {
+        model = Clone(Api);
+        if (model.Kick.BotId == 0)
+            model.Kick.UseAllChats = true;
+
+        await LoadBots();
+        await LoadBotChatsIfNeeded();
+    }
+
+    private async Task LoadBots()
+    {
+        try
+        {
+            bots = (await BotManagement.GetAllBotsAsync()).OrderBy(b => b.Id).ToList();
+        }
+        catch (Exception ex)
+        {
+            bots = new List<Bot>();
+            Snackbar.Add($"加载机器人失败：{ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task LoadBotChatsIfNeeded()
+    {
+        if (model.Kick.BotId <= 0 || model.Kick.UseAllChats)
+        {
+            botChats = new List<BotChannel>();
+            selectedChats = new HashSet<BotChannel>();
+            return;
+        }
+
+        loadingChats = true;
+        try
+        {
+            var chats = await BotManagement.GetChatsAsync(model.Kick.BotId);
+            botChats = chats.OrderByDescending(c => c.IsBroadcast).ThenBy(c => c.Title).ToList();
+
+            var selectedIds = new HashSet<long>(model.Kick.ChatIds.Where(x => x != 0));
+            selectedChats = botChats.Where(c => selectedIds.Contains(c.TelegramId)).ToHashSet();
+        }
+        catch (Exception ex)
+        {
+            botChats = new List<BotChannel>();
+            selectedChats = new HashSet<BotChannel>();
+            Snackbar.Add($"加载频道/群组失败：{ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            loadingChats = false;
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // 当外部传入的 Api 更新时，本地模型同步；不重新加载 bots
+        if (!string.IsNullOrWhiteSpace(Api.Id) && Api.Id != model.Id)
+        {
+            model = Clone(Api);
+            await LoadBotChatsIfNeeded();
+        }
+    }
+
+    private void RegenerateKey()
+    {
+        var bytes = RandomNumberGenerator.GetBytes(32);
+        var key = Convert.ToBase64String(bytes).Replace('+', '-').Replace('/', '_').TrimEnd('=');
+        model.ApiKey = key;
+        Snackbar.Add("已重新生成 Key（记得保存）", Severity.Info);
+    }
+
+    private async Task SelectAllChats()
+    {
+        selectedChats = FilteredBotChats.ToHashSet();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ClearChats()
+    {
+        selectedChats = new HashSet<BotChannel>();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task Save()
+    {
+        if (saving)
+            return;
+
+        model.Name = (model.Name ?? "").Trim();
+        model.ApiKey = (model.ApiKey ?? "").Trim();
+        model.Type = ExternalApiTypes.Kick;
+
+        if (string.IsNullOrWhiteSpace(model.Name))
+        {
+            Snackbar.Add("API 名称不能为空", Severity.Warning);
+            return;
+        }
+
+        if (model.Enabled && string.IsNullOrWhiteSpace(model.ApiKey))
+        {
+            Snackbar.Add("启用前请先设置 X-API-Key", Severity.Warning);
+            return;
+        }
+
+        if (model.Kick.BotId == 0)
+            model.Kick.UseAllChats = true;
+
+        if (model.Kick.BotId > 0 && !model.Kick.UseAllChats)
+        {
+            var ids = selectedChats.Select(x => x.TelegramId).Distinct().ToList();
+            if (ids.Count == 0)
+            {
+                Snackbar.Add("请至少选择一个频道/群组", Severity.Warning);
+                return;
+            }
+
+            model.Kick.ChatIds = ids.OrderBy(x => x).ToList();
+        }
+        else
+        {
+            model.Kick.ChatIds = new List<long>();
+        }
+
+        saving = true;
+        try
+        {
+            MudDialog.Close(DialogResult.Ok(model));
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private static ExternalApiDefinition Clone(ExternalApiDefinition source)
+    {
+        return new ExternalApiDefinition
+        {
+            Id = string.IsNullOrWhiteSpace(source.Id) ? Guid.NewGuid().ToString("N") : source.Id,
+            Name = source.Name ?? "",
+            Type = ExternalApiTypes.Kick,
+            Enabled = source.Enabled,
+            ApiKey = source.ApiKey ?? "",
+            Kick = new KickApiDefinition
+            {
+                BotId = source.Kick?.BotId ?? 0,
+                UseAllChats = source.Kick?.UseAllChats ?? true,
+                ChatIds = source.Kick?.ChatIds?.Where(x => x != 0).Distinct().ToList() ?? new List<long>(),
+                PermanentBanDefault = source.Kick?.PermanentBanDefault ?? false
+            }
+        };
+    }
+}
+
