@@ -1,0 +1,110 @@
+@namespace TelegramPanel.Web.Components.Dialogs
+@using TelegramPanel.Core.Services
+@using TelegramPanel.Data.Entities
+
+@* 账号风控警告对话框 *@
+
+<MudDialog>
+    <DialogContent>
+        <MudAlert Severity="Severity.Warning" Icon="@Icons.Material.Filled.Warning" Class="mb-4">
+            <MudText Typo="Typo.body1" Class="mb-2">
+                <strong>⚠️ 风控警告</strong>
+            </MudText>
+            <MudText Typo="Typo.body2">
+                @Message
+            </MudText>
+            @if (!string.IsNullOrWhiteSpace(DetailedMessage))
+            {
+                <MudText Typo="Typo.body2" Class="mt-2">
+                    @DetailedMessage
+                </MudText>
+            }
+        </MudAlert>
+
+        @if (ShowRecommendations)
+        {
+            <MudText Typo="Typo.subtitle2" Class="mb-2">
+                <strong>建议操作：</strong>
+            </MudText>
+            <MudList T="string" Dense="true" Class="pl-2">
+                <MudListItem T="string" Icon="@Icons.Material.Filled.Schedule">
+                    等待满 24 小时后再进行敏感操作
+                </MudListItem>
+                <MudListItem T="string" Icon="@Icons.Material.Filled.SlowMotionVideo">
+                    降低操作频率，避免被 Telegram 风控系统标记
+                </MudListItem>
+                <MudListItem T="string" Icon="@Icons.Material.Filled.SafetyCheck">
+                    优先使用低风险操作替代
+                </MudListItem>
+            </MudList>
+        }
+
+        @if (RiskyAccounts != null && RiskyAccounts.Any())
+        {
+            <MudText Typo="Typo.subtitle2" Class="mt-3 mb-2">
+                <strong>风险账号列表：</strong>
+            </MudText>
+            <MudPaper Class="pa-2" Elevation="0" Style="max-height: 200px; overflow-y: auto;">
+                @foreach (var account in RiskyAccounts)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Warning" Class="ma-1">
+                        @account.Phone
+                        @if (account.LastLoginAt != null)
+                        {
+                            <text> (登录 @account.GetLoginHoursFormatted() 小时)</text>
+                        }
+                    </MudChip>
+                }
+            </MudPaper>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel" Color="Color.Default">
+            取消操作
+        </MudButton>
+        @if (ShowExcludeOption && RiskyAccounts != null && RiskyAccounts.Any())
+        {
+            <MudButton OnClick="ExcludeRisky" Color="Color.Info">
+                排除风险账号后继续
+            </MudButton>
+        }
+        <MudButton OnClick="Continue" Color="Color.Warning" Variant="Variant.Filled">
+            我了解风险，继续操作
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    MudDialogInstance? MudDialog { get; set; }
+
+    [Parameter]
+    public string Message { get; set; } = "存在风控风险";
+
+    [Parameter]
+    public string? DetailedMessage { get; set; }
+
+    [Parameter]
+    public bool ShowRecommendations { get; set; } = true;
+
+    [Parameter]
+    public bool ShowExcludeOption { get; set; } = false;
+
+    [Parameter]
+    public List<Account>? RiskyAccounts { get; set; }
+
+    private void Cancel()
+    {
+        MudDialog?.Close(DialogResult.Cancel());
+    }
+
+    private void Continue()
+    {
+        MudDialog?.Close(DialogResult.Ok(RiskWarningAction.Continue));
+    }
+
+    private void ExcludeRisky()
+    {
+        MudDialog?.Close(DialogResult.Ok(RiskWarningAction.ExcludeRisky));
+    }
+}

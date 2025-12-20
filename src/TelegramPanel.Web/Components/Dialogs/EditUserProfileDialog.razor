@@ -1,6 +1,7 @@
 @namespace TelegramPanel.Web.Components.Dialogs
 @inject AccountManagementService AccountManagement
 @inject TelegramPanel.Core.Services.Telegram.AccountTelegramToolsService AccountTelegramTools
+@inject TelegramPanel.Core.Services.AccountRiskService RiskService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @using TelegramPanel.Data.Entities
@@ -155,6 +156,26 @@
 
         if (confirm != true)
             return;
+
+        // 风控检查：修改资料是敏感操作
+        var riskCheck = RiskService.CheckLoginDuration(account);
+        if (riskCheck.IsRisky)
+        {
+            var parameters = new DialogParameters
+            {
+                ["Message"] = riskCheck.Message,
+                ["DetailedMessage"] = riskCheck.DetailedMessage,
+                ["ShowRecommendations"] = true
+            };
+            var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium };
+            var dialog = DialogService.Show<TelegramPanel.Web.Components.Dialogs.RiskWarningDialog>("风控警告", parameters, options);
+            var result = await dialog.Result;
+            if (result.Canceled)
+            {
+                saving = false;
+                return;
+            }
+        }
 
         saving = true;
         try

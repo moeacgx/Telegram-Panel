@@ -22,6 +22,11 @@ public class Account
     public DateTime LastSyncAt { get; set; } = DateTime.UtcNow;
 
     /// <summary>
+    /// 最后一次登录 Telegram 的时间（UTC），用于风控检查
+    /// </summary>
+    public DateTime? LastLoginAt { get; set; }
+
+    /// <summary>
     /// Telegram 状态检测结果摘要（用于页面刷新后仍可展示上次检测结论）
     /// </summary>
     public string? TelegramStatusSummary { get; set; }

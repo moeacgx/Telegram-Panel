@@ -35,6 +35,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<BatchTaskManagementService>();
         services.AddScoped<BotManagementService>();
 
+        // 注册风控服务
+        services.AddScoped<AccountRiskService>();
+
         return services;
     }
 }

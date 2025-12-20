@@ -2,10 +2,12 @@
 @inject AccountManagementService AccountManagement
 @inject AccountCategoryManagementService CategoryManagement
 @inject AccountTelegramToolsService AccountTelegramTools
+@inject TelegramPanel.Core.Services.AccountRiskService RiskService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject NavigationManager Navigation
 @using TelegramPanel.Data.Entities
+@using TelegramPanel.Web.Components.Dialogs
 @implements IDisposable
 
 <PageTitle>账号列表 - Telegram Panel</PageTitle>
@@ -370,11 +372,35 @@
             loading = true;
             bool? probeResult = await DialogService.ShowMessageBox(
                 "刷新 Telegram 状态",
-                "是否进行深度探测（将创建并删除一个测试频道，用于判断“创建频道接口是否被冻结”）？",
+                "是否进行深度探测（将创建并删除一个测试频道，用于判断【创建频道接口是否被冻结】）？",
                 yesText: "深度探测",
                 cancelText: "普通刷新");
 
             var probe = probeResult == true;
+
+            // 风控检查：深度探测是敏感操作
+            if (probe)
+            {
+                var riskCheck = RiskService.CheckLoginDuration(account);
+                if (riskCheck.IsRisky)
+                {
+                    var parameters = new DialogParameters
+                    {
+                        ["Message"] = riskCheck.Message,
+                        ["DetailedMessage"] = riskCheck.DetailedMessage,
+                        ["ShowRecommendations"] = true
+                    };
+                    var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium };
+                    var dialog = DialogService.Show<RiskWarningDialog>("风控警告", parameters, options);
+                    var dialogResult = await dialog.Result;
+                    if (dialogResult.Canceled)
+                    {
+                        loading = false;
+                        return; // 用户取消操作
+                    }
+                }
+            }
+
             var result = await AccountTelegramTools.RefreshAccountStatusAsync(account.Id, probeCreateChannel: probe, cancellationToken: _pageCts.Token);
             telegramStatus[account.Id] = result;
 
@@ -406,12 +432,53 @@
         {
             bool? probeResult = await DialogService.ShowMessageBox(
                 "批量刷新 Telegram 状态",
-                "是否进行深度探测（将对每个账号创建并删除一个测试频道，用于判断“创建频道接口是否被冻结”）？",
+                "是否进行深度探测（将对每个账号创建并删除一个测试频道，用于判断【创建频道接口是否被冻结】）？",
                 yesText: "深度探测",
                 cancelText: "普通刷新");
 
             var probe = probeResult == true;
             var targets = filteredAccounts.ToList();
+
+            // 批量风控检查：深度探测是敏感操作
+            if (probe && targets.Count > 0)
+            {
+                var batchCheck = RiskService.CheckBatchAccounts(targets);
+                if (batchCheck.HasRiskyAccounts)
+                {
+                    var parameters = new DialogParameters
+                    {
+                        ["Message"] = $"检测到 {batchCheck.RiskyCount} 个风险账号",
+                        ["DetailedMessage"] = batchCheck.GetRiskySummary(),
+                        ["ShowRecommendations"] = true,
+                        ["ShowExcludeOption"] = true,
+                        ["RiskyAccounts"] = batchCheck.RiskyAccounts.ToList()
+                    };
+                    var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Large };
+                    var dialog = DialogService.Show<RiskWarningDialog>("批量操作风控警告", parameters, options);
+                    var dialogResult = await dialog.Result;
+
+                    if (dialogResult.Canceled)
+                    {
+                        loading = false;
+                        return; // 用户取消操作
+                    }
+
+                    if (dialogResult.Data is TelegramPanel.Core.Services.RiskWarningAction action
+                        && action == TelegramPanel.Core.Services.RiskWarningAction.ExcludeRisky)
+                    {
+                        // 排除风险账号后继续
+                        targets = batchCheck.SafeAccounts.ToList();
+                        if (targets.Count == 0)
+                        {
+                            Snackbar.Add("排除风险账号后无剩余账号", Severity.Info);
+                            loading = false;
+                            return;
+                        }
+                    }
+                    // else: 用户选择继续所有账号
+                }
+            }
+
             foreach (var a in targets)
             {
                 try

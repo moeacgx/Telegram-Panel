@@ -1,11 +1,14 @@
 @page "/channels/create"
 @inject IChannelService ChannelService
 @inject AccountManagementService AccountManagement
+@inject TelegramPanel.Core.Services.AccountRiskService RiskService
 @inject ChannelManagementService ChannelManagement
 @inject ChannelGroupManagementService ChannelGroupManagement
 @inject ISnackbar Snackbar
 @inject NavigationManager Navigation
+@inject IDialogService DialogService
 @using TelegramPanel.Data.Entities
+@using TelegramPanel.Web.Components.Dialogs
 
 <PageTitle>创建频道 - Telegram Panel</PageTitle>
 
@@ -137,6 +140,27 @@
         {
             Snackbar.Add("公开频道需要设置用户名", Severity.Error);
             return;
+        }
+
+        // 风控检查：创建频道是敏感操作
+        var account = await AccountManagement.GetAccountAsync(selectedAccountId);
+        if (account != null)
+        {
+            var riskCheck = RiskService.CheckLoginDuration(account);
+            if (riskCheck.IsRisky)
+            {
+                var parameters = new DialogParameters
+                {
+                    ["Message"] = riskCheck.Message,
+                    ["DetailedMessage"] = riskCheck.DetailedMessage,
+                    ["ShowRecommendations"] = true
+                };
+                var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium };
+                var dialog = DialogService.Show<RiskWarningDialog>("风控警告", parameters, options);
+                var result = await dialog.Result;
+                if (result.Canceled)
+                    return; // 用户取消操作
+            }
         }
 
         creating = true;

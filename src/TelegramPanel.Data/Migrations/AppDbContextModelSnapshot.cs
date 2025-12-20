@@ -40,7 +40,14 @@ namespace TelegramPanel.Data.Migrations
                     b.Property<bool>("IsActive")
                         .HasColumnType("INTEGER");
 
+                    b.Property<DateTime?>("LastLoginAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("LastSyncAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Nickname")
+                        .HasMaxLength(100)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Phone")
@@ -51,6 +58,18 @@ namespace TelegramPanel.Data.Migrations
                     b.Property<string>("SessionPath")
                         .IsRequired()
                         .HasMaxLength(500)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("TelegramStatusCheckedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TelegramStatusDetails")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool?>("TelegramStatusOk")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("TelegramStatusSummary")
                         .HasColumnType("TEXT");
 
                     b.Property<long>("UserId")

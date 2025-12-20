@@ -1,6 +1,7 @@
 @namespace TelegramPanel.Web.Components.Dialogs
 @inject AccountManagementService AccountManagement
 @inject TelegramPanel.Core.Services.Telegram.AccountTelegramToolsService AccountTelegramTools
+@inject TelegramPanel.Core.Services.AccountRiskService RiskService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @using TelegramPanel.Data.Entities
@@ -110,6 +111,38 @@
         {
             Snackbar.Add("批量昵称不能为空", Severity.Warning);
             return;
+        }
+
+        // 批量风控检查：修改昵称是敏感操作
+        var batchCheck = RiskService.CheckBatchAccounts(accounts);
+        if (batchCheck.HasRiskyAccounts)
+        {
+            var parameters = new DialogParameters
+            {
+                ["Message"] = $"检测到 {batchCheck.RiskyCount} 个风险账号",
+                ["DetailedMessage"] = batchCheck.GetRiskySummary(),
+                ["ShowRecommendations"] = true,
+                ["ShowExcludeOption"] = true,
+                ["RiskyAccounts"] = batchCheck.RiskyAccounts.ToList()
+            };
+            var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Large };
+            var dialog = DialogService.Show<TelegramPanel.Web.Components.Dialogs.RiskWarningDialog>("批量操作风控警告", parameters, options);
+            var result = await dialog.Result;
+
+            if (result.Canceled)
+                return; // 用户取消操作
+
+            if (result.Data is TelegramPanel.Core.Services.RiskWarningAction action && action == TelegramPanel.Core.Services.RiskWarningAction.ExcludeRisky)
+            {
+                // 排除风险账号后继续
+                accounts = batchCheck.SafeAccounts.ToList();
+                if (accounts.Count == 0)
+                {
+                    Snackbar.Add("排除风险账号后无剩余账号", Severity.Info);
+                    return;
+                }
+            }
+            // else: 用户选择继续所有账号
         }
 
         bool? confirm = await DialogService.ShowMessageBox(
