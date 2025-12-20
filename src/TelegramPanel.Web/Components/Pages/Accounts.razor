@@ -125,6 +125,8 @@
                                    OnClick="@(() => ShowDetails(context))" Title="查看详情" />
                     <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Color="Color.Info"
                                    Disabled="@loading" OnClick="@(() => OpenEditUserProfile(context))" Title="编辑用户资料" />
+                    <MudIconButton Icon="@Icons.Material.Filled.GroupAdd" Size="Size.Small" Color="Color.Warning"
+                                   Disabled="@loading" OnClick="@(() => OpenJoinSubscribe(context))" Title="进群/订阅" />
                     <MudIconButton Icon="@Icons.Material.Filled.Sync" Size="Size.Small" Color="Color.Primary"
                                    Disabled="@loading" OnClick="@(() => RefreshTelegramStatus(context))" Title="刷新 Telegram 状态" />
                     <MudIconButton Icon="@Icons.Material.Filled.MarkEmailUnread" Size="Size.Small" Color="Color.Info"
@@ -283,6 +285,22 @@
         };
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
         var dialog = DialogService.Show<TelegramPanel.Web.Components.Dialogs.EditUserProfileDialog>("编辑用户资料", parameters, options)!;
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+            await LoadAccounts();
+    }
+
+    private async Task OpenJoinSubscribe(Account account)
+    {
+        if (loading)
+            return;
+
+        var parameters = new DialogParameters
+        {
+            ["AccountId"] = account.Id
+        };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = DialogService.Show<TelegramPanel.Web.Components.Dialogs.JoinSubscribeDialog>("进群/订阅", parameters, options)!;
         var result = await dialog.Result;
         if (result is { Canceled: false })
             await LoadAccounts();

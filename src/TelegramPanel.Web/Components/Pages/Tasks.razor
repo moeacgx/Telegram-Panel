@@ -3,6 +3,7 @@
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @using TelegramPanel.Data.Entities
+@using TelegramPanel.Core.BatchTasks
 @implements IDisposable
 
 <PageTitle>任务中心 - Telegram Panel</PageTitle>
@@ -17,6 +18,15 @@
                 <MudSpacer />
                 <MudIconButton Icon="@Icons.Material.Filled.Refresh" Color="Color.Default" Size="Size.Small"
                                Disabled="@loading" OnClick="@(async (MouseEventArgs _) => await LoadTasks())" />
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.AddTask"
+                           Disabled="@loading" OnClick="OpenCreateTaskDialog" Class="ml-2">
+                    新建任务
+                </MudButton>
+                <MudSelect @bind-Value="filterCategory" Label="任务分类" Variant="Variant.Outlined" Dense="true" Class="ml-2" Style="min-width: 140px;">
+                    <MudSelectItem Value='@("all")'>全部</MudSelectItem>
+                    <MudSelectItem Value='@("user")'>用户任务</MudSelectItem>
+                    <MudSelectItem Value='@("bot")'>Bot 任务</MudSelectItem>
+                </MudSelect>
                 <MudSelect @bind-Value="filterStatus" Label="状态筛选" Variant="Variant.Outlined" Dense="true" Style="min-width: 120px;">
                     <MudSelectItem Value='@("all")'>全部</MudSelectItem>
                     <MudSelectItem Value='@("pending")'>待执行</MudSelectItem>
@@ -27,6 +37,7 @@
             </ToolBarContent>
             <HeaderContent>
                 <MudTh>任务ID</MudTh>
+                <MudTh>归属</MudTh>
                 <MudTh>任务类型</MudTh>
                 <MudTh>状态</MudTh>
                 <MudTh>进度</MudTh>
@@ -36,6 +47,9 @@
             </HeaderContent>
             <RowTemplate>
                 <MudTd DataLabel="任务ID">@context.Id</MudTd>
+                <MudTd DataLabel="归属">
+                    <MudChip T="string" Size="Size.Small" Color="@GetCategoryColor(context.TaskType)">@GetCategoryName(context.TaskType)</MudChip>
+                </MudTd>
                 <MudTd DataLabel="任务类型">
                     <MudChip T="string" Size="Size.Small" Icon="@GetTaskIcon(context.TaskType)">@GetTaskTypeName(context.TaskType)</MudChip>
                 </MudTd>
@@ -83,12 +97,15 @@
     private List<BatchTask> tasks = new();
     private bool loading = true;
     private string filterStatus = "all";
+    private string filterCategory = "all";
 
     private PeriodicTimer? refreshTimer;
     private CancellationTokenSource? refreshCts;
 
     private IEnumerable<BatchTask> filteredTasks =>
-        filterStatus == "all" ? tasks : tasks.Where(t => t.Status == filterStatus);
+        tasks.Where(t =>
+            (filterStatus == "all" || t.Status == filterStatus) &&
+            (filterCategory == "all" || GetCategory(t.TaskType) == filterCategory));
 
     protected override async Task OnInitializedAsync()
     {
@@ -154,17 +171,28 @@
         return (double)task.Completed / task.Total * 100;
     }
 
+    private static string GetCategory(string taskType) =>
+        taskType == BatchTaskTypes.UserJoinSubscribe ? "user" : "bot";
+
+    private static string GetCategoryName(string taskType) =>
+        GetCategory(taskType) == "user" ? "用户" : "Bot";
+
+    private static Color GetCategoryColor(string taskType) =>
+        GetCategory(taskType) == "user" ? Color.Info : Color.Secondary;
+
     private string GetTaskIcon(string type) => type switch
     {
-        "invite" => Icons.Material.Filled.PersonAdd,
-        "set_admin" => Icons.Material.Filled.AdminPanelSettings,
+        BatchTaskTypes.Invite => Icons.Material.Filled.PersonAdd,
+        BatchTaskTypes.SetAdmin => Icons.Material.Filled.AdminPanelSettings,
+        BatchTaskTypes.UserJoinSubscribe => Icons.Material.Filled.GroupAdd,
         _ => Icons.Material.Filled.Task
     };
 
     private string GetTaskTypeName(string type) => type switch
     {
-        "invite" => "批量邀请",
-        "set_admin" => "设置管理员",
+        BatchTaskTypes.Invite => "批量邀请",
+        BatchTaskTypes.SetAdmin => "设置管理员",
+        BatchTaskTypes.UserJoinSubscribe => "批量订阅/加群",
         _ => type
     };
 
@@ -257,5 +285,14 @@
                 Snackbar.Add($"删除失败：{ex.Message}", Severity.Error);
             }
         }
+    }
+
+    private async Task OpenCreateTaskDialog()
+    {
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Large, FullWidth = true };
+        var dialog = DialogService.Show<TelegramPanel.Web.Components.Dialogs.CreateBatchTaskDialog>("新建任务", new DialogParameters(), options)!;
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+            await LoadTasks();
     }
 }

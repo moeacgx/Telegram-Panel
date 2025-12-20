@@ -1,0 +1,158 @@
+@namespace TelegramPanel.Web.Components.Dialogs
+@inject AccountManagementService AccountManagement
+@inject TelegramPanel.Core.Services.AccountRiskService RiskService
+@inject BatchTaskManagementService TaskManagement
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@using System.Text.Json
+@using TelegramPanel.Core.BatchTasks
+@using TelegramPanel.Data.Entities
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="2">
+            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">
+                将使用指定账号订阅频道/加入群组。支持输入多个链接/用户名，换行分隔。
+                <MudText Typo="Typo.body2" Class="mt-1">
+                    支持：<b>https://t.me/xxx</b>、<b>t.me/+hash</b>、<b>@username</b>、<b>username</b>、<b>tg://join?invite=hash</b>
+                </MudText>
+            </MudAlert>
+
+            @if (account == null)
+            {
+                <MudText Color="Color.Error">账号不存在或已被删除</MudText>
+            }
+            else
+            {
+                <MudText Typo="Typo.subtitle2">
+                    执行账号：@account.Phone @(string.IsNullOrWhiteSpace(account.Nickname) ? "" : $"（{account.Nickname}）")
+                </MudText>
+            }
+
+            <MudTextField @bind-Value="linksText" Label="频道/群链接列表（换行分隔）" Variant="Variant.Outlined" Lines="8"
+                          HelperText="每行一个链接或用户名；提交后将创建后台任务执行。" />
+
+            <MudNumericField @bind-Value="delayMs" Label="操作间隔（毫秒）" Variant="Variant.Outlined" Min="0" Max="10000"
+                             HelperText="建议设置 1500-4000ms，避免触发风控（会额外加少量随机抖动）。" />
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Text" Color="Color.Default" OnClick="Cancel" Disabled="@submitting">关闭</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Submit" Disabled="@(submitting || account == null)">
+            @if (submitting)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                <span>提交中...</span>
+            }
+            else
+            {
+                <span>确认执行</span>
+            }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code
+{
+    [CascadingParameter] private MudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public int AccountId { get; set; }
+
+    private Account? account;
+    private string linksText = "";
+    private int delayMs = 2000;
+    private bool submitting;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AccountId <= 0)
+            return;
+
+        account = await AccountManagement.GetAccountAsync(AccountId);
+    }
+
+    private async Task Submit()
+    {
+        if (submitting || account == null)
+            return;
+
+        var links = ParseLines(linksText);
+        if (links.Count == 0)
+        {
+            Snackbar.Add("请至少输入一个频道/群链接", Severity.Warning);
+            return;
+        }
+
+        // 风控检查：加入群/订阅频道是敏感操作
+        var batchCheck = RiskService.CheckBatchAccounts(new List<Account> { account });
+        if (batchCheck.HasRiskyAccounts)
+        {
+            var parameters = new DialogParameters
+            {
+                ["Message"] = $"检测到 {batchCheck.RiskyCount} 个风险账号",
+                ["DetailedMessage"] = batchCheck.GetRiskySummary(),
+                ["ShowRecommendations"] = true,
+                ["ShowExcludeOption"] = false,
+                ["RiskyAccounts"] = batchCheck.RiskyAccounts.ToList()
+            };
+            var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Large };
+            var dialog = DialogService.Show<TelegramPanel.Web.Components.Dialogs.RiskWarningDialog>("批量操作风控警告", parameters, options);
+            var result = await dialog.Result;
+            if (result.Canceled)
+                return;
+        }
+
+        bool? confirm = await DialogService.ShowMessageBox(
+            "确认执行",
+            $"将使用账号 {account.Phone} 对 {links.Count} 个链接执行订阅/加群操作。是否继续？",
+            yesText: "继续", cancelText: "取消");
+
+        if (confirm != true)
+            return;
+
+        submitting = true;
+        try
+        {
+            var task = new BatchTask
+            {
+                TaskType = BatchTaskTypes.UserJoinSubscribe,
+                Total = links.Count,
+                Completed = 0,
+                Failed = 0,
+                Config = JsonSerializer.Serialize(new
+                {
+                    AccountIds = new List<int> { account.Id },
+                    Links = links,
+                    DelayMs = delayMs
+                })
+            };
+
+            var created = await TaskManagement.CreateTaskAsync(task);
+            Snackbar.Add($"已提交后台任务 #{created.Id}（订阅/加群）。请到【任务中心】查看进度。", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(created.Id));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"提交失败：{ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            submitting = false;
+        }
+    }
+
+    private static List<string> ParseLines(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return new List<string>();
+
+        return text
+            .Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(x => (x ?? string.Empty).Trim())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private void Cancel() => MudDialog.Close();
+}
+

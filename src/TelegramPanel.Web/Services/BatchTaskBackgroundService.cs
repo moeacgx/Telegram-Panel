@@ -2,8 +2,10 @@ using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using TelegramPanel.Core.BatchTasks;
 using TelegramPanel.Core.Interfaces;
 using TelegramPanel.Core.Services;
+using TelegramPanel.Core.Services.Telegram;
 using TelegramPanel.Data.Entities;
 
 namespace TelegramPanel.Web.Services;
@@ -71,6 +73,7 @@ public sealed class BatchTaskBackgroundService : BackgroundService
         var taskManagement = scope.ServiceProvider.GetRequiredService<BatchTaskManagementService>();
         var channelManagement = scope.ServiceProvider.GetRequiredService<ChannelManagementService>();
         var channelService = scope.ServiceProvider.GetRequiredService<IChannelService>();
+        var accountTelegramTools = scope.ServiceProvider.GetRequiredService<AccountTelegramToolsService>();
 
         var pending = (await taskManagement.GetTasksByStatusAsync("pending"))
             .OrderBy(t => t.CreatedAt)
@@ -89,11 +92,14 @@ public sealed class BatchTaskBackgroundService : BackgroundService
         {
             switch (pending.TaskType)
             {
-                case "invite":
+                case BatchTaskTypes.Invite:
                     (completed, failed) = await RunInviteAsync(pending, taskManagement, channelManagement, channelService, completed, failed, cancellationToken);
                     break;
-                case "set_admin":
+                case BatchTaskTypes.SetAdmin:
                     (completed, failed) = await RunSetAdminAsync(pending, taskManagement, channelManagement, channelService, completed, failed, cancellationToken);
+                    break;
+                case BatchTaskTypes.UserJoinSubscribe:
+                    (completed, failed) = await RunUserJoinSubscribeAsync(pending, taskManagement, accountTelegramTools, completed, failed, cancellationToken);
                     break;
                 default:
                     failed = pending.Total == 0 ? 1 : pending.Total;
@@ -246,6 +252,44 @@ public sealed class BatchTaskBackgroundService : BackgroundService
         return (completed, failed);
     }
 
+    private static async Task<(int completed, int failed)> RunUserJoinSubscribeAsync(
+        BatchTask task,
+        BatchTaskManagementService taskManagement,
+        AccountTelegramToolsService accountTelegramTools,
+        int completed,
+        int failed,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(task.Config))
+            throw new InvalidOperationException("任务配置为空");
+
+        var cfg = JsonSerializer.Deserialize<UserJoinSubscribeTaskConfig>(task.Config);
+        if (cfg == null || cfg.AccountIds.Count == 0 || cfg.Links.Count == 0)
+            throw new InvalidOperationException("任务配置缺少 AccountIds 或 Links");
+
+        foreach (var accountId in cfg.AccountIds)
+        {
+            foreach (var link in cfg.Links)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var latest = await taskManagement.GetTaskAsync(task.Id);
+                if (latest != null && latest.Status != "running")
+                    return (completed, failed);
+
+                var (ok, _, _) = await accountTelegramTools.JoinChatOrChannelAsync(accountId, link, cancellationToken);
+                if (ok) completed++; else failed++;
+
+                await taskManagement.UpdateTaskProgressAsync(task.Id, completed, failed);
+
+                if (cfg.DelayMs > 0)
+                    await Task.Delay(cfg.DelayMs + Random.Shared.Next(300, 900), cancellationToken);
+            }
+        }
+
+        return (completed, failed);
+    }
+
     private sealed record InviteTaskConfig(
         List<long> ChannelTelegramIds,
         List<string> Usernames,
@@ -259,5 +303,11 @@ public sealed class BatchTaskBackgroundService : BackgroundService
         int Rights,
         string Title,
         int PreferredExecuteAccountId
+    );
+
+    private sealed record UserJoinSubscribeTaskConfig(
+        List<int> AccountIds,
+        List<string> Links,
+        int DelayMs
     );
 }

@@ -636,6 +636,86 @@ public class AccountTelegramToolsService
     }
 
     /// <summary>
+    /// 通过链接/用户名加入群组或订阅频道（支持 https://t.me/xxx、t.me/+hash、@username、username、tg://join?invite=hash 等）。
+    /// </summary>
+    public async Task<(bool Success, string? Error, string? JoinedTitle)> JoinChatOrChannelAsync(
+        int accountId,
+        string linkOrUsername,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var raw = (linkOrUsername ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(raw))
+                return (false, "链接/用户名为空", null);
+
+            var url = NormalizeTelegramJoinUrl(raw);
+
+            var client = await GetOrCreateConnectedClientAsync(accountId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var chat = await client.AnalyzeInviteLink(url, join: true);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var title = chat switch
+            {
+                Channel c => c.title,
+                Chat c => c.title,
+                _ => null
+            };
+
+            return (true, null, title);
+        }
+        catch (RpcException ex) when (ex.Code == 400 && string.Equals(ex.Message, "USER_ALREADY_PARTICIPANT", StringComparison.OrdinalIgnoreCase))
+        {
+            return (true, null, "已在群组/频道中");
+        }
+        catch (Exception ex)
+        {
+            var (summary, details) = MapTelegramException(ex);
+            var msg = string.IsNullOrWhiteSpace(details) ? summary : $"{summary}：{details}";
+            return (false, msg, null);
+        }
+    }
+
+    private static string NormalizeTelegramJoinUrl(string input)
+    {
+        var s = (input ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(s))
+            throw new ArgumentException("链接/用户名为空", nameof(input));
+
+        // tg://join?invite=xxxx
+        if (s.StartsWith("tg://", StringComparison.OrdinalIgnoreCase))
+        {
+            var inviteKey = "invite=";
+            var idx = s.IndexOf(inviteKey, StringComparison.OrdinalIgnoreCase);
+            if (idx >= 0)
+            {
+                var hash = s[(idx + inviteKey.Length)..];
+                var amp = hash.IndexOf('&');
+                if (amp >= 0)
+                    hash = hash[..amp];
+                hash = hash.Trim();
+                if (!string.IsNullOrWhiteSpace(hash))
+                    return $"https://t.me/+{hash}";
+            }
+        }
+
+        // 直接是 t.me/xxx
+        if (s.StartsWith("t.me/", StringComparison.OrdinalIgnoreCase) || s.StartsWith("telegram.me/", StringComparison.OrdinalIgnoreCase))
+            return "https://" + s;
+
+        // @username / username
+        if (s.StartsWith("@", StringComparison.Ordinal))
+            s = s.TrimStart('@');
+
+        if (!s.Contains("://", StringComparison.Ordinal))
+            return $"https://t.me/{s}";
+
+        return s;
+    }
+
+    /// <summary>
     /// 更新当前账号头像（静态图片）。
     /// </summary>
     public async Task<(bool Success, string? Error)> UpdateProfilePhotoAsync(
