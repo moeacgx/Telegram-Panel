@@ -14,7 +14,7 @@
 <MudCard Class="mb-4">
     <MudCardContent>
         <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
-            安装/启用/卸载模块后通常需要重启服务才能生效（避免运行中热插拔导致系统不稳定）。
+            上传/启用/卸载模块后通常需要重启服务才能生效（避免运行中热插拔导致系统不稳定）。
         </MudAlert>
 
         <MudStack Spacing="2" Class="mt-3">
@@ -35,11 +35,11 @@
                     @if (installing)
                     {
                         <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                        <span>安装中...</span>
+                        <span>上传中...</span>
                     }
                     else
                     {
-                        <span>安装</span>
+                        <span>上传</span>
                     }
                 </MudButton>
             </MudStack>
@@ -188,17 +188,17 @@
             var result = await ModuleInstaller.InstallAsync(stream, selectedFile.Name, enableAfterInstall: false);
             if (!result.Success)
             {
-                Snackbar.Add($"安装失败：{result.Message}", Severity.Error);
+                Snackbar.Add($"上传失败：{result.Message}", Severity.Error);
                 return;
             }
 
-            Snackbar.Add($"已安装：{result.ModuleId} {result.Version}（请启用后重启服务生效）", Severity.Success);
+            Snackbar.Add($"上传成功：{result.ModuleId} {result.Version}（请启用后重启服务生效）", Severity.Success);
             selectedFile = null;
             await Reload();
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"安装异常：{ex.Message}", Severity.Error);
+            Snackbar.Add($"上传异常：{ex.Message}", Severity.Error);
         }
         finally
         {
