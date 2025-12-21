@@ -196,7 +196,7 @@ dotnet run --project src/TelegramPanel.Web
 内置扩展只是示例（可按需启用/停用，也可自行开发/上传模块）：
 
 - **外部 API：踢人/封禁**：`POST /api/kick`（配置入口：面板左侧菜单「API 管理」）
-- **示例可导入模块：批量订阅/加群**：源码 `src/TelegramPanel.Modules.UserJoinSubscribe/`，打包 `powershell tools/package-module.ps1`，上传 `artifacts/modules/sample.user-join-subscribe-*.tpm`
+- **模块打包脚本（可选）**：`powershell tools/package-module.ps1 -Project <csproj> -Manifest <manifest.json>`，产物默认输出到 `artifacts/modules/`
 
 更多说明见：`docs/modules.md`（模块目录结构、manifest、任务/API/UI 扩展点）。
 

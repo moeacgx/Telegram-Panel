@@ -1,9 +1,9 @@
 param(
-    [Parameter(Mandatory = $false)]
-    [string]$Project = "src/TelegramPanel.Modules.UserJoinSubscribe/TelegramPanel.Modules.UserJoinSubscribe.csproj",
+    [Parameter(Mandatory = $true)]
+    [string]$Project,
 
-    [Parameter(Mandatory = $false)]
-    [string]$Manifest = "src/TelegramPanel.Modules.UserJoinSubscribe/manifest.json",
+    [Parameter(Mandatory = $true)]
+    [string]$Manifest,
 
     [Parameter(Mandatory = $false)]
     [string]$OutDir = "artifacts/modules"

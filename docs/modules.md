@@ -74,14 +74,15 @@ modules/
 
 安装流程会先解压到 `staging/` 并做基础校验，然后移动到 `installed/<id>/<version>/`，并将原包存档到 `packages/<id>/<version>.tpm` 便于留档与回滚。
 
-## 示例：批量订阅/加群模块（可导入）
+## 模块打包（可选）
 
-仓库内提供了一个可导入的示例模块源码：`src/TelegramPanel.Modules.UserJoinSubscribe/`（任务类型：`user_join_subscribe`）。
+仓库内提供了一个基于 Docker 的打包脚本（无需本机安装 `dotnet`），用于把任意模块项目打包为可上传的 `.tpm`：
 
-在没有本机 `dotnet` 的情况下，可用 Docker 一键打包：
+```powershell
+powershell tools/package-module.ps1 -Project "src/YourModule/YourModule.csproj" -Manifest "src/YourModule/manifest.json"
+```
 
-- `powershell tools/package-module.ps1`
-- 产物输出：`artifacts/modules/sample.user-join-subscribe-*.tpm`
+产物默认输出到：`artifacts/modules/<moduleId>-<version>.tpm`
 
 ## manifest.json（示例）
 
