@@ -7,6 +7,7 @@
 @inject IGroupService GroupService
 @inject TelegramPanel.Web.Services.DataSyncService DataSync
 @inject ISnackbar Snackbar
+@using TelegramPanel.Data.Entities
 
 <PageTitle>Telegram Panel - 仪表盘</PageTitle>
 
@@ -150,8 +151,8 @@
 
         _accountCount = accounts.Count;
         _onlineAccountCount = activeAccounts.Count;
-        _limitedAccountCount = 0;
-        _bannedAccountCount = 0;
+        _bannedAccountCount = accounts.Count(IsBannedAccount);
+        _limitedAccountCount = accounts.Count(a => !IsBannedAccount(a) && IsLimitedAccount(a));
 
         _channelCount = await ChannelManagement.GetTotalChannelCountAsync();
         _groupCount = await GroupManagement.GetTotalGroupCountAsync();
@@ -171,6 +172,33 @@
                 CreatedAt: t.CreatedAt
             ))
             .ToList();
+    }
+
+    private static bool IsLimitedAccount(Account account)
+    {
+        var summary = (account.TelegramStatusSummary ?? string.Empty).Trim();
+        if (summary.Length == 0)
+            return false;
+
+        return summary.Contains("受限", StringComparison.OrdinalIgnoreCase)
+               || summary.Contains("冻结", StringComparison.OrdinalIgnoreCase)
+               || summary.Contains("探测失败", StringComparison.OrdinalIgnoreCase)
+               || summary.Contains("Restricted", StringComparison.OrdinalIgnoreCase)
+               || summary.Contains("FROZEN_METHOD_INVALID", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsBannedAccount(Account account)
+    {
+        var summary = (account.TelegramStatusSummary ?? string.Empty).Trim();
+        if (summary.Length == 0)
+            return false;
+
+        return summary.Contains("封禁", StringComparison.OrdinalIgnoreCase)
+               || summary.Contains("停用", StringComparison.OrdinalIgnoreCase)
+               || summary.Contains("注销", StringComparison.OrdinalIgnoreCase)
+               || summary.Contains("被删除", StringComparison.OrdinalIgnoreCase)
+               || summary.Contains("PHONE_NUMBER_BANNED", StringComparison.OrdinalIgnoreCase)
+               || summary.Contains("USER_DEACTIVATED_BAN", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task SyncAllAccounts()
