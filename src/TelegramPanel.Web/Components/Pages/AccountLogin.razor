@@ -354,6 +354,7 @@
                 existingAccount.ApiId = telegramApiId;
                 existingAccount.ApiHash = telegramApiHash;
                 existingAccount.LastSyncAt = DateTime.UtcNow;
+                existingAccount.LastLoginAt = DateTime.UtcNow;
                 await AccountManagement.UpdateAccountAsync(existingAccount);
 
                 Snackbar.Add("账号信息已更新", Severity.Success);
@@ -372,7 +373,8 @@
                     ApiHash = telegramApiHash,
                     IsActive = true,
                     CreatedAt = DateTime.UtcNow,
-                    LastSyncAt = DateTime.UtcNow
+                    LastSyncAt = DateTime.UtcNow,
+                    LastLoginAt = DateTime.UtcNow
                 };
 
                 await AccountManagement.CreateAccountAsync(account);
