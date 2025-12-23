@@ -1,6 +1,7 @@
 @page "/tasks"
 @inject BatchTaskManagementService TaskManagement
 @inject TelegramPanel.Web.Modules.ModuleContributionRegistry Contributions
+@inject PanelTimeZoneService TimeZone
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @using TelegramPanel.Data.Entities
@@ -63,11 +64,11 @@
                     <MudProgressLinear Value="@GetProgress(context)" Color="@GetProgressColor(context.Status)" />
                     <MudText Typo="Typo.caption">@context.Completed / @context.Total (@context.Failed 失败)</MudText>
                 </MudTd>
-                <MudTd DataLabel="创建时间">@context.CreatedAt.ToString("yyyy-MM-dd HH:mm")</MudTd>
+                <MudTd DataLabel="创建时间"><PanelTime Value="context.CreatedAt" /></MudTd>
                 <MudTd DataLabel="完成时间">
                     @if (context.CompletedAt.HasValue)
                     {
-                        @context.CompletedAt.Value.ToString("yyyy-MM-dd HH:mm")
+                        <PanelTime Value="context.CompletedAt.Value" />
                     }
                     else
                     {
@@ -264,18 +265,19 @@
 
     private void ShowTaskDetails(BatchTask task)
     {
+        var createdAt = TimeZone.Format(task.CreatedAt, "yyyy-MM-dd HH:mm");
         var details = $"任务类型: {GetTaskTypeName(task.TaskType)}\n" +
                      $"状态: {GetStatusName(task.Status)}\n" +
                      $"总数: {task.Total}\n" +
                      $"已完成: {task.Completed}\n" +
                      $"失败: {task.Failed}\n" +
-                     $"创建时间: {task.CreatedAt:yyyy-MM-dd HH:mm}\n";
+                     $"创建时间: {createdAt}\n";
 
         if (task.StartedAt.HasValue)
-            details += $"开始时间: {task.StartedAt.Value:yyyy-MM-dd HH:mm}\n";
+            details += $"开始时间: {TimeZone.Format(task.StartedAt.Value, "yyyy-MM-dd HH:mm")}\n";
 
         if (task.CompletedAt.HasValue)
-            details += $"完成时间: {task.CompletedAt.Value:yyyy-MM-dd HH:mm}\n";
+            details += $"完成时间: {TimeZone.Format(task.CompletedAt.Value, "yyyy-MM-dd HH:mm")}\n";
 
         if (!string.IsNullOrEmpty(task.Config))
             details += $"\n配置信息:\n{task.Config}";

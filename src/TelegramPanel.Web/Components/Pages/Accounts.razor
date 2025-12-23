@@ -3,6 +3,7 @@
 @inject AccountCategoryManagementService CategoryManagement
 @inject AccountTelegramToolsService AccountTelegramTools
 @inject TelegramPanel.Core.Services.AccountRiskService RiskService
+@inject PanelTimeZoneService TimeZone
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject NavigationManager Navigation
@@ -122,7 +123,7 @@
                         <MudChip T="string" Size="Size.Small" Color="Color.Default">未检测</MudChip>
                     }
                 </MudTd>
-                <MudTd DataLabel="最后数据同步">@context.LastSyncAt.ToString("yyyy-MM-dd HH:mm")</MudTd>
+                <MudTd DataLabel="最后数据同步"><PanelTime Value="context.LastSyncAt" /></MudTd>
                 <MudTd DataLabel="操作">
                     <MudIconButton Icon="@Icons.Material.Filled.Info" Size="Size.Small" Color="Color.Info"
                                    OnClick="@(() => ShowDetails(context))" Title="查看详情" />
@@ -247,7 +248,9 @@
     private async Task ShowDetails(Account account)
     {
         var (channels, groups) = await AccountManagement.GetAccountStatisticsAsync(account.Id);
-        var message = $"账号详情：\n手机号：{account.Phone}\n用户名：{account.Username ?? "无"}\n用户ID：{account.UserId}\n分类：{account.Category?.Name ?? "未分类"}\n创建的频道：{channels} 个\n创建的群组：{groups} 个\n创建时间：{account.CreatedAt:yyyy-MM-dd HH:mm}\n最后数据同步：{account.LastSyncAt:yyyy-MM-dd HH:mm}\nSession路径：{account.SessionPath}";
+        var createdAt = TimeZone.Format(account.CreatedAt, "yyyy-MM-dd HH:mm");
+        var lastSyncAt = TimeZone.Format(account.LastSyncAt, "yyyy-MM-dd HH:mm");
+        var message = $"账号详情：\n手机号：{account.Phone}\n用户名：{account.Username ?? "无"}\n用户ID：{account.UserId}\n分类：{account.Category?.Name ?? "未分类"}\n创建的频道：{channels} 个\n创建的群组：{groups} 个\n创建时间：{createdAt}\n最后数据同步：{lastSyncAt}\nSession路径：{account.SessionPath}";
         await DialogService.ShowMessageBox("账号详情", message, "关闭");
     }
 
@@ -459,10 +462,11 @@
         await Task.CompletedTask;
     }
 
-    private static string BuildTelegramStatusTitle(TelegramAccountStatusResult s)
+    private string BuildTelegramStatusTitle(TelegramAccountStatusResult s)
     {
         var details = string.IsNullOrWhiteSpace(s.Details) ? s.Summary : s.Details;
-        return $"{details}（检测时间：{s.CheckedAtUtc:yyyy-MM-dd HH:mm}）";
+        var checkedAt = TimeZone.Format(s.CheckedAtUtc, "yyyy-MM-dd HH:mm");
+        return $"{details}（检测时间：{checkedAt}）";
     }
 
     private async Task RefreshTelegramStatus(Account account)

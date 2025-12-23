@@ -126,7 +126,7 @@
                         <span>-</span>
                     }
                 </MudTd>
-                <MudTd DataLabel="最后同步">@context.SyncedAt.ToString("yyyy-MM-dd HH:mm")</MudTd>
+                <MudTd DataLabel="最后同步"><PanelTime Value="context.SyncedAt" /></MudTd>
                 <MudTd DataLabel="操作">
                     <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small">
                         <MudMenuItem Icon="@Icons.Material.Filled.Info" OnClick="@(async () => await ShowDetails(context))">查看详情</MudMenuItem>

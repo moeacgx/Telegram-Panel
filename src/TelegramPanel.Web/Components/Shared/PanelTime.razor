@@ -1,0 +1,13 @@
+@inject TelegramPanel.Web.Services.PanelTimeZoneService TimeZone
+
+<span>@Text</span>
+
+@code
+{
+    [Parameter] public DateTime? Value { get; set; }
+    [Parameter] public string Format { get; set; } = "yyyy-MM-dd HH:mm";
+    [Parameter] public string EmptyText { get; set; } = "-";
+
+    private string Text => TimeZone.Format(Value, Format, EmptyText);
+}
+

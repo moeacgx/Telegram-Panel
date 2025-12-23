@@ -30,8 +30,8 @@
                     </MudItem>
                     <MudItem xs="12" md="6">
                         <MudText Typo="Typo.body2"><strong>创建者：</strong>@creatorDisplay</MudText>
-                        <MudText Typo="Typo.body2"><strong>创建时间：</strong>@(group.CreatedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "（未知）")</MudText>
-                        <MudText Typo="Typo.body2"><strong>最后同步：</strong>@group.SyncedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText>
+                        <MudText Typo="Typo.body2"><strong>创建时间：</strong><PanelTime Value="group.CreatedAt" Format="yyyy-MM-dd HH:mm:ss" EmptyText="（未知）" /></MudText>
+                        <MudText Typo="Typo.body2"><strong>最后同步：</strong><PanelTime Value="group.SyncedAt" Format="yyyy-MM-dd HH:mm:ss" /></MudText>
                     </MudItem>
                 </MudGrid>
 
@@ -180,4 +180,3 @@
         MudDialog.Close();
     }
 }
-

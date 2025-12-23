@@ -10,6 +10,7 @@
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject IWebHostEnvironment Environment
+@inject PanelTimeZoneService TimeZone
 @using TelegramPanel.Web.Services
 
 <PageTitle>系统设置 - Telegram Panel</PageTitle>
@@ -61,6 +62,34 @@
                 <MudButton Variant="Variant.Filled" Color="Color.Primary"
                            OnClick="@(async (MouseEventArgs _) => await SaveBatchConfig())">
                     保存配置
+                </MudButton>
+            </MudCardActions>
+        </MudCard>
+
+        <MudCard Class="mb-4">
+            <MudCardHeader>
+                <MudText Typo="Typo.h6">本地化</MudText>
+            </MudCardHeader>
+            <MudCardContent>
+                <MudSelect @bind-Value="timeZoneId" Label="时区（用于面板显示）" Variant="Variant.Outlined" Dense="true">
+                    @foreach (var item in KnownTimeZones)
+                    {
+                        <MudSelectItem Value="@item.Id">@item.Label</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudText Typo="Typo.caption" Class="mt-2 mud-text-secondary">
+                    当前生效：@EffectiveTimeZoneHint
+                </MudText>
+                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mt-3">
+                    <MudText Typo="Typo.body2">
+                        本项目数据库中的时间统一按 UTC 存储；该设置仅影响面板显示的时区转换。
+                    </MudText>
+                </MudAlert>
+            </MudCardContent>
+            <MudCardActions>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           OnClick="@(async (MouseEventArgs _) => await SaveTimeZoneConfig())">
+                    保存时区
                 </MudButton>
             </MudCardActions>
         </MudCard>
@@ -150,6 +179,28 @@
     private string logLevel = "Information";
     private int logRetentionDays = 30;
     private bool syncing = false;
+    private string timeZoneId = "";
+
+    private sealed record TimeZoneChoice(string Id, string Label);
+
+    private static readonly IReadOnlyList<TimeZoneChoice> KnownTimeZones = new List<TimeZoneChoice>
+    {
+        new("Asia/Shanghai", "北京时间（Asia/Shanghai）"),
+        new("UTC", "UTC"),
+        new("China Standard Time", "北京时间（Windows: China Standard Time）")
+    };
+
+    private string EffectiveTimeZoneHint
+    {
+        get
+        {
+            var tz = TimeZone.Current;
+            var sign = tz.BaseUtcOffset >= TimeSpan.Zero ? "+" : "-";
+            var offset = tz.BaseUtcOffset.Duration().ToString(@"hh\:mm");
+            var now = TimeZone.Format(DateTime.UtcNow, "yyyy-MM-dd HH:mm:ss");
+            return $"{tz.Id}（UTC{sign}{offset}），现在：{now}";
+        }
+    }
 
     private string LocalConfigPath => LocalConfigFile.ResolvePath(Configuration, Environment);
     private bool LocalConfigExists => System.IO.File.Exists(LocalConfigPath);
@@ -161,6 +212,7 @@
         apiHash = Configuration["Telegram:ApiHash"] ?? "";
         autoSync = Configuration.GetValue("Sync:AutoSyncEnabled", false);
         syncInterval = Configuration.GetValue("Sync:IntervalHours", 6);
+        timeZoneId = Configuration["System:TimeZoneId"] ?? "";
     }
 
     private async Task SaveApiConfig()
@@ -226,6 +278,25 @@
             await SaveLocalConfigAsync(root);
 
             Snackbar.Add("同步设置已保存（重启/自动重载后生效）", Severity.Success);
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"保存失败：{ex.Message}（路径：{LocalConfigPath}）", Severity.Error);
+        }
+    }
+
+    private async Task SaveTimeZoneConfig()
+    {
+        try
+        {
+            var id = (timeZoneId ?? string.Empty).Trim();
+            var root = await LoadOrCreateLocalConfigAsync();
+            var system = EnsureObject(root, "System");
+            system["TimeZoneId"] = id;
+            await SaveLocalConfigAsync(root);
+
+            Snackbar.Add("时区设置已保存（配置热重载后生效）", Severity.Success);
             StateHasChanged();
         }
         catch (Exception ex)

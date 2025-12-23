@@ -29,7 +29,7 @@
                     </MudItem>
                     <MudItem xs="12" md="6">
                         <MudText Typo="Typo.body2"><strong>机器人：</strong>@(bot == null ? $"Bot {BotId}" : bot.Name)</MudText>
-                        <MudText Typo="Typo.body2"><strong>最后同步：</strong>@(dbChannel?.SyncedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "-")</MudText>
+                        <MudText Typo="Typo.body2"><strong>最后同步：</strong><PanelTime Value="dbChannel?.SyncedAt" Format="yyyy-MM-dd HH:mm:ss" /></MudText>
                         <MudText Typo="Typo.body2"><strong>分类：</strong>@(dbChannel?.Category?.Name ?? "未分类")</MudText>
                     </MudItem>
                 </MudGrid>
@@ -199,4 +199,3 @@
         MudDialog.Close();
     }
 }
-

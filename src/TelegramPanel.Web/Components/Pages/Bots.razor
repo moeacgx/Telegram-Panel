@@ -51,7 +51,7 @@
                         <MudTd DataLabel="用户名">@(!string.IsNullOrWhiteSpace(context.Username) ? $"@{context.Username}" : "-")</MudTd>
                         <MudTd DataLabel="频道数">@context.Channels.Count(x => x.IsBroadcast)</MudTd>
                         <MudTd DataLabel="分类数">@context.Categories.Count</MudTd>
-                        <MudTd DataLabel="最后同步">@((context.LastSyncAt.HasValue ? context.LastSyncAt.Value.ToString("yyyy-MM-dd HH:mm") : "-"))</MudTd>
+                        <MudTd DataLabel="最后同步"><PanelTime Value="context.LastSyncAt" /></MudTd>
                         <MudTd DataLabel="状态">
                             <MudChip T="string" Size="Size.Small" Color="@(context.IsActive ? Color.Success : Color.Default)">
                                 @(context.IsActive ? "启用" : "停用")

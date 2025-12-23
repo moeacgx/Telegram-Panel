@@ -2,6 +2,7 @@
 @inject AccountTelegramToolsService AccountTelegramTools
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject PanelTimeZoneService TimeZone
 
 <MudDialog>
     <DialogContent>
@@ -60,7 +61,7 @@
                             <MudText Typo="Typo.caption" Color="Color.Secondary">@($"{context.Country} {context.Region}".Trim())</MudText>
                         </MudTd>
                         <MudTd DataLabel="最近活跃">
-                            <MudText Typo="Typo.body2">@(context.LastActiveAtUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "-")</MudText>
+                            <MudText Typo="Typo.body2"><PanelTime Value="context.LastActiveAtUtc" Format="yyyy-MM-dd HH:mm:ss" /></MudText>
                         </MudTd>
                         <MudTd DataLabel="操作">
                             <MudButton Variant="Variant.Text" Color="Color.Error" Disabled="@(context.Current || loading)"
@@ -118,9 +119,10 @@
             return;
         }
 
+        var lastActiveAt = TimeZone.Format(auth.LastActiveAtUtc, "yyyy-MM-dd HH:mm:ss");
         bool? result = await DialogService.ShowMessageBox(
             "确认踢出",
-            $"确定要踢出该设备登录吗？\n{auth.Title}\nIP：{auth.Ip}\n最近活跃：{auth.LastActiveAtUtc?.ToLocalTime():yyyy-MM-dd HH:mm:ss}",
+            $"确定要踢出该设备登录吗？\n{auth.Title}\nIP：{auth.Ip}\n最近活跃：{lastActiveAt}",
             yesText: "踢出", cancelText: "取消");
 
         if (result != true)
@@ -189,4 +191,3 @@
         MudDialog.Close();
     }
 }
-

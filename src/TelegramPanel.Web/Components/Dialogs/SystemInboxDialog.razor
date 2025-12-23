@@ -18,7 +18,7 @@
                 </MudButton>
                 @if (lastLoadedAtUtc.HasValue)
                 {
-                    <MudText Typo="Typo.caption" Color="Color.Default">最后刷新：@lastLoadedAtUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Default">最后刷新：<PanelTime Value="lastLoadedAtUtc" Format="yyyy-MM-dd HH:mm:ss" /></MudText>
                 }
             </MudStack>
 
@@ -36,7 +36,7 @@
                     @foreach (var m in messages)
                     {
                         <MudListItem T="string">
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">@((m.DateUtc ?? DateTime.MinValue).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"))</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary"><PanelTime Value="m.DateUtc" Format="yyyy-MM-dd HH:mm:ss" /></MudText>
                             <MudText Typo="Typo.body2" Style="white-space: pre-wrap;">@m.Text</MudText>
                         </MudListItem>
                     }

@@ -29,8 +29,8 @@
                     </MudItem>
                     <MudItem xs="12" md="6">
                         <MudText Typo="Typo.body2"><strong>创建者：</strong>@creatorDisplay</MudText>
-                        <MudText Typo="Typo.body2"><strong>创建时间：</strong>@(channel.CreatedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "（未知）")</MudText>
-                        <MudText Typo="Typo.body2"><strong>最后同步：</strong>@channel.SyncedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</MudText>
+                        <MudText Typo="Typo.body2"><strong>创建时间：</strong><PanelTime Value="channel.CreatedAt" Format="yyyy-MM-dd HH:mm:ss" EmptyText="（未知）" /></MudText>
+                        <MudText Typo="Typo.body2"><strong>最后同步：</strong><PanelTime Value="channel.SyncedAt" Format="yyyy-MM-dd HH:mm:ss" /></MudText>
                     </MudItem>
                 </MudGrid>
 
