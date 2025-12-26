@@ -14,71 +14,85 @@
 
 <MudCard>
     <MudCardContent>
-        <MudTable Items="@filtered" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@loading"
-                  MultiSelection="true" @bind-SelectedItems="selected">
+        <MudTable ServerData="LoadChannelsServerData" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@loading"
+                  MultiSelection="true" @bind-SelectedItems="selected" @ref="_table">
             <ToolBarContent>
-                <MudSelect T="int" Value="@selectedBotId" ValueChanged="@(async (int id) => await OnSelectedBotChanged(id))" Label="选择机器人"
-                           Variant="Variant.Outlined" Dense="true" Class="mr-2" Style="min-width: 260px;">
-                    <MudSelectItem Value="0">-- 请选择机器人 --</MudSelectItem>
-                    @foreach (var b in bots)
-                    {
-                        <MudSelectItem Value="@b.Id">@b.Name</MudSelectItem>
-                    }
-                </MudSelect>
+                <MudStack Spacing="1" Style="width: 100%;">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Style="flex-wrap: wrap;">
+                        <MudSelect T="int" Value="@selectedBotId" ValueChanged="@(async (int id) => await OnSelectedBotChanged(id))" Label="选择机器人"
+                                   Variant="Variant.Outlined" Dense="true" Style="min-width: 260px;">
+                            <MudSelectItem Value="0">-- 请选择机器人 --</MudSelectItem>
+                            @foreach (var b in bots)
+                            {
+                                <MudSelectItem Value="@b.Id">@b.Name</MudSelectItem>
+                            }
+                        </MudSelect>
 
-                <MudText Typo="Typo.h6">
-                    频道 (@channels.Count)
-                </MudText>
+                        <MudText Typo="Typo.h6">
+                            频道 (@totalCount)
+                        </MudText>
 
-                <MudSpacer />
+                        @if (selected.Count > 0)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Info">已选 @selected.Count</MudChip>
+                        }
 
-                <MudSelect @bind-Value="filterCategoryId" Label="分类" Variant="Variant.Outlined" Dense="true" Style="min-width: 160px;"
-                           Disabled="@(selectedBotId <= 0)">
-                    <MudSelectItem Value="0">全部分类</MudSelectItem>
-                    <MudSelectItem Value="-1">未分类</MudSelectItem>
-                    @foreach (var c in categories)
-                    {
-                        <MudSelectItem Value="@c.Id">@c.Name</MudSelectItem>
-                    }
-                </MudSelect>
+                        <MudSpacer />
 
-                <MudIconButton Icon="@Icons.Material.Filled.Add" Color="Color.Primary" Size="Size.Small"
-                               Title="新建分类" OnClick="OpenCreateCategoryDialog"
-                               Disabled="@(selectedBotId <= 0)" Class="mr-2" />
+                        <MudSelect @bind-Value="filterCategoryId" @bind-Value:after="OnFiltersChanged" Label="分类" Variant="Variant.Outlined" Dense="true"
+                                   Style="min-width: 160px;" Disabled="@(selectedBotId <= 0)">
+                            <MudSelectItem Value="0">全部分类</MudSelectItem>
+                            <MudSelectItem Value="-1">未分类</MudSelectItem>
+                            @foreach (var c in categories)
+                            {
+                                <MudSelectItem Value="@c.Id">@c.Name</MudSelectItem>
+                            }
+                        </MudSelect>
 
-                <MudTextField @bind-Value="search" Placeholder="搜索频道..." Adornment="Adornment.Start"
-                              AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0"
-                              Immediate="true" Disabled="@(selectedBotId <= 0)" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Add" Color="Color.Primary" Size="Size.Small"
+                                       Title="新建分类" OnClick="OpenCreateCategoryDialog"
+                                       Disabled="@(selectedBotId <= 0)" />
 
-                <MudButton Variant="Variant.Outlined" Color="Color.Info" StartIcon="@Icons.Material.Filled.Sync" Class="ml-2"
-                           Disabled="@(loading || selectedBotId <= 0)" OnClick="Sync">
-                    同步
-                </MudButton>
+                        <MudTextField @bind-Value="search" Placeholder="搜索频道..." Adornment="Adornment.Start"
+                                      AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0"
+                                      Immediate="true" Disabled="@(selectedBotId <= 0)" @bind-Value:after="OnSearchChanged" />
 
-                <MudButton Variant="Variant.Outlined" Color="Color.Success" StartIcon="@Icons.Material.Filled.Link" Class="ml-2"
-                           Disabled="@(loading || selectedBotId <= 0 || selected.Count == 0)" OnClick="ExportInvites">
-                    导出邀请（已选）
-                </MudButton>
+                        <MudIconButton Icon="@(_actionsExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                       Color="Color.Default"
+                                       Title="@(_actionsExpanded ? "收起操作" : "展开操作")"
+                                       Disabled="@(selectedBotId <= 0)"
+                                       OnClick="@ToggleActions" />
+                    </MudStack>
 
-                <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.AdminPanelSettings" Class="ml-2"
-                           Disabled="@(loading || selectedBotId <= 0 || selected.Count == 0)" OnClick="OpenSetAdmins">
-                    设置管理员（已选）
-                </MudButton>
+                    <MudCollapse Expanded="@_actionsExpanded">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Style="flex-wrap: wrap; margin-top: 6px;">
+                            <MudButton Variant="Variant.Outlined" Color="Color.Info" StartIcon="@Icons.Material.Filled.Sync"
+                                       Disabled="@(loading || selectedBotId <= 0)" OnClick="Sync" Size="Size.Small">
+                                同步
+                            </MudButton>
 
-                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.Category" Class="ml-2"
-                           Disabled="@(loading || selectedBotId <= 0 || selected.Count == 0)" OnClick="OpenBatchSetCategory">
-                    批量设置分类（@selected.Count）
-                </MudButton>
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Refresh"
+                                       Disabled="@(loading || selectedBotId <= 0)" OnClick="ReloadTable" Size="Size.Small">
+                                刷新
+                            </MudButton>
 
-                <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.PersonRemove" Class="ml-2"
-                           Disabled="@(loading || selectedBotId <= 0 || selected.Count == 0)" OnClick="OpenBanMember">
-                    踢出用户（@selected.Count）
-                </MudButton>
-
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Refresh"
-                           Disabled="@(loading || selectedBotId <= 0)" OnClick="LoadBotData" Class="ml-2">
-                    刷新
-                </MudButton>
+                            <MudMenu Dense="true" Disabled="@(loading || selectedBotId <= 0)">
+                                <ActivatorContent>
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Default" StartIcon="@Icons.Material.Filled.MoreHoriz"
+                                               Disabled="@(loading || selectedBotId <= 0)" Size="Size.Small">
+                                        批量操作
+                                    </MudButton>
+                                </ActivatorContent>
+                                <ChildContent>
+                                    <MudMenuItem Disabled="@(selected.Count == 0)" OnClick="ExportInvites">导出邀请（已选）</MudMenuItem>
+                                    <MudMenuItem Disabled="@(selected.Count == 0)" OnClick="OpenSetAdmins">批量设置管理员（已选）</MudMenuItem>
+                                    <MudMenuItem Disabled="@(selected.Count == 0)" OnClick="OpenBatchSetCategory">批量设置分类（已选）</MudMenuItem>
+                                    <MudMenuItem Disabled="@(selected.Count == 0)" OnClick="OpenBanMember">踢出用户（已选）</MudMenuItem>
+                                </ChildContent>
+                            </MudMenu>
+                        </MudStack>
+                    </MudCollapse>
+                </MudStack>
             </ToolBarContent>
 
             <HeaderContent>
@@ -103,14 +117,14 @@
                     }
                 </MudTd>
                 <MudTd DataLabel="分类">
-                    <MudSelect T="int?" Value="@context.CategoryId" ValueChanged="@(async v => await SetCategoryAsync(context, v))"
-                               Dense="true" Variant="Variant.Outlined" Style="min-width: 160px;">
-                        <MudSelectItem Value="@(default(int?))">未分类</MudSelectItem>
-                        @foreach (var c in categories)
-                        {
-                            <MudSelectItem Value="@((int?)c.Id)">@c.Name</MudSelectItem>
-                        }
-                    </MudSelect>
+                    @if (context.Category != null)
+                    {
+                        <MudChip T="string" Size="Size.Small">@context.Category.Name</MudChip>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2" Color="Color.Default">未分类</MudText>
+                    }
                 </MudTd>
                 <MudTd DataLabel="最后同步"><PanelTime Value="context.SyncedAt" /></MudTd>
                 <MudTd DataLabel="操作">
@@ -132,6 +146,9 @@
                     <MudText>暂无频道</MudText>
                 }
             </NoRecordsContent>
+            <PagerContent>
+                <MudTablePager PageSizeOptions="new int[] { 20, 50, 100, 200 }" />
+            </PagerContent>
         </MudTable>
     </MudCardContent>
 </MudCard>
@@ -140,6 +157,7 @@
     [SupplyParameterFromQuery(Name = "botId")]
     public int? BotIdQuery { get; set; }
 
+    private MudTable<BotChannel>? _table;
     private List<Bot> bots = new();
     private Bot? selectedBot;
     private int selectedBotId = 0;
@@ -147,27 +165,14 @@
     private bool loading = true;
     private List<BotChannelCategory> categories = new();
     private List<BotChannel> channels = new();
+    private int totalCount;
 
     private HashSet<BotChannel> selected = new();
 
     private int filterCategoryId = 0;
     private string search = "";
-
-    private IEnumerable<BotChannel> filtered => selectedBotId <= 0
-        ? Enumerable.Empty<BotChannel>()
-        : channels.Where(c =>
-        {
-            if (filterCategoryId == -1 && c.CategoryId != null)
-                return false;
-            if (filterCategoryId > 0 && c.CategoryId != filterCategoryId)
-                return false;
-
-            if (string.IsNullOrWhiteSpace(search))
-                return true;
-
-            return c.Title.Contains(search, StringComparison.OrdinalIgnoreCase)
-                   || (c.Username?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false);
-        });
+    private bool _actionsExpanded = true;
+    private CancellationTokenSource? _searchDebounceCts;
 
     protected override async Task OnInitializedAsync()
     {
@@ -211,6 +216,7 @@
             selectedBot = null;
             categories.Clear();
             channels.Clear();
+            totalCount = 0;
             Navigation.NavigateTo("/bots/channels", replace: true);
             return;
         }
@@ -236,11 +242,7 @@
             }
 
             categories = (await BotManagement.GetCategoriesAsync(selectedBotId)).ToList();
-            channels = (await BotManagement.GetChannelsAsync(selectedBotId)).ToList();
-
-            // 清理已选
-            var ids = channels.Select(x => x.Id).ToHashSet();
-            selected = selected.Where(x => ids.Contains(x.Id)).ToHashSet();
+            await ReloadTable();
         }
         catch (Exception ex)
         {
@@ -249,6 +251,74 @@
         finally
         {
             loading = false;
+        }
+    }
+
+    private async Task<TableData<BotChannel>> LoadChannelsServerData(TableState state, CancellationToken cancellationToken)
+    {
+        loading = true;
+        try
+        {
+            if (selectedBotId <= 0)
+                return new TableData<BotChannel> { Items = Array.Empty<BotChannel>(), TotalItems = 0 };
+
+            var (items, total) = await BotManagement.QueryChannelsPagedAsync(
+                botId: selectedBotId,
+                categoryId: filterCategoryId == -1 ? -1 : (filterCategoryId > 0 ? filterCategoryId : null),
+                search: search,
+                pageIndex: state.Page,
+                pageSize: state.PageSize,
+                cancellationToken: cancellationToken);
+
+            channels = items.ToList();
+            totalCount = total;
+            selected.Clear();
+
+            return new TableData<BotChannel> { Items = channels, TotalItems = totalCount };
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"加载失败：{ex.Message}", Severity.Error);
+            return new TableData<BotChannel> { Items = Array.Empty<BotChannel>(), TotalItems = 0 };
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private void ToggleActions()
+    {
+        _actionsExpanded = !_actionsExpanded;
+    }
+
+    private async Task ReloadTable()
+    {
+        selected.Clear();
+        if (_table != null)
+            await _table.ReloadServerData();
+    }
+
+    private async Task OnFiltersChanged()
+    {
+        await ReloadTable();
+    }
+
+    private async Task OnSearchChanged()
+    {
+        _searchDebounceCts?.Cancel();
+        _searchDebounceCts?.Dispose();
+        _searchDebounceCts = new CancellationTokenSource();
+
+        var token = _searchDebounceCts.Token;
+        try
+        {
+            await Task.Delay(300, token);
+            await ReloadTable();
+        }
+        catch (OperationCanceledException)
+        {
+            // ignore
         }
     }
 
@@ -265,7 +335,8 @@
                 Snackbar.Add($"同步完成：应用更新 {result.AppliedUpdates} 条，清理失效 {result.RemovedStale} 个频道", Severity.Success);
             else
                 Snackbar.Add("同步完成：没有需要处理的更新或失效频道。提示：请先把 Bot 设为频道管理员，再点同步。", Severity.Info);
-            await LoadBotData();
+
+            await ReloadTable();
         }
         catch (Exception ex)
         {
@@ -294,20 +365,6 @@
         {
             // 重新加载分类列表
             await LoadBotData();
-        }
-    }
-
-    private async Task SetCategoryAsync(BotChannel channel, int? categoryId)
-    {
-        try
-        {
-            await BotManagement.SetChannelCategoryAsync(channel.Id, categoryId);
-            channel.CategoryId = categoryId;
-            Snackbar.Add("已保存分类", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"保存失败：{ex.Message}", Severity.Error);
         }
     }
 

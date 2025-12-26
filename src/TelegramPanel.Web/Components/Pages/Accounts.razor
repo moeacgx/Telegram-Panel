@@ -17,21 +17,25 @@
 
 <MudCard>
     <MudCardContent>
-        <MudTable Items="@filteredAccounts" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@loading"
-                  MultiSelection="true" @bind-SelectedItems="selectedAccounts">
+        <MudTable ServerData="LoadAccountsServerData" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@loading"
+                  MultiSelection="true" @bind-SelectedItems="selectedAccounts" @ref="_table">
             <ToolBarContent>
                 <MudStack Spacing="1">
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Style="flex-wrap: wrap;">
-                        <MudText Typo="Typo.h6">已导入账号 (@accounts.Count)</MudText>
+                        <MudText Typo="Typo.h6">已导入账号 (@totalCount)</MudText>
+                        @if (selectedAccounts.Count > 0)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Info">已选 @selectedAccounts.Count</MudChip>
+                        }
                         <MudSpacer />
                         <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Refresh"
-                                   Disabled="@loading" OnClick="LoadAccounts" Size="Size.Small">
+                                   Disabled="@loading" OnClick="ReloadTable" Size="Size.Small">
                             刷新
                         </MudButton>
                     </MudStack>
 
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Style="flex-wrap: wrap;">
-                        <MudSelect @bind-Value="filterCategoryId" Label="分类" Variant="Variant.Outlined" Dense="true" Class="mr-2" Style="min-width: 160px;">
+                        <MudSelect @bind-Value="filterCategoryId" @bind-Value:after="OnFiltersChanged" Label="分类" Variant="Variant.Outlined" Dense="true" Class="mr-2" Style="min-width: 160px;">
                             <MudSelectItem Value="0">全部分类</MudSelectItem>
                             @foreach (var c in categories)
                             {
@@ -40,10 +44,10 @@
                         </MudSelect>
                         <MudTextField @bind-Value="searchString" Placeholder="搜索账号..." Adornment="Adornment.Start"
                                       AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0"
-                                      Immediate="true" />
+                                      Immediate="true" @bind-Value:after="OnSearchChanged" />
 
                         <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@SelectionToggleIcon"
-                                   Disabled="@(loading || !filteredAccounts.Any())" OnClick="CycleSelectionToggle" Size="Size.Small">
+                                   Disabled="@(loading || accounts.Count == 0)" OnClick="CycleSelectionToggle" Size="Size.Small">
                             @SelectionToggleText
                         </MudButton>
 
@@ -63,13 +67,14 @@
                                 <MudMenuItem Disabled="@(selectedAccounts.Count == 0)" OnClick="OpenBatchJoinSubscribe">批量加群/订阅（已选）</MudMenuItem>
                                 <MudMenuItem Disabled="@(selectedAccounts.Count == 0)" OnClick="OpenBatchLeaveUnsubscribe">批量退群/退订（已选）</MudMenuItem>
                                 <MudMenuItem Disabled="@(selectedAccounts.Count == 0)" OnClick="OpenBatchChangeTwoFactorPassword">修改二级密码（已选）</MudMenuItem>
+                                <MudMenuItem Disabled="@(selectedAccounts.Count == 0)" OnClick="BatchKickAllOtherDevices">批量踢出所有其他设备（已选）</MudMenuItem>
                                 <MudMenuItem Disabled="@(selectedAccounts.Count == 0)" OnClick="OpenBatchSetAccountCategory">批量修改分类（已选）</MudMenuItem>
                                 <MudMenuItem Disabled="@(selectedAccounts.Count == 0)" OnClick="OpenBatchChangeNickname">批量改昵称（已选）</MudMenuItem>
                                 <MudMenuItem Disabled="@(selectedAccounts.Count == 0)" OnClick="OpenBatchChangeUsername">批量改用户名（已选）</MudMenuItem>
                                 <MudMenuItem Disabled="@(selectedAccounts.Count == 0)" OnClick="OpenBatchChangeBio">批量改Bio（已选）</MudMenuItem>
                                 <MudMenuItem Disabled="@(selectedAccounts.Count == 0)" OnClick="DeleteSelectedAccounts">删除已选</MudMenuItem>
                                 <MudMenuItem OnClick="ExportSelectedAccounts">导出已选</MudMenuItem>
-                                <MudMenuItem OnClick="ExportCurrentAccounts">导出当前列表</MudMenuItem>
+                                <MudMenuItem OnClick="ExportCurrentPageAccounts">导出当前页</MudMenuItem>
                             </ChildContent>
                         </MudMenu>
                     </MudStack>
@@ -158,39 +163,29 @@
             <LoadingContent>
                 <MudProgressCircular Indeterminate="true" />
             </LoadingContent>
+            <PagerContent>
+                <MudTablePager PageSizeOptions="new int[] { 20, 50, 100, 200 }" />
+            </PagerContent>
         </MudTable>
     </MudCardContent>
 </MudCard>
 
 @code {
+    private MudTable<Account>? _table;
     private List<Account> accounts = new();
     private List<AccountCategory> categories = new();
+    private int totalCount;
     private bool loading = true;
     private string searchString = "";
     private int filterCategoryId = 0;
     private readonly Dictionary<int, TelegramAccountStatusResult> telegramStatus = new();
     private HashSet<Account> selectedAccounts = new();
     private readonly CancellationTokenSource _pageCts = new();
-
-    private IEnumerable<Account> filteredAccounts =>
-        accounts.Where(a =>
-        {
-            if (filterCategoryId > 0 && a.CategoryId != filterCategoryId)
-                return false;
-
-            if (string.IsNullOrWhiteSpace(searchString))
-                return true;
-
-            return a.Phone.Contains(searchString, StringComparison.OrdinalIgnoreCase)
-                   || (a.Nickname?.Contains(searchString, StringComparison.OrdinalIgnoreCase) ?? false)
-                   || (a.Username?.Contains(searchString, StringComparison.OrdinalIgnoreCase) ?? false)
-                   || a.UserId.ToString().Contains(searchString);
-        });
+    private CancellationTokenSource? _searchDebounceCts;
 
     protected override async Task OnInitializedAsync()
     {
         await LoadCategories();
-        await LoadAccounts();
     }
 
     private async Task LoadCategories()
@@ -206,16 +201,23 @@
         }
     }
 
-    private async Task LoadAccounts()
+    private async Task<TableData<Account>> LoadAccountsServerData(TableState state, CancellationToken cancellationToken)
     {
         loading = true;
         try
         {
-            var accountList = await AccountManagement.GetAllAccountsAsync();
-            accounts = accountList.ToList();
+            var categoryId = filterCategoryId <= 0 ? (int?)null : filterCategoryId;
+            var (items, total) = await AccountManagement.QueryAccountsPagedAsync(
+                categoryId: categoryId,
+                search: searchString,
+                pageIndex: state.Page,
+                pageSize: state.PageSize,
+                cancellationToken: cancellationToken);
 
-            // 刷新账号列表后，从数据库重建“Telegram 状态”缓存（避免刷新页面后回到未检测）
-            telegramStatus.Clear();
+            accounts = items.ToList();
+            totalCount = total;
+
+            // 从数据库字段恢复“Telegram 状态”缓存（仅需要当前页）
             foreach (var a in accounts)
             {
                 if (!a.TelegramStatusCheckedAtUtc.HasValue)
@@ -230,19 +232,50 @@
                     CheckedAtUtc: a.TelegramStatusCheckedAtUtc.Value);
             }
 
-            var ids = new HashSet<int>(accounts.Select(a => a.Id));
-            await LoadCategories();
+            // 翻页/筛选时清空选择（与 WordPress 列表行为一致，避免跨页误操作）
+            selectedAccounts.Clear();
 
-            // 清理已选中但已不存在的账号
-            selectedAccounts = selectedAccounts.Where(a => ids.Contains(a.Id)).ToHashSet();
+            return new TableData<Account> { Items = accounts, TotalItems = totalCount };
         }
         catch (Exception ex)
         {
             Snackbar.Add($"加载失败：{ex.Message}", Severity.Error);
+            return new TableData<Account> { Items = Array.Empty<Account>(), TotalItems = 0 };
         }
         finally
         {
             loading = false;
+        }
+    }
+
+    private async Task ReloadTable()
+    {
+        selectedAccounts.Clear();
+        if (_table != null)
+            await _table.ReloadServerData();
+    }
+
+    private async Task OnFiltersChanged()
+    {
+        // 筛选改变时回到第一页更符合直觉，但 MudTable API 不同版本可能不同；这里仅触发刷新
+        await ReloadTable();
+    }
+
+    private async Task OnSearchChanged()
+    {
+        _searchDebounceCts?.Cancel();
+        _searchDebounceCts?.Dispose();
+        _searchDebounceCts = new CancellationTokenSource();
+
+        var token = _searchDebounceCts.Token;
+        try
+        {
+            await Task.Delay(300, token);
+            await ReloadTable();
+        }
+        catch (OperationCanceledException)
+        {
+            // ignore
         }
     }
 
@@ -256,7 +289,7 @@
         var dialog = DialogService.Show<TelegramPanel.Web.Components.Dialogs.AccountDetailsDialog>("账号详情", parameters, options)!;
         var result = await dialog.Result;
         if (result is { Canceled: false })
-            await LoadAccounts();
+            await ReloadTable();
     }
 
     private async Task OpenChangeTwoFactorPassword(Account account)
@@ -300,7 +333,7 @@
         var dialog = DialogService.Show<TelegramPanel.Web.Components.Dialogs.EditUserProfileDialog>("编辑用户资料", parameters, options)!;
         var result = await dialog.Result;
         if (result is { Canceled: false })
-            await LoadAccounts();
+            await ReloadTable();
     }
 
     private async Task OpenBatchChangeTwoFactorPassword()
@@ -356,20 +389,14 @@
         loading = true;
         try
         {
-            var changed = 0;
             foreach (var id in targets)
             {
-                var current = accounts.FirstOrDefault(a => a.Id == id);
-                if (current != null && current.CategoryId == categoryId)
-                    continue;
-
                 await AccountManagement.UpdateAccountCategoryAsync(id, categoryId);
-                changed++;
             }
 
-            await LoadAccounts();
-
-            Snackbar.Add($"分类已更新：{changed}/{targets.Count}", Severity.Success);
+            selectedAccounts.Clear();
+            await ReloadTable();
+            Snackbar.Add($"分类已更新：{targets.Count} 个账号", Severity.Success);
         }
         catch (Exception ex)
         {
@@ -401,7 +428,7 @@
         var dialog = DialogService.Show<TelegramPanel.Web.Components.Dialogs.BatchChangeNicknameDialog>("批量修改昵称", parameters, options)!;
         var result = await dialog.Result;
         if (result is { Canceled: false })
-            await LoadAccounts();
+            await ReloadTable();
     }
 
     private async Task OpenBatchChangeUsername()
@@ -424,7 +451,7 @@
         var dialog = DialogService.Show<TelegramPanel.Web.Components.Dialogs.BatchChangeUsernameDialog>("批量修改用户名", parameters, options)!;
         var result = await dialog.Result;
         if (result is { Canceled: false })
-            await LoadAccounts();
+            await ReloadTable();
     }
 
     private async Task OpenBatchChangeBio()
@@ -447,7 +474,7 @@
         var dialog = DialogService.Show<TelegramPanel.Web.Components.Dialogs.BatchChangeBioDialog>("批量修改 Bio", parameters, options)!;
         var result = await dialog.Result;
         if (result is { Canceled: false })
-            await LoadAccounts();
+            await ReloadTable();
     }
 
     private async Task OpenBatchJoinSubscribe()
@@ -571,7 +598,7 @@
             telegramStatus[account.Id] = result;
 
             // 资料刷新后重新加载（昵称/用户名/用户ID 可能更新）
-            await LoadAccounts();
+            await ReloadTable();
 
             Snackbar.Add($"账号 {account.DisplayPhone} 状态：{result.Summary}", result.Ok ? Severity.Success : Severity.Warning);
         }
@@ -603,7 +630,8 @@
                 cancelText: "普通刷新");
 
             var probe = probeResult == true;
-            var targets = filteredAccounts.ToList();
+            var categoryId = filterCategoryId <= 0 ? (int?)null : filterCategoryId;
+            var targets = (await AccountManagement.QueryAccountsAsync(categoryId, searchString, _pageCts.Token)).ToList();
 
             // 批量风控检查：深度探测是敏感操作
             if (probe && targets.Count > 0)
@@ -664,7 +692,7 @@
                 StateHasChanged();
             }
 
-            await LoadAccounts();
+            await ReloadTable();
             Snackbar.Add($"批量刷新完成：{targets.Count} 个账号", Severity.Success);
         }
         catch (Exception ex)
@@ -695,13 +723,13 @@
 
     private Task SelectAllFiltered()
     {
-        selectedAccounts = filteredAccounts.ToHashSet();
+        selectedAccounts = accounts.ToHashSet();
         return Task.CompletedTask;
     }
 
     private Task InvertSelection()
     {
-        var targets = filteredAccounts.ToList();
+        var targets = accounts.ToList();
         foreach (var a in targets)
         {
             if (selectedAccounts.Contains(a))
@@ -721,10 +749,10 @@
     private SelectionToggleMode _selectionToggleMode = SelectionToggleMode.SelectAll;
     private string SelectionToggleText => _selectionToggleMode switch
     {
-        SelectionToggleMode.SelectAll => "全选",
-        SelectionToggleMode.Invert => "反选",
+        SelectionToggleMode.SelectAll => "全选本页",
+        SelectionToggleMode.Invert => "反选本页",
         SelectionToggleMode.Clear => "清空选择",
-        _ => "全选"
+        _ => "全选本页"
     };
 
     private string SelectionToggleIcon => _selectionToggleMode switch
@@ -800,7 +828,7 @@
             }
 
             selectedAccounts.Clear();
-            await LoadAccounts();
+            await ReloadTable();
 
             if (failures.Count == 0)
             {
@@ -843,12 +871,12 @@
         Navigation.NavigateTo($"/downloads/accounts.zip?ids={qs}", forceLoad: true);
     }
 
-    private void ExportCurrentAccounts()
+    private void ExportCurrentPageAccounts()
     {
-        var ids = filteredAccounts.Select(a => a.Id).Distinct().ToList();
+        var ids = accounts.Select(a => a.Id).Distinct().ToList();
         if (ids.Count == 0)
         {
-            Snackbar.Add("当前列表没有账号可导出", Severity.Info);
+            Snackbar.Add("当前页没有账号可导出", Severity.Info);
             return;
         }
 
@@ -912,13 +940,75 @@
             try
             {
                 await AccountManagement.DeleteAccountAsync(account.Id);
-                accounts.Remove(account);
+                await ReloadTable();
                 Snackbar.Add("账号已删除", Severity.Success);
             }
             catch (Exception ex)
             {
                 Snackbar.Add($"删除失败：{ex.Message}", Severity.Error);
             }
+        }
+    }
+
+    private async Task BatchKickAllOtherDevices()
+    {
+        if (loading)
+            return;
+
+        var targets = selectedAccounts.ToList();
+        if (targets.Count == 0)
+        {
+            Snackbar.Add("请先选择账号", Severity.Info);
+            return;
+        }
+
+        bool? result = await DialogService.ShowMessageBox(
+            "确认踢出",
+            $"将对 {targets.Count} 个账号执行【踢出所有其他设备】（会保留面板当前会话）。是否继续？",
+            yesText: "继续", cancelText: "取消");
+
+        if (result != true)
+            return;
+
+        loading = true;
+        try
+        {
+            var success = 0;
+            var failures = new List<string>();
+
+            foreach (var a in targets)
+            {
+                try
+                {
+                    var ok = await AccountTelegramTools.KickAllOtherAuthorizationsAsync(a.Id);
+                    if (ok) success++;
+                    else failures.Add($"{a.DisplayPhone}：返回 false");
+                }
+                catch (Exception ex)
+                {
+                    failures.Add($"{a.DisplayPhone}：{ex.Message}");
+                }
+            }
+
+            selectedAccounts.Clear();
+
+            if (failures.Count == 0)
+            {
+                Snackbar.Add($"踢出完成：成功 {success}/{targets.Count}", Severity.Success);
+                return;
+            }
+
+            Snackbar.Add($"踢出完成：成功 {success}/{targets.Count}，失败 {failures.Count}", Severity.Warning);
+
+            var details = string.Join(Environment.NewLine, failures.Take(80));
+            if (failures.Count > 80)
+                details += Environment.NewLine + $"... 仅展示前 80 条（共 {failures.Count} 条）";
+
+            await DialogService.ShowMessageBox("失败明细（前 80 条）", details, "关闭");
+        }
+        finally
+        {
+            loading = false;
         }
     }
 }

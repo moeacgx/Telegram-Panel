@@ -1,5 +1,6 @@
 @page "/channels"
 @inject ChannelManagementService ChannelManagement
+@inject ChannelGroupManagementService ChannelGroupManagement
 @inject AccountManagementService AccountManagement
 @inject TelegramPanel.Web.Services.DataSyncService DataSync
 @inject IChannelService ChannelService
@@ -16,12 +17,12 @@
 
 <MudCard>
     <MudCardContent>
-        <MudTable Items="@channels" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@loading" Filter="FilterFunc"
-                  MultiSelection="true" @bind-SelectedItems="selectedChannels">
+        <MudTable ServerData="LoadChannelsServerData" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@loading"
+                  MultiSelection="true" @bind-SelectedItems="selectedChannels" @ref="_table">
             <ToolBarContent>
                 <MudStack Spacing="1">
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Style="flex-wrap: wrap;">
-                        <MudText Typo="Typo.h6">频道 (@channels.Count)</MudText>
+                        <MudText Typo="Typo.h6">频道 (@totalCount)</MudText>
                         @if (selectedChannels.Count > 0)
                         {
                             <MudChip T="string" Size="Size.Small" Color="Color.Info">已选 @selectedChannels.Count</MudChip>
@@ -29,18 +30,18 @@
                         <MudSpacer />
                         <MudTextField @bind-Value="searchString" Placeholder="搜索频道..." Adornment="Adornment.Start"
                                       AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0"
-                                      Immediate="true" />
+                                      Immediate="true" @bind-Value:after="OnSearchChanged" />
                     </MudStack>
 
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Style="flex-wrap: wrap;">
-                        <MudSelect @bind-Value="filterAccount" @bind-Value:after="LoadChannels" Label="筛选账号" Variant="Variant.Outlined" Dense="true" Class="mr-2" Style="min-width: 220px;">
+                        <MudSelect @bind-Value="filterAccount" @bind-Value:after="OnFiltersChanged" Label="筛选账号" Variant="Variant.Outlined" Dense="true" Class="mr-2" Style="min-width: 220px;">
                             <MudSelectItem Value="0">全部账号</MudSelectItem>
                             @foreach (var account in accounts)
                             {
                                 <MudSelectItem Value="@account.Id">@FormatAccountLabel(account)</MudSelectItem>
                             }
                         </MudSelect>
-                        <MudSelect @bind-Value="filterType" Label="频道类型" Variant="Variant.Outlined" Dense="true" Class="mr-2" Style="min-width: 120px;">
+                        <MudSelect @bind-Value="filterType" @bind-Value:after="OnFiltersChanged" Label="频道类型" Variant="Variant.Outlined" Dense="true" Class="mr-2" Style="min-width: 120px;">
                             <MudSelectItem Value='@("all")'>全部</MudSelectItem>
                             <MudSelectItem Value='@("public")'>公开</MudSelectItem>
                             <MudSelectItem Value='@("private")'>私密</MudSelectItem>
@@ -55,7 +56,7 @@
                         </MudButton>
 
                         <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@SelectionToggleIcon"
-                                   Disabled="@(loading || !GetFilteredChannels().Any())" OnClick="CycleSelectionToggle" Size="Size.Small">
+                                   Disabled="@(loading || channels.Count == 0)" OnClick="CycleSelectionToggle" Size="Size.Small">
                             @SelectionToggleText
                         </MudButton>
 
@@ -69,6 +70,7 @@
                             <ChildContent>
                                 <MudMenuItem Disabled="@(selectedChannels.Count == 0)" OnClick="OpenBatchInviteSelected">批量邀请（已选）</MudMenuItem>
                                 <MudMenuItem Disabled="@(selectedChannels.Count == 0)" OnClick="OpenBatchSetAdminsSelected">批量设置管理员（已选）</MudMenuItem>
+                                <MudMenuItem Disabled="@(selectedChannels.Count == 0)" OnClick="OpenBatchSetGroupSelected">批量修改分组（已选）</MudMenuItem>
                             </ChildContent>
                         </MudMenu>
                     </MudStack>
@@ -146,26 +148,33 @@
             <LoadingContent>
                 <MudProgressCircular Indeterminate="true" />
             </LoadingContent>
+            <PagerContent>
+                <MudTablePager PageSizeOptions="new int[] { 20, 50, 100, 200 }" />
+            </PagerContent>
         </MudTable>
     </MudCardContent>
 </MudCard>
 
 @code {
+    private MudTable<Channel>? _table;
     private List<Channel> channels = new();
     private List<Account> accounts = new();
+    private List<ChannelGroup> groups = new();
+    private int totalCount;
     private bool loading = true;
     private string searchString = "";
     private int filterAccount = 0;
     private string filterType = "all";
     private HashSet<Channel> selectedChannels = new();
+    private CancellationTokenSource? _searchDebounceCts;
 
     private SelectionToggleMode _selectionToggleMode = SelectionToggleMode.SelectAll;
     private string SelectionToggleText => _selectionToggleMode switch
     {
-        SelectionToggleMode.SelectAll => "全选",
-        SelectionToggleMode.Invert => "反选",
+        SelectionToggleMode.SelectAll => "全选本页",
+        SelectionToggleMode.Invert => "反选本页",
         SelectionToggleMode.Clear => "清空选择",
-        _ => "全选"
+        _ => "全选本页"
     };
 
     private string SelectionToggleIcon => _selectionToggleMode switch
@@ -179,7 +188,7 @@
     protected override async Task OnInitializedAsync()
     {
         await LoadAccounts();
-        await LoadChannels();
+        await LoadGroups();
     }
 
     private async Task LoadAccounts()
@@ -195,18 +204,42 @@
         }
     }
 
-    private async Task LoadChannels()
+    private async Task LoadGroups()
+    {
+        try
+        {
+            var list = await ChannelGroupManagement.GetAllGroupsAsync();
+            groups = list.ToList();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"加载分组失败：{ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task<TableData<Channel>> LoadChannelsServerData(TableState state, CancellationToken cancellationToken)
     {
         loading = true;
         try
         {
-            var channelList = await ChannelManagement.GetChannelsForViewAsync(filterAccount, includeNonCreator: false);
-            channels = channelList.ToList();
+            var (items, total) = await ChannelManagement.QueryChannelsForViewPagedAsync(
+                creatorAccountId: filterAccount,
+                filterType: filterType,
+                search: searchString,
+                pageIndex: state.Page,
+                pageSize: state.PageSize,
+                cancellationToken: cancellationToken);
+
+            channels = items.ToList();
+            totalCount = total;
             selectedChannels.Clear();
+
+            return new TableData<Channel> { Items = channels, TotalItems = totalCount };
         }
         catch (Exception ex)
         {
             Snackbar.Add($"加载失败：{ex.Message}", Severity.Error);
+            return new TableData<Channel> { Items = Array.Empty<Channel>(), TotalItems = 0 };
         }
         finally
         {
@@ -214,40 +247,22 @@
         }
     }
 
-    private bool FilterFunc(Channel channel)
+    private async Task ReloadTable()
     {
-        if (filterType == "public" && string.IsNullOrEmpty(channel.Username))
-            return false;
-
-        if (filterType == "private" && !string.IsNullOrEmpty(channel.Username))
-            return false;
-
-        if (string.IsNullOrWhiteSpace(searchString))
-            return true;
-
-        if (channel.Title.Contains(searchString, StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        if (channel.Username?.Contains(searchString, StringComparison.OrdinalIgnoreCase) == true)
-            return true;
-
-        return false;
-    }
-
-    private IReadOnlyList<Channel> GetFilteredChannels()
-    {
-        return channels.Where(FilterFunc).ToList();
+        selectedChannels.Clear();
+        if (_table != null)
+            await _table.ReloadServerData();
     }
 
     private Task SelectAllFiltered()
     {
-        selectedChannels = GetFilteredChannels().ToHashSet();
+        selectedChannels = channels.ToHashSet();
         return Task.CompletedTask;
     }
 
     private Task InvertSelection()
     {
-        var targets = GetFilteredChannels().ToList();
+        var targets = channels.ToList();
         foreach (var c in targets)
         {
             if (selectedChannels.Contains(c))
@@ -262,6 +277,29 @@
     {
         selectedChannels.Clear();
         return Task.CompletedTask;
+    }
+
+    private async Task OnFiltersChanged()
+    {
+        await ReloadTable();
+    }
+
+    private async Task OnSearchChanged()
+    {
+        _searchDebounceCts?.Cancel();
+        _searchDebounceCts?.Dispose();
+        _searchDebounceCts = new CancellationTokenSource();
+
+        var token = _searchDebounceCts.Token;
+        try
+        {
+            await Task.Delay(300, token);
+            await ReloadTable();
+        }
+        catch (OperationCanceledException)
+        {
+            // ignore
+        }
     }
 
     private async Task CycleSelectionToggle()
@@ -401,7 +439,7 @@
 
             Snackbar.Add($"同步完成：{summary.TotalChannelsSynced} 个频道，{summary.TotalGroupsSynced} 个群组", summary.AccountFailures.Count == 0 ? Severity.Success : Severity.Warning);
 
-            await LoadChannels();
+            await ReloadTable();
         }
         catch (Exception ex)
         {
@@ -428,7 +466,7 @@
 
             Snackbar.Add($"同步完成：{summary.TotalChannelsSynced} 个频道，{summary.TotalGroupsSynced} 个群组", summary.AccountFailures.Count == 0 ? Severity.Success : Severity.Warning);
 
-            await LoadChannels();
+            await ReloadTable();
         }
         catch (Exception ex)
         {
@@ -455,7 +493,53 @@
         var dialog = DialogService.Show<ChannelEditDialog>("编辑频道", parameters, options);
         var result = await dialog.Result;
         if (!result.Canceled)
-            await LoadChannels();
+            await ReloadTable();
+    }
+
+    private async Task OpenBatchSetGroupSelected()
+    {
+        var targets = selectedChannels.ToList();
+        if (targets.Count == 0)
+        {
+            Snackbar.Add("未选择任何频道", Severity.Info);
+            return;
+        }
+
+        if (groups.Count == 0)
+            await LoadGroups();
+
+        var parameters = new DialogParameters
+        {
+            ["Groups"] = groups,
+            ["SelectedCount"] = targets.Count
+        };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = DialogService.Show<BatchSetChannelGroupDialog>("批量修改分组", parameters, options);
+        var result = await dialog.Result;
+        if (result is not { Canceled: false })
+            return;
+
+        var groupIdRaw = result.Data is int x ? x : 0;
+        int? groupId = groupIdRaw <= 0 ? null : groupIdRaw;
+
+        loading = true;
+        try
+        {
+            foreach (var c in targets)
+                await ChannelManagement.UpdateChannelGroupAsync(c.Id, groupId);
+
+            selectedChannels.Clear();
+            await ReloadTable();
+            Snackbar.Add($"分组已更新：{targets.Count} 个频道", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"修改分组失败：{ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            loading = false;
+        }
     }
 
     private async Task KickUser(Channel channel)
@@ -501,7 +585,7 @@
             try
             {
                 await ChannelManagement.DeleteChannelAsync(id);
-                channels.Remove(channel);
+                await ReloadTable();
                 Snackbar.Add("删除成功", Severity.Success);
             }
             catch (Exception ex)

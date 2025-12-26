@@ -1,0 +1,41 @@
+@namespace TelegramPanel.Web.Components.Dialogs
+@using TelegramPanel.Data.Entities
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3">
+            <MudAlert Severity="Severity.Info">
+                将为 <strong>@SelectedCount</strong> 个频道设置分组
+            </MudAlert>
+
+            <MudSelect @bind-Value="selectedGroupId" Label="选择目标分组" Variant="Variant.Outlined" Required="true">
+                <MudSelectItem Value="0">未分组</MudSelectItem>
+                @foreach (var g in Groups)
+                {
+                    <MudSelectItem Value="@g.Id">@g.Name</MudSelectItem>
+                }
+            </MudSelect>
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Text" Color="Color.Default" OnClick="Cancel">取消</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Confirm">确定</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code
+{
+    [CascadingParameter] private MudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public List<ChannelGroup> Groups { get; set; } = new();
+    [Parameter] public int SelectedCount { get; set; }
+
+    private int selectedGroupId;
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Confirm()
+    {
+        MudDialog.Close(DialogResult.Ok(selectedGroupId));
+    }
+}
+

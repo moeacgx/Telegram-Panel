@@ -58,6 +58,30 @@ public class AccountManagementService
         return list;
     }
 
+    public async Task<(IReadOnlyList<Account> Items, int TotalCount)> QueryAccountsPagedAsync(
+        int? categoryId,
+        string? search,
+        int pageIndex,
+        int pageSize,
+        CancellationToken cancellationToken = default)
+    {
+        var (items, total) = await _accountRepository.QueryPagedAsync(categoryId, search, pageIndex, pageSize, cancellationToken);
+        foreach (var a in items)
+            FormatPhoneForDisplay(a);
+        return (items, total);
+    }
+
+    public async Task<IReadOnlyList<Account>> QueryAccountsAsync(
+        int? categoryId,
+        string? search,
+        CancellationToken cancellationToken = default)
+    {
+        var list = await _accountRepository.QueryAsync(categoryId, search, cancellationToken);
+        foreach (var a in list)
+            FormatPhoneForDisplay(a);
+        return list;
+    }
+
     public async Task<IEnumerable<Account>> GetActiveAccountsAsync()
     {
         var list = (await _accountRepository.GetActiveAccountsAsync()).ToList();

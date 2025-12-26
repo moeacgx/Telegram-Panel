@@ -1,6 +1,8 @@
 @namespace TelegramPanel.Web.Components.Dialogs
 @inject TelegramPanel.Core.Services.Telegram.BotTelegramService BotTelegram
 @inject ISnackbar Snackbar
+@inject TelegramPanel.Web.Services.BotAdminPresetsService PresetsService
+@inject IDialogService DialogService
 @using System.Linq
 
 <MudDialog>
@@ -10,9 +12,42 @@
                 请输入要设置为管理员的 Telegram 用户 ID（不是手机号/用户名）。机器人需要在目标频道具备"添加管理员/添加新管理员"权限，否则会失败。
             </MudAlert>
 
-            <MudTextField @bind-Value="userIdInput" Label="用户 ID" Variant="Variant.Outlined" Required="true"
-                          HelperText="输入 Telegram 用户 ID（纯数字）"
-                          Placeholder="例如: 123456789" />
+            <MudGrid Spacing="2">
+                <MudItem xs="12" sm="8">
+                    <MudSelect T="string" Value="@selectedPresetName" ValueChanged="OnPresetChanged"
+                               Label="管理员预设" Variant="Variant.Outlined" Dense="true" Disabled="@saving">
+                        <MudSelectItem Value="@string.Empty">（不使用预设）</MudSelectItem>
+                        @foreach (var p in Presets)
+                        {
+                            <MudSelectItem Value="@p.Name">@p.Name</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="4" Class="d-flex align-center">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Error" OnClick="DeleteSelectedPreset"
+                               Disabled="@(saving || string.IsNullOrWhiteSpace(selectedPresetName))">
+                        删除预设
+                    </MudButton>
+                </MudItem>
+            </MudGrid>
+
+            <MudTextField @bind-Value="userIdInput" Label="用户 ID（支持多条）" Variant="Variant.Outlined" Required="true"
+                          Lines="6"
+                          HelperText="每行一个用户 ID（可粘贴多行）"
+                          Placeholder="@("例如：\n123456789\n987654321")" />
+
+            <MudGrid Spacing="2">
+                <MudItem xs="12" sm="8">
+                    <MudTextField @bind-Value="presetNameToSave" Label="保存当前 ID 为预设组（名称）"
+                                  Variant="Variant.Outlined" Dense="true" Disabled="@saving" />
+                </MudItem>
+                <MudItem xs="12" sm="4" Class="d-flex align-center">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SavePreset"
+                               Disabled="@(saving || string.IsNullOrWhiteSpace(presetNameToSave))">
+                        保存为预设
+                    </MudButton>
+                </MudItem>
+            </MudGrid>
 
             <MudAlert Severity="Severity.Normal" Variant="Variant.Outlined" Dense="true">
                 <strong>如何获取用户 ID？</strong>
@@ -79,15 +114,98 @@
     [Parameter] public IReadOnlyList<long> ChannelTelegramIds { get; set; } = Array.Empty<long>();
 
     private string userIdInput = "";
+    private string selectedPresetName = "";
+    private string presetNameToSave = "";
     private bool saving;
 
     private RightsModel rights = new();
+    private List<TelegramPanel.Web.Services.BotAdminPreset> Presets { get; set; } = new();
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         // 默认给出一个"常用"权限组合，减少操作成本
         rights.ManageChat = true;
         rights.InviteUsers = true;
+
+        await ReloadPresetsAsync();
+    }
+
+    private async Task ReloadPresetsAsync()
+    {
+        Presets = (await PresetsService.GetPresetsAsync())
+            .Where(x => !string.IsNullOrWhiteSpace(x.Name) && x.UserIds.Count > 0)
+            .ToList();
+    }
+
+    private Task OnPresetChanged(string value)
+    {
+        selectedPresetName = value ?? "";
+        if (string.IsNullOrWhiteSpace(selectedPresetName))
+            return Task.CompletedTask;
+
+        var preset = Presets.FirstOrDefault(p => string.Equals(p.Name, selectedPresetName, StringComparison.OrdinalIgnoreCase));
+        if (preset != null)
+        {
+            userIdInput = string.Join(Environment.NewLine, preset.UserIds);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task SavePreset()
+    {
+        var name = (presetNameToSave ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            Snackbar.Add("请输入预设名称", Severity.Warning);
+            return;
+        }
+
+        var userIds = ParseUserIds(userIdInput);
+        if (userIds.Count == 0)
+        {
+            Snackbar.Add("请输入用户 ID", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            await PresetsService.SavePresetAsync(name, userIds);
+            await ReloadPresetsAsync();
+            selectedPresetName = name;
+            Snackbar.Add($"已保存预设：{name}", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"保存预设失败：{ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task DeleteSelectedPreset()
+    {
+        if (string.IsNullOrWhiteSpace(selectedPresetName))
+            return;
+
+        bool? ok = await DialogService.ShowMessageBox(
+            title: "删除预设",
+            message: $"确定删除预设“{selectedPresetName}”吗？",
+            yesText: "删除",
+            cancelText: "取消");
+
+        if (ok != true)
+            return;
+
+        try
+        {
+            await PresetsService.DeletePresetAsync(selectedPresetName);
+            selectedPresetName = "";
+            Snackbar.Add("已删除预设", Severity.Success);
+            await ReloadPresetsAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"删除预设失败：{ex.Message}", Severity.Error);
+        }
     }
 
     private async Task Save()
@@ -107,57 +225,65 @@
             return;
         }
 
-        var input = (userIdInput ?? string.Empty).Trim();
-        if (string.IsNullOrWhiteSpace(input))
+        var userIds = ParseUserIds(userIdInput);
+        if (userIds.Count == 0)
         {
             Snackbar.Add("请输入用户 ID", Severity.Warning);
-            return;
-        }
-
-        if (!long.TryParse(input, out var userId) || userId <= 0)
-        {
-            Snackbar.Add("用户 ID 格式不正确（请输入纯数字）", Severity.Warning);
             return;
         }
 
         saving = true;
         try
         {
-            var result = await BotTelegram.PromoteChatMemberWithResultAsync(
-                botId: BotId,
-                channelTelegramIds: ChannelTelegramIds,
-                userId: userId,
-                rights: new TelegramPanel.Core.Services.Telegram.BotTelegramService.BotAdminRights(
-                    ManageChat: rights.ManageChat,
-                    PostMessages: rights.PostMessages,
-                    EditMessages: rights.EditMessages,
-                    DeleteMessages: rights.DeleteMessages,
-                    InviteUsers: rights.InviteUsers,
-                    RestrictMembers: rights.RestrictMembers,
-                    PinMessages: rights.PinMessages,
-                    PromoteMembers: rights.PromoteMembers
-                ),
-                cancellationToken: CancellationToken.None
+            var channelIds = ChannelTelegramIds.Distinct().ToList();
+            var totalOps = channelIds.Count * userIds.Count;
+            var okOps = 0;
+            var failOps = 0;
+            string? firstFailure = null;
+
+            var rightsArg = new TelegramPanel.Core.Services.Telegram.BotTelegramService.BotAdminRights(
+                ManageChat: rights.ManageChat,
+                PostMessages: rights.PostMessages,
+                EditMessages: rights.EditMessages,
+                DeleteMessages: rights.DeleteMessages,
+                InviteUsers: rights.InviteUsers,
+                RestrictMembers: rights.RestrictMembers,
+                PinMessages: rights.PinMessages,
+                PromoteMembers: rights.PromoteMembers
             );
 
-            if (result.SuccessCount == 0)
+            foreach (var uid in userIds)
             {
-                var first = result.Failures.Values.FirstOrDefault() ?? "未知原因";
-                Snackbar.Add($"设置失败：{first}", Severity.Error);
+                var result = await BotTelegram.PromoteChatMemberWithResultAsync(
+                    botId: BotId,
+                    channelTelegramIds: channelIds,
+                    userId: uid,
+                    rights: rightsArg,
+                    cancellationToken: CancellationToken.None
+                );
+
+                okOps += result.SuccessCount;
+                failOps += result.Failures.Count;
+                if (firstFailure == null && result.Failures.Count > 0)
+                    firstFailure = result.Failures.Values.FirstOrDefault();
+            }
+
+            if (okOps == 0)
+            {
+                Snackbar.Add($"设置失败：{firstFailure ?? "未知原因"}", Severity.Error);
                 return;
             }
 
-            if (result.Failures.Count > 0)
+            if (failOps > 0)
             {
-                var first = result.Failures.Values.FirstOrDefault() ?? "未知原因";
-                Snackbar.Add($"部分失败：成功 {result.SuccessCount}/{result.TotalCount}，示例原因：{first}", Severity.Warning);
+                Snackbar.Add($"部分失败：成功 {okOps}/{totalOps}，示例原因：{firstFailure ?? "未知原因"}", Severity.Warning);
             }
             else
             {
-                Snackbar.Add($"已设置管理员：成功 {result.SuccessCount}/{result.TotalCount} 个频道", Severity.Success);
+                Snackbar.Add($"已设置管理员：成功 {okOps}/{totalOps}", Severity.Success);
             }
 
-            MudDialog.Close(DialogResult.Ok(result.SuccessCount));
+            MudDialog.Close(DialogResult.Ok(okOps));
         }
         catch (Exception ex)
         {
@@ -172,6 +298,28 @@
     private void Cancel()
     {
         MudDialog.Cancel();
+    }
+
+    private static List<long> ParseUserIds(string? input)
+    {
+        var list = new List<long>();
+        var raw = (input ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(raw))
+            return list;
+
+        // UI 提示：每行一个 ID；解析时仍做宽松处理，避免粘贴时带上空格/逗号导致失败
+        var parts = raw.Split(new[] { '\r', '\n', ',', '，', ';', '；', '\t', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var p in parts)
+        {
+            var s = p.Trim();
+            if (string.IsNullOrWhiteSpace(s))
+                continue;
+
+            if (long.TryParse(s, out var id) && id > 0)
+                list.Add(id);
+        }
+
+        return list.Distinct().ToList();
     }
 
     private sealed class RightsModel

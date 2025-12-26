@@ -43,6 +43,17 @@ public class ChannelManagementService
         return await _channelRepository.GetByCreatorAccountAsync(accountId);
     }
 
+    public async Task<(IReadOnlyList<Channel> Items, int TotalCount)> QueryChannelsForViewPagedAsync(
+        int creatorAccountId,
+        string? filterType,
+        string? search,
+        int pageIndex,
+        int pageSize,
+        CancellationToken cancellationToken = default)
+    {
+        return await _channelRepository.QueryForViewPagedAsync(creatorAccountId, filterType, search, pageIndex, pageSize, cancellationToken);
+    }
+
     public async Task<IEnumerable<Channel>> GetChannelsByCreatorAsync(int accountId)
     {
         return await _channelRepository.GetByCreatorAccountAsync(accountId);

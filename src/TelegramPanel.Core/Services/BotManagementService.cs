@@ -132,6 +132,24 @@ public class BotManagementService
         return list.Where(x => x.IsBroadcast);
     }
 
+    public async Task<(IReadOnlyList<BotChannel> Items, int TotalCount)> QueryChannelsPagedAsync(
+        int botId,
+        int? categoryId,
+        string? search,
+        int pageIndex,
+        int pageSize,
+        CancellationToken cancellationToken = default)
+    {
+        return await _botChannelRepository.QueryPagedAsync(
+            botId: botId,
+            categoryId: categoryId,
+            broadcastOnly: true,
+            search: search,
+            pageIndex: pageIndex,
+            pageSize: pageSize,
+            cancellationToken: cancellationToken);
+    }
+
     /// <summary>
     /// 获取 Bot 可管理的聊天列表（包含频道/群组/超级群组）。
     /// </summary>

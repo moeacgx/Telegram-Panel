@@ -316,6 +316,7 @@ builder.Services.AddTelegramPanelCore();
 builder.Services.AddScoped<AccountExportService>();
 builder.Services.AddScoped<DataSyncService>();
 builder.Services.AddScoped<UiPreferencesService>();
+builder.Services.AddScoped<BotAdminPresetsService>();
 builder.Services.Configure<UpdateCheckOptions>(builder.Configuration.GetSection("UpdateCheck"));
 builder.Services.AddSingleton<UpdateCheckService>();
 builder.Services.Configure<PanelTimeZoneOptions>(builder.Configuration.GetSection("System"));
