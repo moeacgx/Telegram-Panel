@@ -17,10 +17,12 @@ public interface IAccountRepository : IRepository<Account>
         string? search,
         int pageIndex,
         int pageSize,
+        bool onlyWaste = false,
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<Account>> QueryAsync(
         int? categoryId,
         string? search,
+        bool onlyWaste = false,
         CancellationToken cancellationToken = default);
 }

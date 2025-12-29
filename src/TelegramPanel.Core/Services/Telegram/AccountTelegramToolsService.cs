@@ -1047,6 +1047,22 @@ public class AccountTelegramToolsService
     {
         var msg = ex.Message ?? string.Empty;
 
+        if (msg.Contains("EMAIL_HASH_EXPIRED", StringComparison.OrdinalIgnoreCase))
+            return (
+                "邮箱验证码已过期（EMAIL_HASH_EXPIRED）",
+                "请点击“重发验证码”，并使用最新邮件中的验证码。" + Environment.NewLine + msg);
+
+        if (msg.Contains("EMAIL_UNCONFIRMED", StringComparison.OrdinalIgnoreCase))
+            return (
+                "邮箱未确认（EMAIL_UNCONFIRMED）",
+                "请在面板输入邮箱收到的验证码进行确认；如提示过期请重发并使用最新验证码。" + Environment.NewLine + msg);
+
+        if (msg.Contains("EMAIL_INVALID", StringComparison.OrdinalIgnoreCase))
+            return ("邮箱无效（EMAIL_INVALID）", msg);
+
+        if (msg.Contains("EMAIL_NOT_ALLOWED", StringComparison.OrdinalIgnoreCase))
+            return ("邮箱不允许使用（EMAIL_NOT_ALLOWED）", msg);
+
         if (msg.Contains("FROZEN_METHOD_INVALID", StringComparison.OrdinalIgnoreCase))
             return ("账号被冻结（FROZEN_METHOD_INVALID）", "Telegram 提示该账号/ApiId 的某些接口被冻结（常见为创建频道接口）。" + Environment.NewLine + msg);
 

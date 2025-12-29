@@ -27,6 +27,14 @@
                 <MudSelectItem Value="@c.Id">@c.Name</MudSelectItem>
             }
         </MudSelect>
+        <MudCheckBox T="bool"
+                     @bind-Value="onlyWaste"
+                     @bind-Value:after="OnFiltersChanged"
+                     Dense="true"
+                     Disabled="@loading"
+                     Label="只看废号"
+                     Class="tp-input-full-xs"
+                     Style="min-width: 140px; flex: 0 1 160px;" />
         <MudTextField @bind-Value="searchString" Placeholder="搜索账号..." Adornment="Adornment.Start"
                       AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0 tp-input-full-xs"
                       Style="min-width: 200px; flex: 1; max-width: 400px;"
@@ -190,6 +198,7 @@
     private bool loading = true;
     private string searchString = "";
     private int filterCategoryId = 0;
+    private bool onlyWaste;
     private readonly Dictionary<int, TelegramAccountStatusResult> telegramStatus = new();
     private HashSet<Account> selectedAccounts = new();
     private readonly CancellationTokenSource _pageCts = new();
@@ -222,6 +231,7 @@
             var (items, total) = await AccountManagement.QueryAccountsPagedAsync(
                 categoryId: categoryId,
                 search: searchString,
+                onlyWaste: onlyWaste,
                 pageIndex: state.Page,
                 pageSize: state.PageSize,
                 cancellationToken: cancellationToken);
@@ -1097,6 +1107,7 @@
             var (_, total) = await AccountManagement.QueryAccountsPagedAsync(
                 categoryId: null,
                 search: null,
+                onlyWaste: false,
                 pageIndex: 0,
                 pageSize: 1,
                 cancellationToken: _pageCts.Token);

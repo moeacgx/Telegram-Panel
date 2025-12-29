@@ -63,9 +63,10 @@ public class AccountManagementService
         string? search,
         int pageIndex,
         int pageSize,
+        bool onlyWaste = false,
         CancellationToken cancellationToken = default)
     {
-        var (items, total) = await _accountRepository.QueryPagedAsync(categoryId, search, pageIndex, pageSize, cancellationToken);
+        var (items, total) = await _accountRepository.QueryPagedAsync(categoryId, search, pageIndex, pageSize, onlyWaste, cancellationToken);
         foreach (var a in items)
             FormatPhoneForDisplay(a);
         return (items, total);
@@ -74,9 +75,10 @@ public class AccountManagementService
     public async Task<IReadOnlyList<Account>> QueryAccountsAsync(
         int? categoryId,
         string? search,
+        bool onlyWaste = false,
         CancellationToken cancellationToken = default)
     {
-        var list = await _accountRepository.QueryAsync(categoryId, search, cancellationToken);
+        var list = await _accountRepository.QueryAsync(categoryId, search, onlyWaste, cancellationToken);
         foreach (var a in list)
             FormatPhoneForDisplay(a);
         return list;

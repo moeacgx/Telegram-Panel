@@ -43,18 +43,40 @@
                         该账号未开启两步验证，无法绑定找回邮箱。请先设置二级密码。
                     </MudAlert>
                 }
-                else if (step == Step.SetEmail)
+                else
                 {
+                    <MudText Typo="Typo.subtitle2">发送验证码</MudText>
+
                     <MudTextField @bind-Value="currentPassword" Label="原二级密码" Variant="Variant.Outlined"
                                   InputType="InputType.Password" Required="true" />
 
                     <MudTextField @bind-Value="email" Label="新找回邮箱" Variant="Variant.Outlined"
                                   HelperText="将会向该邮箱发送验证码" Required="true" />
-                }
-                else
-                {
+
+                    <MudStack direction="Row" Spacing="2" AlignItems="AlignItems.Center">
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@running" OnClick="SendCode">
+                            @if (running)
+                            {
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                                <span>发送中...</span>
+                            }
+                            else
+                            {
+                                <span>发送验证码</span>
+                            }
+                        </MudButton>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            提示：即使“发送/重发”提示失败，但你实际收到了邮件验证码，也可以直接在下方输入验证码确认。
+                        </MudText>
+                    </MudStack>
+
+                    <MudDivider Class="my-2" />
+
+                    <MudText Typo="Typo.subtitle2">输入验证码确认</MudText>
+
                     <MudTextField @bind-Value="code" Label="邮箱验证码" Variant="Variant.Outlined"
-                                  HelperText="请到邮箱中查看验证码（注意垃圾箱/延迟）" Required="true" />
+                                  HelperText="请到邮箱中查看验证码（注意垃圾箱/延迟）。如提示过期，请先重发并使用最新验证码。"
+                                  Required="true" />
 
                     <MudStack direction="Row" Spacing="2">
                         <MudButton Variant="Variant.Outlined" Color="Color.Default" Disabled="@running" OnClick="Resend">
@@ -62,6 +84,17 @@
                         </MudButton>
                         <MudButton Variant="Variant.Outlined" Color="Color.Default" Disabled="@running" OnClick="CancelVerification">
                             取消验证
+                        </MudButton>
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@running" OnClick="Confirm">
+                            @if (running)
+                            {
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                                <span>确认中...</span>
+                            }
+                            else
+                            {
+                                <span>确认绑定</span>
+                            }
                         </MudButton>
                     </MudStack>
                 }
@@ -77,37 +110,7 @@
                 去设置二级密码
             </MudButton>
         }
-        else if (loaded && account != null && hasTwoFactorPassword)
-        {
-            @if (step == Step.SetEmail)
-            {
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@running" OnClick="SendCode">
-                    @if (running)
-                    {
-                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                        <span>发送中...</span>
-                    }
-                    else
-                    {
-                        <span>发送验证码</span>
-                    }
-                </MudButton>
-            }
-            else
-            {
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@running" OnClick="Confirm">
-                    @if (running)
-                    {
-                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                        <span>确认中...</span>
-                    }
-                    else
-                    {
-                        <span>确认绑定</span>
-                    }
-                </MudButton>
-            }
-        }
+        
     </DialogActions>
 </MudDialog>
 
@@ -124,7 +127,6 @@
     private bool hasRecoveryEmail;
     private string? unconfirmedEmailPattern;
 
-    private Step step = Step.SetEmail;
 
     private string currentPassword = "";
     private string email = "";
@@ -135,7 +137,7 @@
         await ReloadStatus();
     }
 
-    private async Task ReloadStatus()
+    private async Task ReloadStatus(bool silent = false)
     {
         loaded = false;
         try
@@ -146,7 +148,7 @@
             if (account != null)
             {
                 var (ok, err, hasPwd, hasEmail, unconfirmed) = await AccountTelegramTools.GetTwoFactorRecoveryEmailStatusAsync(AccountId);
-                if (!ok)
+                if (!ok && !silent)
                 {
                     Snackbar.Add($"获取2FA邮箱状态失败：{err}", Severity.Warning);
                 }
@@ -154,7 +156,6 @@
                 hasRecoveryEmail = hasEmail;
                 unconfirmedEmailPattern = unconfirmed;
 
-                step = string.IsNullOrWhiteSpace(unconfirmedEmailPattern) ? Step.SetEmail : Step.Confirm;
             }
         }
         finally
@@ -203,11 +204,17 @@
             if (!ok)
             {
                 Snackbar.Add($"发送失败：{err}", Severity.Error);
+                await ReloadStatus(silent: true);
+
+                if (!string.IsNullOrWhiteSpace(unconfirmedEmailPattern))
+                {
+                    Snackbar.Add("检测到账号存在待确认邮箱：你可以直接输入邮箱验证码完成确认。", Severity.Info);
+                }
+
                 return;
             }
 
-            unconfirmedEmailPattern = pattern;
-            step = Step.Confirm;
+            unconfirmedEmailPattern = pattern ?? unconfirmedEmailPattern;
             code = "";
             Snackbar.Add("验证码已发送，请到邮箱中查看并输入验证码确认。", Severity.Success);
         }
@@ -320,9 +327,4 @@
         await Task.CompletedTask;
     }
 
-    private enum Step
-    {
-        SetEmail,
-        Confirm
-    }
 }
