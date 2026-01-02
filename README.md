@@ -2,7 +2,19 @@
 
 基于 **WTelegramClient** 的 Telegram 多账户管理面板（.NET 8 / Blazor Server），用于批量管理账号、统计与管理频道/群组、执行批量任务。
 
-## 社区
+## 目录
+
+- [社区与交流](#社区与交流)
+- [功能亮点](#功能亮点)
+- [Docker 一键部署（推荐）](#docker-一键部署推荐)
+- [反向代理一条龙（可选）](#反向代理一条龙可选)
+- [本地开发运行（可选）](#本地开发运行可选)
+- [模块扩展（可选）](#模块扩展可选)
+- [详细文档](#详细文档)
+- [防冻结指南（新号必看）](#防冻结指南新号必看)
+- [截图](#截图)
+
+## 社区与交流
 
 - TG 频道：https://t.me/zhanzhangck
 - 站长交流群：https://t.me/vpsbbq
@@ -21,36 +33,9 @@
 - 🤖 **Bot 频道管理**：用于管理“频道创建人不在系统中”的频道（把 Bot 设为管理员即可纳入管理），支持批量导出链接、批量邀请成员/设置管理员（可按管理员列表匹配系统账号执行）；支持对每个 Bot 一键启用/停用（停用后相关后台不再轮询 getUpdates）
 - 🏷️ **账号分类（排除操作）**：支持把“养号/不参与运营”的账号分类标记为“排除操作”，不会出现在创建频道/批量任务的执行账号下拉里
 
+## Docker 一键部署（推荐）
 
-## 🧊 防冻结指南（新号必看）
-
-Telegram 对新号/风控号的限制比较敏感；本项目提供了很多“批量/高频”能力，请务必谨慎使用。
-
-- ⚠️ **新号切记：登录面板后不要进行任何操作！！！至少养 24 小时再创建频道/群、批量邀请/加管理员等敏感操作**
-- ✅ **如果是购买的协议号/接码号（需要尽快验号）**：建议导入后先做一次「批量 Telegram 状态检测」，必要时用「深度检测」快速筛掉废号（避免隔天再找商家被拒赔付）；验号通过后再开始低频养号与后续操作
-- ⚠️ **重要提醒（买号必看）**：如果你是用商家提供的 Session 导入到系统里，本质上是在使用“同一个会话”。因此“踢设备”只能踢掉**除当前 Session 会话之外**的其他设备；若商家仍保留该 Session，依然有被重复使用的风险。想要更安全：务必用验证码登录一次（以你自己的登录为准），再踢出其他 Session 会话，并绑定 2FA 找回邮箱
-- ✅ 养号完成后：先从少量、低频操作开始，逐步增加频率（宁可慢点，也别一上来就批量）
-- ⛔ 如果账号出现限制/冻结迹象：建议先停用该账号，等待恢复后再继续操作
-- 📧 **重要账号务必绑定 2FA 找回邮箱**：尤其是接码手机号的账号，存在“官方客户端也可能突然掉登录”的情况；若未绑定邮箱，掉线后可能无法找回（账号就丢了）。建议准备一个稳定的域名邮箱，把重要账号都绑定到同一域名邮箱体系，便于后续通过邮箱验证码重新登录。非重要账号可酌情忽略。
-
-## 截图
-
-> 仓库自带后台截图：`screenshot/`
-
-<details>
-<summary>点击展开/收起截图</summary>
-
-| | | |
-|---|---|---|
-| <img src="screenshot/Dashboard.png" width="300" /> | <img src="screenshot/account.png" width="300" /> | <img src="screenshot/equipment.png" width="300" /> |
-| <img src="screenshot/Import account.png" width="300" /> | <img src="screenshot/Login with mobile phone number.png" width="300" /> | <img src="screenshot/System notification.png" width="300" /> |
-| <img src="screenshot/Create channel.png" width="300" /> | <img src="screenshot/Invite users in batches.png" width="300" /> | <img src="screenshot/Set up administrators in batches.png" width="300" /> |
-
-</details>
-
-## 🐳 Docker 一键部署（推荐）
-
-面向小白：**`git clone` → `docker compose up` → 浏览器打开 → 登录改密码 → 配置 ApiId/ApiHash**。
+🐳 面向小白：**`git clone` → `docker compose up` → 浏览器打开 → 登录改密码 → 配置 ApiId/ApiHash**。
 
 ### 环境要求
 
@@ -93,9 +78,9 @@ https://faka.boxmoe.eu.org/
 
 ### Bot Webhook 模式（可选）
 
-> **💡 提示**：如果你不使用BOT相关功能，可以跳过此节。
+> **💡 提示**：如果你不使用 BOT 相关功能，可以跳过此节。
 
-默认情况下，Bot 使用**长轮询（Long Polling）**模式接收更新。**生产环境建议使用 Webhook 模式**，优势如下：
+默认情况下，Bot 使用**长轮询（Long Polling）**模式接收更新。生产环境可选 Webhook：
 
 - ✅ 更低的资源消耗（无需持续轮询）
 - ✅ 更快的响应速度（Telegram 主动推送）
@@ -222,7 +207,7 @@ docker compose build --no-cache
 docker compose up -d
 ```
 
-## 🌐 反向代理一条龙（可选）
+## 反向代理一条龙（可选）
 
 Blazor Server 需要 WebSocket（`/_blazor`），反代必须支持 `Upgrade`。
 
@@ -249,7 +234,7 @@ location / {
 dotnet run --project src/TelegramPanel.Web
 ```
 
-## 🧩 模块扩展（可选）
+## 模块扩展（可选）
 
 项目已支持“可安装/可卸载”的模块扩展（任务 / API / UI），用于后续按需扩展能力、按场景自由定制开发自己的模块，而不是把功能写死在核心里。
 
@@ -284,3 +269,34 @@ dotnet run --project src/TelegramPanel.Web
 - `docs/database.md`（数据库/表结构说明）
 - `docs/advanced.md`（配置项/数据目录/后台任务等）
 - `docs/modules.md`（模块系统：可安装/可卸载/依赖/回滚）
+
+## 防冻结指南（新号必看）
+
+<details>
+<summary>点击展开/收起防冻结指南</summary>
+
+Telegram 对新号/风控号的限制比较敏感；本项目提供了很多“批量/高频”能力，请务必谨慎使用。
+
+- ⚠️ **新号切记：登录面板后不要进行任何操作！！！至少养 24 小时再创建频道/群、批量邀请/加管理员等敏感操作**
+- ✅ **如果是购买的协议号/接码号（需要尽快验号）**：建议导入后先做一次「批量 Telegram 状态检测」，必要时用「深度检测」快速筛掉废号（避免隔天再找商家被拒赔付）；验号通过后再开始低频养号与后续操作
+- ⚠️ **重要提醒（买号必看）**：如果你是用商家提供的 Session 导入到系统里，本质上是在使用“同一个会话”。因此“踢设备”只能踢掉**除当前 Session 会话之外**的其他设备；若商家仍保留该 Session，依然有被重复使用的风险。想要更安全：务必用验证码登录一次（以你自己的登录为准），再踢出其他 Session 会话，并绑定 2FA 找回邮箱
+- ✅ 养号完成后：先从少量、低频操作开始，逐步增加频率（宁可慢点，也别一上来就批量）
+- ⛔ 如果账号出现限制/冻结迹象：建议先停用该账号，等待恢复后再继续操作
+- 📧 **重要账号务必绑定 2FA 找回邮箱**：尤其是接码手机号的账号，存在“官方客户端也可能突然掉登录”的情况；若未绑定邮箱，掉线后可能无法找回（账号就丢了）。建议准备一个稳定的域名邮箱，把重要账号都绑定到同一域名邮箱体系，便于后续通过邮箱验证码重新登录。非重要账号可酌情忽略。
+
+</details>
+
+## 截图
+
+> 仓库自带后台截图：`screenshot/`
+
+<details>
+<summary>点击展开/收起截图</summary>
+
+| | | |
+|---|---|---|
+| <img src="screenshot/Dashboard.png" width="300" /> | <img src="screenshot/account.png" width="300" /> | <img src="screenshot/equipment.png" width="300" /> |
+| <img src="screenshot/Import account.png" width="300" /> | <img src="screenshot/Login with mobile phone number.png" width="300" /> | <img src="screenshot/System notification.png" width="300" /> |
+| <img src="screenshot/Create channel.png" width="300" /> | <img src="screenshot/Invite users in batches.png" width="300" /> | <img src="screenshot/Set up administrators in batches.png" width="300" /> |
+
+</details>

@@ -5,10 +5,10 @@
     <!-- 主版本: 重大变更/不兼容更新 -->
     <!-- 次版本: 新功能/兼容性更新 -->
     <!-- 修订号: Bug修复/小改进 -->
-    <Version>1.2.7</Version>
-    <AssemblyVersion>1.2.7.0</AssemblyVersion>
-    <FileVersion>1.2.7.0</FileVersion>
-    <InformationalVersion>1.2.7</InformationalVersion>
+    <Version>1.2.8</Version>
+    <AssemblyVersion>1.2.8.0</AssemblyVersion>
+    <FileVersion>1.2.8.0</FileVersion>
+    <InformationalVersion>1.2.8</InformationalVersion>
 
     <!-- 项目元信息 -->
     <Authors>Telegram Panel Contributors</Authors>

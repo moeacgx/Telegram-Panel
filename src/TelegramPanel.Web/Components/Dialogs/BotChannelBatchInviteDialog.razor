@@ -1,6 +1,7 @@
 @inject AccountManagementService AccountManagement
 @inject IChannelService ChannelService
 @inject BotTelegramService BotTelegram
+@inject AccountTelegramToolsService AccountTools
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject TelegramPanel.Web.Services.ChannelInvitePresetsService PresetsService
@@ -348,6 +349,8 @@
 
         try
         {
+            var joinTried = new HashSet<string>(StringComparer.Ordinal);
+
             foreach (var ch in channels)
             {
                 var executorId = ResolveExecutorAccountId(ch);
@@ -378,6 +381,35 @@
                         {
                             failed++;
                             failures.Add($"{ch.Title} => {username}：{result.Error}");
+                        }
+                    }
+                    catch (Exception ex) when (!joinTried.Contains($"{executorId.Value}:{ch.TelegramId}") && BotChannelJoinRetryHelper.LooksLikeChannelNotFound(ex.Message))
+                    {
+                        var key = $"{executorId.Value}:{ch.TelegramId}";
+                        joinTried.Add(key);
+
+                        var joined = await BotChannelJoinRetryHelper.TryJoinChannelAsync(
+                            BotTelegram, AccountTools, BotId, executorId.Value, ch, failures, _cts.Token);
+                        if (!joined)
+                        {
+                            failed++;
+                            failures.Add($"{ch.Title} => {username}：{ex.Message}");
+                            continue;
+                        }
+
+                        try
+                        {
+                            var result = await ChannelService.InviteUserAsync(executorId.Value, ch.TelegramId, username);
+                            if (!result.Success)
+                            {
+                                failed++;
+                                failures.Add($"{ch.Title} => {username}：{result.Error}");
+                            }
+                        }
+                        catch (Exception ex2)
+                        {
+                            failed++;
+                            failures.Add($"{ch.Title} => {username}：{ex2.Message}");
                         }
                     }
                     catch (Exception ex)
