@@ -32,7 +32,14 @@ public sealed class ModuleLoadContext : AssemblyLoadContext
             || name.StartsWith("Microsoft.AspNetCore.", StringComparison.OrdinalIgnoreCase)
             || name.StartsWith("Microsoft.JSInterop", StringComparison.OrdinalIgnoreCase)
             || name.StartsWith("TelegramPanel.", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(name, "MudBlazor", StringComparison.OrdinalIgnoreCase))
+            || string.Equals(name, "MudBlazor", StringComparison.OrdinalIgnoreCase)
+            // TelegramPanel 宿主内置依赖：模块可直接复用宿主版本，避免重复携带导致包体积膨胀。
+            || string.Equals(name, "WTelegramClient", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "PhoneNumbers", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "SixLabors.ImageSharp", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "Microsoft.Data.Sqlite", StringComparison.OrdinalIgnoreCase)
+            || name.StartsWith("Microsoft.EntityFrameworkCore", StringComparison.OrdinalIgnoreCase)
+            || name.StartsWith("SQLitePCLRaw", StringComparison.OrdinalIgnoreCase))
             return null;
 
         // 2) 其次：如果宿主已经加载过同名程序集，则同样交给 Default ALC（避免重复加载）。

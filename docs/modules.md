@@ -119,6 +119,29 @@ powershell tools/package-module.ps1 -Project "src/YourModule/YourModule.csproj" 
 
 > 说明：该脚本依赖 Docker（会拉取/使用 `mcr.microsoft.com/dotnet/sdk:8.0` 镜像）。首次执行会比较慢属正常现象。
 
+### 轻量打包（推荐）
+
+模块运行时会与宿主共享一批“边界程序集”（例如 `TelegramPanel.*`、`Microsoft.Extensions.*`、`Microsoft.AspNetCore.*`、`MudBlazor` 等）。
+这些程序集即使被打进模块包里，宿主也会强制从 Default ALC 解析（避免类型身份不一致），因此**携带它们只会徒增包体积**。
+
+打包时可加 `-Slim` 开关自动剔除这类共享程序集：
+
+```powershell
+powershell tools/package-module.ps1 -Project "src/YourModule/YourModule.csproj" -Manifest "src/YourModule/manifest.json" -Slim
+```
+
+### 更激进的轻量打包（仅限 TelegramPanel 宿主）
+
+如果确定目标宿主就是 TelegramPanel 主程序（必带 EFCore/Sqlite/WTelegramClient 等依赖），并且你希望把模块包做到尽可能小，可以使用 `-SlimHost`：
+
+- 额外剔除：`Microsoft.EntityFrameworkCore*`、`Microsoft.Data.Sqlite`、`SQLitePCLRaw*`、`WTelegramClient`、`SixLabors.ImageSharp`、`PhoneNumbers` 等宿主内置依赖
+- 剔除 `runtimes/`（多平台 SQLite native，体积占比很高）
+- 剔除 `wwwroot/_content/MudBlazor`（静态资源由宿主提供）
+
+```powershell
+powershell tools/package-module.ps1 -Project "src/YourModule/YourModule.csproj" -Manifest "src/YourModule/manifest.json" -SlimHost
+```
+
 ## manifest.json（示例）
 
 ```json
