@@ -11,8 +11,25 @@ public class BotChannelCategoryRepository : Repository<BotChannelCategory>, IBot
 
     public async Task<IEnumerable<BotChannelCategory>> GetForBotAsync(int botId)
     {
-        // 分类已全局化：兼容旧模块（忽略 botId）
-        return await GetAllOrderedAsync();
+        if (botId <= 0)
+            return Array.Empty<BotChannelCategory>();
+
+        // 分类已全局化：按“该 Bot 可管理的频道里出现过的分类”返回（更符合旧模块预期）
+        var categoryIds = await _context.BotChannels
+            .AsNoTracking()
+            .Where(ch => ch.Members.Any(m => m.BotId == botId) && ch.CategoryId != null)
+            .Select(ch => ch.CategoryId!.Value)
+            .Distinct()
+            .ToListAsync();
+
+        if (categoryIds.Count == 0)
+            return Array.Empty<BotChannelCategory>();
+
+        return await _dbSet
+            .AsNoTracking()
+            .Where(c => categoryIds.Contains(c.Id))
+            .OrderBy(c => c.Name)
+            .ToListAsync();
     }
 
     public async Task<IEnumerable<BotChannelCategory>> GetAllOrderedAsync()

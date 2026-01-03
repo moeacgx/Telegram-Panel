@@ -11,6 +11,10 @@ public class BotChannelRepository : Repository<BotChannel>, IBotChannelRepositor
 
     private IQueryable<BotChannel> BuildQuery(int botId, int? categoryId, bool broadcastOnly, string? search)
     {
+        // 兼容旧模块/旧 UI 约定：categoryId=0 表示“不筛选分类”
+        if (categoryId == 0)
+            categoryId = null;
+
         var query = _dbSet
             .AsNoTracking()
             .Include(x => x.Category)
@@ -49,6 +53,10 @@ public class BotChannelRepository : Repository<BotChannel>, IBotChannelRepositor
 
     public async Task<IEnumerable<BotChannel>> GetForBotAsync(int botId, int? categoryId = null)
     {
+        // 兼容旧模块/旧 UI 约定：categoryId=0 表示“不筛选分类”
+        if (categoryId == 0)
+            categoryId = null;
+
         var query = _dbSet
             .Include(x => x.Category)
             .Where(x => x.Members.Any(m => m.BotId == botId));
