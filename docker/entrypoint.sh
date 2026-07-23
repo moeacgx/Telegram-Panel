@@ -73,6 +73,24 @@ $right
 EOF
 }
 
+prefer_newer_image() {
+  IMAGE_VERSION="$(read_version_file "$IMAGE_VERSION_FILE")"
+  UPDATED_VERSION="$(read_version_file "$UPDATED_VERSION_FILE")"
+  if [ -n "$IMAGE_VERSION" ] && [ -n "$UPDATED_VERSION" ] \
+    && version_is_greater "$IMAGE_VERSION" "$UPDATED_VERSION"; then
+    OBSOLETE_APP_DIR="$DATA_DIR/app-obsolete-$(date +%Y%m%d%H%M%S)-$$"
+    if mv "$UPDATED_APP_DIR" "$OBSOLETE_APP_DIR"; then
+      APP_DIR="$DEFAULT_APP_DIR"
+      log "镜像版本 v$IMAGE_VERSION 高于持久化版本 v$UPDATED_VERSION，已归档旧版本并使用镜像目录"
+    else
+      APP_DIR="$DEFAULT_APP_DIR"
+      log "无法归档旧持久化版本，为避免阻塞镜像升级，使用镜像目录：$DEFAULT_APP_DIR"
+    fi
+    return 0
+  fi
+  return 1
+}
+
 mkdir -p "$DATA_DIR" "$DATA_DIR/sessions" "$DATA_DIR/logs"
 if [ ! -f "$DATA_DIR/appsettings.local.json" ]; then
   printf '{}' > "$DATA_DIR/appsettings.local.json"
@@ -84,21 +102,11 @@ if [ -f "$UPDATED_APP_DIR/$APP_ENTRY" ]; then
     APP_DIR="$DEFAULT_APP_DIR"
     log "当前为 image 更新模式，使用镜像目录：$DEFAULT_APP_DIR"
   elif [ -f "$UPDATE_CONFIRMED_MARKER" ]; then
-    IMAGE_VERSION="$(read_version_file "$IMAGE_VERSION_FILE")"
-    UPDATED_VERSION="$(read_version_file "$UPDATED_VERSION_FILE")"
     if [ "$UPDATE_MODE" = "binary" ]; then
       APP_DIR="$UPDATED_APP_DIR"
       log "当前为 binary 更新模式，使用持久化目录：$UPDATED_APP_DIR"
-    elif [ -n "$IMAGE_VERSION" ] && [ -n "$UPDATED_VERSION" ] \
-      && version_is_greater "$IMAGE_VERSION" "$UPDATED_VERSION"; then
-      OBSOLETE_APP_DIR="$DATA_DIR/app-obsolete-$(date +%Y%m%d%H%M%S)-$$"
-      if mv "$UPDATED_APP_DIR" "$OBSOLETE_APP_DIR"; then
-        APP_DIR="$DEFAULT_APP_DIR"
-        log "镜像版本 v$IMAGE_VERSION 高于持久化版本 v$UPDATED_VERSION，已归档旧版本并使用镜像目录"
-      else
-        APP_DIR="$DEFAULT_APP_DIR"
-        log "无法归档旧持久化版本，为避免阻塞镜像升级，使用镜像目录：$DEFAULT_APP_DIR"
-      fi
+    elif prefer_newer_image; then
+      :
     else
       APP_DIR="$UPDATED_APP_DIR"
     fi
@@ -127,9 +135,12 @@ if [ -f "$UPDATED_APP_DIR/$APP_ENTRY" ]; then
     fi
   elif [ -f "$UPDATED_APP_MARKER" ]; then
     # 兼容 v1.31.32 之前只写单个 marker 的更新器。
+    # 旧 marker 也必须参与镜像版本比较，否则旧的一键更新目录会永久遮住新镜像。
+    if prefer_newer_image; then
+      :
     # 若目标包已经携带新版入口脚本，说明它能在 StartAsync 后确认状态；
     # 这里先补记 attempted，连“程序集加载失败、尚未进入 Program”的情况也能在下次启动回滚。
-    if [ -f "$UPDATED_APP_DIR/self-update/entrypoint.sh" ]; then
+    elif [ -f "$UPDATED_APP_DIR/self-update/entrypoint.sh" ]; then
       if cp "$UPDATED_APP_MARKER" "$UPDATE_ATTEMPTED_MARKER"; then
         APP_DIR="$UPDATED_APP_DIR"
         log "已将旧版更新 marker 迁移为 attempted 状态"

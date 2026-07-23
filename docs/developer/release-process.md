@@ -49,6 +49,7 @@ ghcr.io/moeacgx/telegram-panel:dev-latest
 
 - 镜像版本更高时，优先启动镜像版本，并将旧的持久化程序目录归档为 `/data/app-obsolete-*`；
 - 持久化自更新版本更高时，继续优先使用已确认启动成功的自更新版本；
+- 该比较同时适用于新版确认标记和旧版 `.telegram-panel-self-update` 标记，避免历史自更新目录永久遮住新镜像；
 - 旧版本包没有 `version.txt` 时保持兼容行为，仍按启动确认标记选择目录。
 
 可通过 `.env` 的 `TP_UPDATE_MODE` 明确选择 `auto`、`image` 或 `binary`。该策略同时注入入口脚本和应用配置，避免 UI 显示的更新方式与容器实际启动目录不一致。
