@@ -37,13 +37,15 @@ ghcr.io/moeacgx/telegram-panel:dev-latest
 
 ### 3. 部署云端测试环境
 
-在 GitHub Actions 手动运行 `Deploy Telegram Panel`，选择 `dev` 分支，镜像使用对应 `dev-latest` 或带 SHA 的不可变标签。工作流会：
+在 GitHub Actions 手动运行 `Deploy Telegram Panel`，选择 `dev` 分支，镜像使用对应 `dev-latest` 或带 SHA 的不可变标签，并在 `update_mode` 中选择 `auto`、`image` 或 `binary`。工作流会：
 
 1. 在云端 `/home/docker/Telegram-Panel` 拉取 `dev`；
 2. 备份 `docker-data` 中的 SQLite 数据文件；
 3. 拉取镜像并保留 `docker-compose.warp.yml` 等 override；
 4. 重建 `telegram-panel` 容器；
 5. 检查容器状态、最近日志、`/ui/dashboard` 和 `/api/panel/auth/me`。
+
+部署脚本会把选择的更新模式写入 `/data/update-mode.txt`，并比较镜像 `/app/version.txt` 与 `/api/panel/auth/me` 的实际运行版本；两者不一致时部署失败，避免工作流表面成功但容器仍运行旧的持久化程序。
 
 入口脚本会比较镜像内的 `version.txt` 与持久化自更新目录 `/data/app-current/version.txt`：
 

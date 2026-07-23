@@ -7,6 +7,10 @@ on:
         description: Docker image to deploy
         required: true
         default: ghcr.io/moeacgx/telegram-panel:dev-latest
+      update_mode:
+        description: Update source mode written to the cloud data volume
+        required: true
+        default: auto
 
 jobs:
   deploy:
@@ -20,6 +24,7 @@ jobs:
           port: ${{ secrets.TELEGRAM_PANEL_PROD_PORT }}
           username: ${{ secrets.TELEGRAM_PANEL_PROD_USER }}
           password: ${{ secrets.TELEGRAM_PANEL_PROD_PASSWORD }}
+          envs: DEPLOY_UPDATE_MODE
           command_timeout: 15m
           script: |
             set -euo pipefail
@@ -28,6 +33,15 @@ jobs:
             DATA_DIR="$APP_DIR/docker-data"
             BACKUP_DIR="$APP_DIR/backups"
             IMAGE="${{ github.event.inputs.image }}"
+            UPDATE_MODE="${DEPLOY_UPDATE_MODE:-auto}"
+
+            case "$UPDATE_MODE" in
+              auto|image|binary) ;;
+              *)
+                echo "Unsupported update mode: $UPDATE_MODE" >&2
+                exit 1
+                ;;
+            esac
 
             test -d "$APP_DIR"
             test -f "$APP_DIR/docker-compose.yml"
@@ -60,6 +74,8 @@ jobs:
               printf 'TP_IMAGE=%s\n' "$IMAGE" > .env
             fi
 
+            printf '%s\n' "$UPDATE_MODE" > "$DATA_DIR/update-mode.txt"
+
             docker pull "$IMAGE"
             if [ -f docker-compose.warp.yml ]; then
               docker compose \
@@ -74,4 +90,12 @@ jobs:
             docker ps --filter name=telegram-panel --format 'container={{.Names}} image={{.Image}} status={{.Status}}'
             docker logs --tail 120 telegram-panel
             curl -fsS -I http://127.0.0.1:5000/ui/dashboard
-            curl -fsS http://127.0.0.1:5000/api/panel/auth/me
+            VERSION_RESPONSE="$(curl -fsS http://127.0.0.1:5000/api/panel/auth/me)"
+            printf '%s\n' "$VERSION_RESPONSE"
+            EXPECTED_VERSION="$(docker run --rm --entrypoint sh "$IMAGE" -c 'cat /app/version.txt')"
+            if ! printf '%s' "$VERSION_RESPONSE" | grep -Fq "\"version\":\"$EXPECTED_VERSION\""; then
+              echo "运行版本与镜像版本不一致：镜像=$EXPECTED_VERSION 响应=$VERSION_RESPONSE" >&2
+              exit 1
+            fi
+        env:
+          DEPLOY_UPDATE_MODE: ${{ github.event.inputs.update_mode }}
