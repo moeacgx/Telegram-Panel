@@ -600,15 +600,24 @@
           <el-table-column label="当前" width="64" align="center">
             <template #default="{ row }"><el-tag :type="row.current ? 'success' : 'info'" size="small">{{ row.current ? '是' : '否' }}</el-tag></template>
           </el-table-column>
-          <el-table-column label="应用/设备" min-width="260">
+          <el-table-column label="应用 / API / 设备" min-width="340">
             <template #default="{ row }">
-              <div class="device-title">{{ row.title }}</div>
-              <div class="cell-sub device-meta">ApiId={{ row.apiId }} {{ row.appVersion || '' }}</div>
+              <div class="device-title">{{ row.appName || 'UnknownApp' }} - {{ row.deviceDisplayName || row.deviceModel || 'UnknownDevice' }}</div>
+              <div class="device-api-line">
+                <el-tag size="small" effect="plain">ApiId={{ row.apiId }}</el-tag>
+                <el-tag size="small" type="info" effect="plain">{{ row.apiFamily || '未知 API' }}</el-tag>
+              </div>
+              <div class="cell-sub device-meta">应用/平台：{{ row.apiDisplayName || [row.appName, row.platform].filter(Boolean).join(' / ') || '-' }}</div>
+              <div class="cell-sub device-meta">版本：{{ row.appVersion || '-' }}</div>
+              <el-tooltip v-if="row.apiDescription" :content="row.apiDescription" placement="top" effect="light">
+                <el-tag class="device-help-tag" size="small" type="warning" effect="plain">说明</el-tag>
+              </el-tooltip>
             </template>
           </el-table-column>
-          <el-table-column label="系统" min-width="180">
+          <el-table-column label="设备画像 / 系统" min-width="220">
             <template #default="{ row }">
-              <span class="device-text">{{ [row.platform, row.systemVersion].filter(Boolean).join(' ') || '-' }}</span>
+              <div class="device-text">{{ row.deviceDisplayName || row.deviceModel || '-' }}</div>
+              <div class="cell-sub device-meta">{{ [row.platform, row.systemVersion].filter(Boolean).join(' ') || '-' }}</div>
             </template>
           </el-table-column>
           <el-table-column label="IP/地区" min-width="220">
@@ -2192,6 +2201,18 @@ onMounted(async () => {
   word-break: break-word;
   white-space: normal;
   line-height: 1.35;
+}
+
+.device-api-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 4px;
+}
+
+.device-help-tag {
+  margin-top: 5px;
+  cursor: help;
 }
 
 .message-item {

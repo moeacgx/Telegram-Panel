@@ -303,6 +303,10 @@ export interface TelegramAuthorization {
   createdAtUtc?: string | null
   lastActiveAtUtc?: string | null
   title: string
+  apiFamily: string
+  apiDisplayName: string
+  apiDescription: string
+  deviceDisplayName: string
 }
 
 export interface AccountChatMembership {
