@@ -457,7 +457,7 @@ public static class SessionDataConverter
             if (!File.Exists(absoluteSessionPath))
                 return TelethonStringSessionResult.Fail($"session 文件不存在：{absoluteSessionPath}");
 
-            var deviceProfile = TelegramClientDeviceProfile.ForStableKey($"{apiId}:{phone}:{absoluteSessionPath}");
+            var deviceProfile = TelegramClientDeviceProfile.ForStableKey(apiId, $"{apiId}:{phone}:{absoluteSessionPath}");
             string Config(string what) => what switch
             {
                 "api_id" => apiId.ToString(),
@@ -637,7 +637,7 @@ public static class SessionDataConverter
         ProxyConnectionOptions? proxy = null,
         CancellationToken cancellationToken = default)
     {
-        var deviceProfile = TelegramClientDeviceProfile.ForStableKey($"{apiId}:{phoneDigits}:{sessionPath}");
+        var deviceProfile = TelegramClientDeviceProfile.ForStableKey(apiId, $"{apiId}:{phoneDigits}:{sessionPath}");
         string Config(string what) => what switch
         {
             "api_id" => apiId.ToString(),

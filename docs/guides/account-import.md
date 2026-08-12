@@ -7,7 +7,7 @@
 - Telethon StringSession
 - TData 压缩包：`tdata` 目录（含 `key_datas` / `D877F783D5D3EF8C*`）
 
-适用版本：当前开发版起，导入页支持在上传前选择账号分类；Telegram 客户端连接会按账号稳定选择一组真实 Android 设备参数。
+适用版本：当前开发版起，导入页支持在上传前选择账号分类；Telegram 客户端连接会按账号和 API 类型稳定选择一组匹配的设备参数。
 
 ## 上传前先选择首次连接出口
 
@@ -53,9 +53,9 @@ Zip 导入，不适用于 Session 文件和 StringSession 导入。
 
 ## Telegram 设备参数
 
-面板创建或验证 WTelegram 客户端时，会按账号手机号、Session 路径或导入来源稳定选择一组 Android 客户端参数，包括 `app_version`、`device_model`、`system_version`、`system_lang_code` 和 `lang_code`。这样同一账号重复连接保持一致，不同账号不再全部显示为默认 Desktop / Linux 组合。
+面板创建或验证 WTelegram 客户端时，会按账号手机号、Session 路径或导入来源稳定选择一组客户端参数，包括 `app_version`、`device_model`、`system_version`、`system_lang_code` 和 `lang_code`。选择时会先按 `ApiId` 区分官方客户端族：`6` 使用 Telegram Android 参数，`2834` 使用 Telegram macOS 参数，`2040` 使用 Telegram Desktop 参数，其他未知 `ApiId` 默认使用 Android 参数。这样同一账号重复连接保持一致，不同账号不再全部显示为默认 Desktop / Linux 组合，也不会出现 “Telegram macOS + Android 系统” 这种混搭。
 
-成功判据是在账号详情的“已登录设备”中，当前授权显示为 Telegram Android 设备和 Android 系统版本。若 Telegram 仍显示旧设备，通常是既有授权未重新创建；重新登录或踢出旧授权后再次连接会使用新参数。回滚方式是恢复默认 WTelegram 配置回调并重新构建，不涉及现有 Session 文件格式迁移。
+成功判据是在账号详情的“已登录设备”中，当前授权的应用名称、设备型号和系统版本属于同一客户端族。若 Telegram 仍显示旧设备，通常是既有授权未重新创建；重新登录或踢出旧授权后再次连接会使用新参数。回滚方式是恢复默认 WTelegram 配置回调并重新构建，不涉及现有 Session 文件格式迁移。
 
 ## Zip 逐账号批量代理
 

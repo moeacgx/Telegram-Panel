@@ -646,7 +646,7 @@ public class AccountService : IAccountService
                                ? throw new InvalidOperationException(
                                    "全局代理路由未在首次连接前解析，已阻止降级为直连")
                                : null);
-        var deviceProfile = TelegramClientDeviceProfile.ForStableKey($"{apiId}:{sessionPath}");
+        var deviceProfile = TelegramClientDeviceProfile.ForStableKey(apiId, $"{apiId}:{sessionPath}");
 
         string Config(string what)
         {

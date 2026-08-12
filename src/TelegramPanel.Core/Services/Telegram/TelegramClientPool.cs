@@ -156,7 +156,7 @@ public class TelegramClientPool : ITelegramClientPool, IDisposable
 
             // 使用 config 回调设置 session 路径
             phoneNumber = NormalizePhone(phoneNumber);
-            var deviceProfile = TelegramClientDeviceProfile.ForStableKey($"{apiId}:{phoneNumber}:{sessionPath}");
+            var deviceProfile = TelegramClientDeviceProfile.ForStableKey(apiId, $"{apiId}:{phoneNumber}:{sessionPath}");
             string Config(string what)
             {
                 return what switch

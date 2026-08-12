@@ -105,7 +105,7 @@ public class SessionImporter : ISessionImporter, IDeferredSessionImporter
 
             replacement = AtomicSessionFileReplacement.Create(targetPath);
             File.Copy(filePath, replacement.StagingPath, overwrite: false);
-            var deviceProfile = TelegramClientDeviceProfile.ForStableKey($"{apiId}:{targetPath}");
+            var deviceProfile = TelegramClientDeviceProfile.ForStableKey(apiId, $"{apiId}:{targetPath}");
 
             // 使用 config 回调设置 session 路径
             string Config(string what) => what switch
@@ -264,7 +264,7 @@ public class SessionImporter : ISessionImporter, IDeferredSessionImporter
             var sessionPath = Path.Combine(sessionsPath, $"{Guid.NewGuid():N}.session");
             using var temporarySession = AtomicSessionFileReplacement.Create(sessionPath);
             await File.WriteAllBytesAsync(temporarySession.StagingPath, sessionData, cancellationToken);
-            var deviceProfile = TelegramClientDeviceProfile.ForStableKey($"{apiId}:{sessionString}");
+            var deviceProfile = TelegramClientDeviceProfile.ForStableKey(apiId, $"{apiId}:{sessionString}");
 
             // 使用 config 回调设置 session 路径
             string Config(string what) => what switch

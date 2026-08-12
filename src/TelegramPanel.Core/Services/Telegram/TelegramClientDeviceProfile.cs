@@ -17,14 +17,44 @@ public readonly record struct TelegramClientDeviceProfile(
         new("12.4.1", "vivo V2244A", "Android 14", "en-US", "en"),
     };
 
-    public static TelegramClientDeviceProfile ForStableKey(string stableKey)
+    private static readonly TelegramClientDeviceProfile[] MacOsProfiles =
+    {
+        new("10.15.4", "MacBook Pro", "macOS 14.6", "en-US", "en"),
+        new("10.15.4", "MacBook Air", "macOS 13.6", "en-US", "en"),
+        new("10.14.5", "iMac", "macOS 14.5", "en-US", "en"),
+    };
+
+    private static readonly TelegramClientDeviceProfile[] DesktopProfiles =
+    {
+        new("5.16.4 x64", "PC 64bit", "Windows 11", "en-US", "en"),
+        new("5.16.4 x64", "PC 64bit", "Windows 10", "en-US", "en"),
+        new("5.15.4 x64", "PC 64bit", "GNU/Linux 12 (bookworm)", "en-US", "en"),
+    };
+
+    public static TelegramClientDeviceProfile ForStableKey(int apiId, string stableKey)
+    {
+        var profiles = GetProfilesForApiId(apiId);
+        return PickProfile(profiles, stableKey);
+    }
+
+    public static TelegramClientDeviceProfile ForStableKey(string stableKey) => PickProfile(AndroidProfiles, stableKey);
+
+    private static TelegramClientDeviceProfile[] GetProfilesForApiId(int apiId) => apiId switch
+    {
+        6 => AndroidProfiles,
+        2834 => MacOsProfiles,
+        2040 => DesktopProfiles,
+        _ => AndroidProfiles
+    };
+
+    private static TelegramClientDeviceProfile PickProfile(TelegramClientDeviceProfile[] profiles, string stableKey)
     {
         if (string.IsNullOrWhiteSpace(stableKey))
             stableKey = "telegram-panel";
 
         var hash = StableHash(stableKey.Trim());
-        var index = hash % AndroidProfiles.Length;
-        return AndroidProfiles[index];
+        var index = hash % profiles.Length;
+        return profiles[index];
     }
 
     private static int StableHash(string value)
