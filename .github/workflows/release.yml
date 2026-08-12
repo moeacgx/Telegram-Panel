@@ -243,9 +243,12 @@ jobs:
                 sha="${item##*$'\t'}"
                 type="other"
                 title="$subject"
-                if [[ "$subject" =~ ^([a-zA-Z]+)(\([^)]*\))?!?:[[:space:]]*(.+)$ ]]; then
-                  raw_type="${BASH_REMATCH[1],,}"
-                  title="${BASH_REMATCH[3]}"
+                if [[ "$subject" == *:* ]]; then
+                  prefix="${subject%%:*}"
+                  title="${subject#*:}"
+                  raw_type="${prefix%%(*}"
+                  raw_type="${raw_type%!}"
+                  raw_type="${raw_type,,}"
                   case "$raw_type" in feat|fix|perf|docs|refactor|test|build|ci|release|chore) type="$raw_type" ;; *) type="other" ;; esac
                 fi
                 title="$(echo "$title" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
