@@ -66,6 +66,25 @@
         批量代理一对一仅适用于 Zip 导入；Session 文件和 StringSession 导入在此模式下不可用。
       </div>
     </section>
+    <section class="import-category-bar" aria-label="导入账号分类设置">
+      <div class="import-proxy-heading">
+        <span class="material-icons">category</span>
+        <div>
+          <div class="cell-main">导入后分类</div>
+          <div class="cell-sub">可选；成功导入后直接归类</div>
+        </div>
+      </div>
+      <el-select
+        v-model="importCategoryId"
+        clearable
+        class="category-select"
+        placeholder="未分类"
+        :disabled="busy"
+      >
+        <el-option label="未分类" :value="null" />
+        <el-option v-for="category in categories" :key="category.id" :label="category.name" :value="category.id" />
+      </el-select>
+    </section>
 
     <el-card shadow="never" class="page-card import-card import-card-primary">
       <template #header>
@@ -384,6 +403,7 @@ const proxyId = ref<number | null>(null)
 const telegramApiChecked = ref(false)
 const telegramApiConfigured = ref(true)
 const effectiveApiId = ref('')
+const importCategoryId = ref<number | null>(null)
 let importOperationToken = 0
 
 const busy = computed(() => importingZip.value || importingSessions.value || importingString.value)
@@ -530,6 +550,7 @@ async function importZip() {
   const form = new FormData()
   form.append('file', selectedZip)
   form.append('twoFactorPassword', selectedPassword)
+  if (importCategoryId.value) form.append('categoryId', String(importCategoryId.value))
   appendZipProxyFields(form, selectedStrategy, selectedProxyId, selectedProxyText)
 
   const operationToken = ++importOperationToken
@@ -577,6 +598,7 @@ async function importSessionFiles() {
   const selectedStrategy = proxyStrategy.value as AccountImportProxyStrategy
   const selectedProxyId = proxyId.value
   appendProxyFields(form, selectedStrategy, selectedProxyId)
+  if (importCategoryId.value) form.append('categoryId', String(importCategoryId.value))
 
   const operationToken = ++importOperationToken
   importingSessions.value = true
@@ -612,6 +634,7 @@ async function importStringSession() {
       sessionString: selectedSessionString,
       proxyStrategy: selectedStrategy,
       proxyId: selectedStrategy === 'existing' ? selectedProxyId : null,
+      categoryId: importCategoryId.value,
     })
     if (operationToken !== importOperationToken) return
     applyImportResponse(response)
@@ -705,7 +728,8 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
-.import-proxy-bar {
+.import-proxy-bar,
+.import-category-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -737,7 +761,8 @@ onBeforeUnmount(() => {
   flex: 0 1 auto;
 }
 
-.proxy-select {
+.proxy-select,
+.category-select {
   width: min(360px, 100%);
 }
 
@@ -886,13 +911,15 @@ onBeforeUnmount(() => {
     grid-template-columns: 1fr;
   }
 
-  .import-proxy-bar {
+  .import-proxy-bar,
+  .import-category-bar {
     align-items: flex-start;
     flex-direction: column;
   }
 
   .proxy-strategy,
-  .proxy-select {
+  .proxy-select,
+  .category-select {
     width: 100%;
     max-width: 100%;
   }

@@ -2,6 +2,8 @@
 
 > 更新前建议先备份：`./docker-data/telegram-panel.db` 与 `./docker-data/`（尤其是重要账号的 sessions）。
 
+也可以在 **系统设置 → 存储桶备份** 配置对象存储上传 URL，更新前点击“立即备份”把数据库、配置、后台凭据和 sessions 上传到 S3/R2/OSS/COS 等存储桶。
+
 ## 更新策略
 
 Docker 部署支持通过项目根目录 `.env` 的 `TP_UPDATE_MODE` 切换更新方式：
@@ -203,3 +205,10 @@ docker compose up -d
 ```
 
 如果 `git stash pop` 出现冲突，按提示手动合并 `docker-compose.yml` 后再继续。
+
+## Release 更新内容
+
+GitHub Release 会自动生成完整变更记录，并在 Release 正文保留“本次版本主要更新”“部署与更新”“应用内更新资产”等固定段落。面板左上角版本弹窗会读取最新 Release Notes 并展示；如果页面没有显示更新内容，先点击“立即检查”，再打开对应 GitHub Release 页面确认正文是否为空。
+
+成功判据是 Release 页面不为空，面板版本弹窗能看到“Release Notes”。若自动生成内容缺失，检查 `.github/workflows/release.yml` 中 `generate_release_notes: true` 是否仍启用，以及发布 tag 是否包含合并提交。回滚只需恢复旧 release workflow，不影响运行时数据。
+

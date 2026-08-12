@@ -11,6 +11,8 @@ import type {
   AccountProxyStrategy,
   AccountImportProxyStrategy,
   BatchChangeRecoveryEmailRequest,
+  BucketBackupResult,
+  BucketBackupSettings,
   CleanupWasteResult,
   AuthMe,
   BatchTask,
@@ -52,6 +54,7 @@ import type {
   ModuleOperationResult,
   SaveTextDictionaryRequest,
   SaveExternalApiRequest,
+  SaveBucketBackupSettings,
   ScheduledTask,
   AiSettings,
   AiTestResult,
@@ -324,6 +327,11 @@ export const panelApi = {
     api.post<OperationResult>('/settings/telegram-status', payload).then((r) => r.data),
   saveLoggingSettings: (payload: LoggingSettings) =>
     api.post<OperationResult>('/settings/logging', payload).then((r) => r.data),
+  bucketBackupSettings: () => api.get<BucketBackupSettings>('/settings/bucket-backup').then((r) => r.data),
+  saveBucketBackupSettings: (payload: SaveBucketBackupSettings) =>
+    api.post<OperationResult>('/settings/bucket-backup', payload).then((r) => r.data),
+  runBucketBackup: () =>
+    api.post<BucketBackupResult>('/settings/bucket-backup/run', {}, { timeout: 300_000 }).then((r) => r.data),
   clearCache: () =>
     api.post<OperationResult>('/settings/cache/clear').then((r) => r.data),
   changeAdminUsername: (payload: { currentPassword: string; newUsername: string }) =>

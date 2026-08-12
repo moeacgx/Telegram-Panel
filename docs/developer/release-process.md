@@ -93,6 +93,15 @@ Docker PR 工作流必须覆盖会改变镜像内容或运行版本的路径；�
 `/api/panel/auth/me` 和 tag 三者一致。回滚时删除尚未发布的错误 tag；已经公开的错误版本
 不得覆盖重发，应递增补丁版本重新发布。
 
+Release 正文由 `.github/workflows/release.yml` 的 `Generate Chinese release notes` 步骤生成，不再直接使用 GitHub 默认的英文 `What's Changed`。生成规则：
+
+- 正文顶部固定为 `## 本次版本主要更新`；变更列表在部署说明之前；
+- conventional commit 类型会映射到中文分类，如 `feat` → `新增功能`、`fix` → `修复问题`、`release` → `版本发布`；
+- 列表项会去掉 `fix:`、`feat:` 等英文前缀，只保留中文或可读标题与短 SHA；
+- 底部保留 GitHub compare 链接，标题为 `完整变更记录`。
+
+提交信息仍建议写中文摘要，例如 `fix: 修复导入分类选择不生效`。如果提交标题是英文，工作流只能去掉类型前缀，不能可靠翻译业务含义；发布前应在 PR squash 标题或提交标题中改成中文。
+
 ### 5. 清理分支
 
 合并确认后执行清理：

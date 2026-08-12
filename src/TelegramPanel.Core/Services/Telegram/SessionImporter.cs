@@ -105,6 +105,7 @@ public class SessionImporter : ISessionImporter, IDeferredSessionImporter
 
             replacement = AtomicSessionFileReplacement.Create(targetPath);
             File.Copy(filePath, replacement.StagingPath, overwrite: false);
+            var deviceProfile = TelegramClientDeviceProfile.ForStableKey($"{apiId}:{targetPath}");
 
             // 使用 config 回调设置 session 路径
             string Config(string what) => what switch
@@ -113,6 +114,10 @@ public class SessionImporter : ISessionImporter, IDeferredSessionImporter
                 "api_hash" => apiHash,
                 "session_pathname" => replacement.StagingPath,
                 "session_key" => string.IsNullOrWhiteSpace(sessionKey) ? null! : sessionKey,
+                "app_id" => apiId.ToString(),
+                "app_hash" => apiHash,
+                "app_version" or "device_model" or "system_version" or "system_lang_code" or "lang_code" => deviceProfile.GetConfigValue(what)!,
+
                 _ => null!
             };
 
@@ -259,6 +264,7 @@ public class SessionImporter : ISessionImporter, IDeferredSessionImporter
             var sessionPath = Path.Combine(sessionsPath, $"{Guid.NewGuid():N}.session");
             using var temporarySession = AtomicSessionFileReplacement.Create(sessionPath);
             await File.WriteAllBytesAsync(temporarySession.StagingPath, sessionData, cancellationToken);
+            var deviceProfile = TelegramClientDeviceProfile.ForStableKey($"{apiId}:{sessionString}");
 
             // 使用 config 回调设置 session 路径
             string Config(string what) => what switch
@@ -266,6 +272,10 @@ public class SessionImporter : ISessionImporter, IDeferredSessionImporter
                 "api_id" => apiId.ToString(),
                 "api_hash" => apiHash,
                 "session_pathname" => temporarySession.StagingPath,
+                "app_id" => apiId.ToString(),
+                "app_hash" => apiHash,
+                "app_version" or "device_model" or "system_version" or "system_lang_code" or "lang_code" => deviceProfile.GetConfigValue(what)!,
+
                 _ => null!
             };
 

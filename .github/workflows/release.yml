@@ -206,50 +206,100 @@ jobs:
       - build-windows
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout source at tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+          fetch-depth: 0
+
       - name: Download release assets
         uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
-      - name: Create GitHub Release with auto changelog
+      - name: Generate Chinese release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.prepare.outputs.tag }}"
+          PREVIOUS_TAG="$(git tag --sort=-v:refname | grep -E '^v[0-9]+' | grep -v "^${TAG}$" | head -n 1 || true)"
+          RANGE="$TAG"
+          if [[ -n "$PREVIOUS_TAG" ]]; then RANGE="${PREVIOUS_TAG}..${TAG}"; fi
+
+          {
+            echo "## 本次版本主要更新"
+            echo
+            mapfile -t COMMITS < <(git log --no-merges --format='%s%x09%h' "$RANGE" | sed '/^[[:space:]]*$/d' || true)
+            if [[ "${#COMMITS[@]}" -eq 0 ]]; then
+              echo "- 维护发布：同步构建产物与部署资产。"
+              echo
+            else
+              declare -A SECTIONS=( [feat]="✨ 新增功能" [fix]="🐛 修复问题" [perf]="⚡ 性能优化" [docs]="📚 文档更新" [refactor]="🧹 代码重构" [test]="✅ 测试改进" [build]="📦 构建发布" [ci]="🔧 CI/CD" [release]="🚀 版本发布" [chore]="🧩 其他变更" [other]="🧩 其他变更" )
+              TYPES=(feat fix perf docs refactor test build ci release chore other)
+              declare -A BUCKETS
+              for item in "${COMMITS[@]}"; do
+                subject="${item%$'\t'*}"
+                sha="${item##*$'\t'}"
+                type="other"
+                title="$subject"
+                if [[ "$subject" =~ ^([a-zA-Z]+)(\([^)]*\))?!?:[[:space:]]*(.+)$ ]]; then
+                  raw_type="${BASH_REMATCH[1],,}"
+                  title="${BASH_REMATCH[3]}"
+                  case "$raw_type" in feat|fix|perf|docs|refactor|test|build|ci|release|chore) type="$raw_type" ;; *) type="other" ;; esac
+                fi
+                title="$(echo "$title" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+                [[ -z "$title" ]] && title="$subject"
+                BUCKETS[$type]+=$'- '"$title"$' (`'"$sha"$'`)\n'
+              done
+              for type in "${TYPES[@]}"; do
+                if [[ -n "${BUCKETS[$type]:-}" ]]; then
+                  echo "### ${SECTIONS[$type]}"
+                  echo
+                  printf '%s' "${BUCKETS[$type]}"
+                  echo
+                fi
+              done
+            fi
+            if [[ -n "$PREVIOUS_TAG" ]]; then
+              echo "完整变更记录： https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...${TAG}"
+              echo
+            fi
+            echo "> [!WARNING]"
+            echo "> 如果当前账号列表已在旧版一键更新后变空，请勿直接再次点击一键更新。"
+            echo "> 先停止容器并备份宿主机 \`docker-data\` 与容器内 \`/app\`；本版可以恢复仍存在的旧库，"
+            echo "> 但无法重新生成已经被旧更新器或人工操作删除的文件。"
+            echo
+            echo "## 部署与更新"
+            echo
+            echo "### 1. Docker 镜像"
+            echo "拉取对应 tag 的镜像："
+            echo
+            echo '```bash'
+            echo "docker pull ghcr.io/${{ github.repository }}:${TAG}"
+            echo '```'
+            echo
+            echo "### 2. 面板内一键更新（Docker）"
+            echo "路径：\`左上角版本号 -> 版本信息弹窗 -> 一键更新并重启\`"
+            echo
+            echo "### 3. Windows 桌面版"
+            echo "下载 \`telegram-panel-${TAG}-windows-x64-setup.exe\` 安装包。"
+            echo
+            echo "## 应用内更新资产"
+            echo
+            echo "- \`telegram-panel-${TAG}-linux-x64.zip\`"
+            echo "- \`telegram-panel-${TAG}-linux-arm64.zip\`"
+            echo "- \`telegram-panel-${TAG}-windows-x64-setup.exe\`"
+            echo
+            echo "> 程序会自动匹配容器架构下载更新包，并部署到 \`/data/app-current\`。"
+          } > release-notes.md
+
+
+      - name: Create GitHub Release with Chinese changelog
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
-          generate_release_notes: true
-          append_body: true
           prerelease: ${{ contains(needs.prepare.outputs.tag, '-') }}
           files: |
             dist/*
-          body: |
-            ## 本次版本主要更新
-
-            > 下方会自动附加完整变更记录（Changelog），这里保留部署与更新入口说明。
-
-            > [!WARNING]
-            > 如果当前账号列表已在旧版一键更新后变空，请勿直接再次点击一键更新。
-            > 先停止容器并备份宿主机 `docker-data` 与容器内 `/app`；本版可以恢复仍存在的旧库，
-            > 但无法重新生成已经被旧更新器或人工操作删除的文件。
-
-            ## 部署与更新
-
-            ### 1. Docker 镜像
-            拉取对应 tag 的镜像：
-
-            ```bash
-            docker pull ghcr.io/${{ github.repository }}:${{ needs.prepare.outputs.tag }}
-            ```
-
-            ### 2. 面板内一键更新（Docker）
-            路径：`左上角版本号 -> 版本信息弹窗 -> 一键更新并重启`
-
-            ### 3. Windows 桌面版
-            下载 `telegram-panel-${{ needs.prepare.outputs.tag }}-windows-x64-setup.exe` 安装包。
-
-            ## 应用内更新资产
-
-            - `telegram-panel-${{ needs.prepare.outputs.tag }}-linux-x64.zip`
-            - `telegram-panel-${{ needs.prepare.outputs.tag }}-linux-arm64.zip`
-            - `telegram-panel-${{ needs.prepare.outputs.tag }}-windows-x64-setup.exe`
-
-            > 程序会自动匹配容器架构下载更新包，并部署到 `/data/app-current`。
+          body_path: release-notes.md

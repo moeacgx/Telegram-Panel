@@ -150,6 +150,9 @@ public static class PanelAdminApiEndpoints
         secured.MapPost("/settings/bot-auto-sync", SaveBotAutoSyncSettingsAsync);
         secured.MapPost("/settings/telegram-status", SaveTelegramStatusSettingsAsync);
         secured.MapPost("/settings/logging", SaveLoggingSettingsAsync);
+        secured.MapGet("/settings/bucket-backup", GetBucketBackupSettings);
+        secured.MapPost("/settings/bucket-backup", SaveBucketBackupSettingsAsync);
+        secured.MapPost("/settings/bucket-backup/run", RunBucketBackupAsync);
         secured.MapPost("/settings/cache/clear", ClearCacheAsync);
         secured.MapPost("/settings/username", ChangeAdminUsernameAsync);
         secured.MapPost("/settings/password", ChangeAdminPasswordAsync);
@@ -2881,6 +2884,43 @@ public static class PanelAdminApiEndpoints
         serilog["RetainedFileCountLimit"] = request.RetentionDays;
         await SaveLocalRootAsync(configuration, environment, root, cancellationToken);
         return Results.Ok(new OperationResultDto(true, "日志配置已保存"));
+    }
+
+    private static IResult GetBucketBackupSettings(BucketBackupService bucketBackup) =>
+        Results.Ok(bucketBackup.GetSettings());
+
+    private static async Task<IResult> SaveBucketBackupSettingsAsync(
+        SaveBucketBackupSettingsDto request,
+        IConfiguration configuration,
+        IWebHostEnvironment environment,
+        CancellationToken cancellationToken)
+    {
+        var method = string.Equals(request.Method, "POST", StringComparison.OrdinalIgnoreCase) ? "POST" : "PUT";
+        var uploadUrl = (request.UploadUrl ?? string.Empty).Trim();
+        if (request.Enabled)
+        {
+            if (!Uri.TryCreate(uploadUrl, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+                return Results.BadRequest(new OperationResultDto(false, "启用存储桶备份时必须填写有效 HTTP/HTTPS 上传 URL"));
+        }
+
+        var root = await LoadLocalConfigRootAsync(LocalConfigFile.ResolvePath(configuration, environment));
+        var backup = EnsureObject(root, "BucketBackup");
+        backup["Enabled"] = request.Enabled;
+        backup["UploadUrl"] = uploadUrl;
+        backup["Method"] = method;
+        backup["TimeoutSeconds"] = Math.Clamp(request.TimeoutSeconds <= 0 ? 300 : request.TimeoutSeconds, 30, 1800);
+        if (request.ClearAuthorizationHeader)
+            backup["AuthorizationHeader"] = string.Empty;
+        else if (!string.IsNullOrWhiteSpace(request.AuthorizationHeader))
+            backup["AuthorizationHeader"] = request.AuthorizationHeader.Trim();
+        await SaveLocalRootAsync(configuration, environment, root, cancellationToken);
+        return Results.Ok(new OperationResultDto(true, "存储桶备份配置已保存"));
+    }
+
+    private static async Task<IResult> RunBucketBackupAsync(BucketBackupService bucketBackup, CancellationToken cancellationToken)
+    {
+        var result = await bucketBackup.RunAsync(cancellationToken);
+        return result.Success ? Results.Ok(result) : Results.BadRequest(result);
     }
 
     private static async Task<IResult> ClearCacheAsync(ITelegramClientPool telegramClientPool)

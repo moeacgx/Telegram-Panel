@@ -156,6 +156,7 @@ public class TelegramClientPool : ITelegramClientPool, IDisposable
 
             // 使用 config 回调设置 session 路径
             phoneNumber = NormalizePhone(phoneNumber);
+            var deviceProfile = TelegramClientDeviceProfile.ForStableKey($"{apiId}:{phoneNumber}:{sessionPath}");
             string Config(string what)
             {
                 return what switch
@@ -166,6 +167,10 @@ public class TelegramClientPool : ITelegramClientPool, IDisposable
                     "session_key" => string.IsNullOrWhiteSpace(sessionKey) ? null! : sessionKey,
                     "phone_number" => string.IsNullOrWhiteSpace(phoneNumber) ? null! : phoneNumber,
                     "user_id" => userId.HasValue && userId.Value > 0 ? userId.Value.ToString() : null!,
+                    "app_id" => apiId.ToString(),
+                    "app_hash" => apiHash,
+                    "app_version" or "device_model" or "system_version" or "system_lang_code" or "lang_code" => deviceProfile.GetConfigValue(what)!,
+
 
                     _ => null!  // 使用 null! 抑制警告，这是 WTelegramClient 的预期行为
                 };

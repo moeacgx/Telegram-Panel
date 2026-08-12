@@ -267,6 +267,39 @@
           <el-button type="primary" :loading="saving.logging" @click="saveLogging">保存配置</el-button>
         </el-card>
 
+
+        <el-card shadow="never" class="page-card">
+          <template #header>存储桶备份</template>
+          <el-alert type="warning" :closable="false" show-icon class="mb-3">
+            <template #title>会打包数据库、appsettings.local.json、后台凭据和 sessions 后上传到指定 URL；URL 可包含 {date}、{timestamp}、{version}。</template>
+          </el-alert>
+          <el-form label-position="top">
+            <el-checkbox v-model="bucketBackup.enabled">启用在线备份</el-checkbox>
+            <el-form-item label="上传 URL" class="mt-3">
+              <el-input v-model="bucketBackup.uploadUrl" placeholder="https://bucket.example.com/backups/tp-{timestamp}.zip 或预签名 URL" />
+            </el-form-item>
+            <el-form-item label="HTTP 方法">
+              <el-select v-model="bucketBackup.method" class="full">
+                <el-option label="PUT（S3/R2/OSS 预签名常用）" value="PUT" />
+                <el-option label="POST" value="POST" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="Authorization Header（可选）">
+              <el-input v-model="bucketBackup.authorizationHeader" type="password" show-password placeholder="Bearer xxx；留空保持旧值" />
+              <div class="muted mt-2">当前{{ bucketBackup.hasAuthorizationHeader ? '已保存鉴权头' : '未保存鉴权头' }}；勾选清空会删除旧值。</div>
+            </el-form-item>
+            <el-checkbox v-model="bucketBackup.clearAuthorizationHeader">清空已保存 Authorization Header</el-checkbox>
+            <el-form-item label="超时（秒）" class="mt-3">
+              <el-input-number v-model="bucketBackup.timeoutSeconds" :min="30" :max="1800" />
+            </el-form-item>
+          </el-form>
+          <div class="button-row">
+            <el-button type="primary" :loading="saving.bucketBackup" @click="saveBucketBackup">保存备份配置</el-button>
+            <el-button type="success" plain :loading="saving.bucketBackupRun" @click="runBucketBackup">立即备份</el-button>
+          </div>
+        </el-card>
+
+
         <el-card shadow="never" class="page-card">
           <template #header>系统信息</template>
           <el-descriptions :column="1" border>
@@ -301,6 +334,7 @@ const sync = reactive({ autoSyncEnabled: false, intervalHours: 6 })
 const botAutoSync = reactive({ enabled: false, intervalSeconds: 2 })
 const telegramStatus = reactive({ enabled: true, intervalMinutes: 15, batchSize: 10, minAgeMinutes: 10, delayMs: 2000 })
 const logging = reactive({ enabled: false, level: 'Information', retentionDays: 30 })
+const bucketBackup = reactive({ enabled: false, uploadUrl: '', method: 'PUT' as 'PUT' | 'POST', authorizationHeader: '', clearAuthorizationHeader: false, hasAuthorizationHeader: false, timeoutSeconds: 300 })
 const timeZone = reactive({ timeZoneId: '', effectiveHint: '' as string | null })
 const presetModelsText = computed({
   get: () => ai.presetModels.join('\n'),
@@ -321,6 +355,8 @@ const saving = reactive({
   telegramStatus: false,
   timeZone: false,
   logging: false,
+  bucketBackup: false,
+  bucketBackupRun: false,
   cache: false,
 })
 
@@ -354,6 +390,8 @@ async function load() {
   assign(telegramStatus, data.telegramStatus)
   assign(logging, data.logging)
   assign(timeZone, data.timeZone)
+  const backup = await panelApi.bucketBackupSettings()
+  assign(bucketBackup, { ...backup, authorizationHeader: '', clearAuthorizationHeader: false })
 }
 
 async function run(key: keyof typeof saving, action: () => Promise<{ message?: string | null } | void>) {
@@ -442,6 +480,25 @@ function saveTimeZone() {
 
 function saveLogging() {
   return run('logging', () => panelApi.saveLoggingSettings({ ...logging }))
+}
+
+function saveBucketBackup() {
+  return run('bucketBackup', () => panelApi.saveBucketBackupSettings({
+    enabled: bucketBackup.enabled,
+    uploadUrl: bucketBackup.uploadUrl,
+    method: bucketBackup.method,
+    authorizationHeader: bucketBackup.authorizationHeader,
+    clearAuthorizationHeader: bucketBackup.clearAuthorizationHeader,
+    timeoutSeconds: bucketBackup.timeoutSeconds,
+  }))
+}
+
+async function runBucketBackup() {
+  await ElMessageBox.confirm('将立即打包并上传数据库、凭据和 Session，确认继续？', '立即存储桶备份', { type: 'warning' })
+  await run('bucketBackupRun', async () => {
+    const result = await panelApi.runBucketBackup()
+    return { message: result.message }
+  })
 }
 
 async function clearCache() {

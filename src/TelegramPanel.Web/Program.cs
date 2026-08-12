@@ -531,6 +531,9 @@ builder.Services.AddHttpClient(nameof(TelegramPanelAiService));
 builder.Services.AddScoped<TelegramPanel.Modules.ITelegramEmailCodeService, TelegramPanel.Web.Services.TelegramEmailCodeService>();
 builder.Services.AddModuleSystem(builder.Configuration, builder.Environment);
 builder.Services.AddSingleton<AppRestartService>();
+builder.Services.Configure<BucketBackupOptions>(builder.Configuration.GetSection("BucketBackup"));
+builder.Services.AddHttpClient(nameof(BucketBackupService));
+builder.Services.AddSingleton<BucketBackupService>();
 
 // 后台账号密码验证（Cookie 登录）
 builder.Services.Configure<AdminAuthOptions>(builder.Configuration.GetSection("AdminAuth"));

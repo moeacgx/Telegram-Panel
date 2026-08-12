@@ -200,7 +200,7 @@
       />
 
       <template v-if="versionInfo?.notes">
-        <div class="section-title mt-4">Latest Release Notes</div>
+        <div class="section-title mt-4">Release Notes / 更新内容</div>
         <pre class="release-notes">{{ versionInfo.notes }}</pre>
       </template>
 

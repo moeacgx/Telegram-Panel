@@ -64,6 +64,14 @@
 
 云端发布使用 `.github/workflows/deploy-telegram-panel.yml`，默认镜像为 `dev-latest`。部署结果必须至少包含：部署提交 SHA、镜像标签、容器状态、关键日志、`/ui/dashboard`、`/api/panel/auth/me` 和本次改动的验收结果。
 
+正式 Release 说明必须优先服务面板用户，不得直接依赖 GitHub 默认英文 `What's Changed` 作为主要内容。创建或修改发版相关提交、PR 标题、tag 发布说明和 `.github/workflows/release.yml` 时必须遵守：
+
+- Release 正文顶部必须是中文 `## 本次版本主要更新`，变更列表必须位于部署说明和资产说明之前。
+- conventional commit 前缀只用于分类，不得作为用户可见标题原样保留；`fix:`、`feat:`、`release:` 等必须在 Release 条目中剥离。
+- 提交标题、PR squash 标题和 release 类型提交必须写中文业务摘要，例如 `fix: 修复导入分类与设备参数问题`，不得写 `fix: resolve issue sweep` 这类英文泛化标题。
+- Release 分类标题必须中文化，例如 `修复问题`、`新增功能`、`版本发布`、`构建发布`、`文档更新`；完整对比链接标题使用 `完整变更记录`。
+- 如果发布前发现历史英文提交会进入 Release，必须在发版说明生成步骤中补写中文摘要，或在 squash/合并前改成中文标题；不得把“GitHub 会自动生成”作为豁免理由。
+
 ## 5. 交接要求
 
 最终汇报必须说明：改动文件、文档入口、已执行命令及结果、部署版本、云端验收结论、合并提交和已清理分支。任何未完成项、环境限制或风险都必须明确列出。

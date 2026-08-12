@@ -497,6 +497,31 @@ export interface LoggingSettings {
   retentionDays: number
 }
 
+export interface BucketBackupSettings {
+  enabled: boolean
+  uploadUrl: string
+  method: 'PUT' | 'POST'
+  hasAuthorizationHeader: boolean
+  timeoutSeconds: number
+}
+
+export interface SaveBucketBackupSettings {
+  enabled: boolean
+  uploadUrl?: string | null
+  method: 'PUT' | 'POST'
+  authorizationHeader?: string | null
+  clearAuthorizationHeader: boolean
+  timeoutSeconds: number
+}
+
+export interface BucketBackupResult {
+  success: boolean
+  message: string
+  url?: string | null
+  sizeBytes?: number | null
+  completedAtUtc: string
+}
+
 export interface TimeZoneSettings {
   timeZoneId: string
   effectiveHint?: string | null

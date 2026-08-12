@@ -457,6 +457,7 @@ public static class SessionDataConverter
             if (!File.Exists(absoluteSessionPath))
                 return TelethonStringSessionResult.Fail($"session 文件不存在：{absoluteSessionPath}");
 
+            var deviceProfile = TelegramClientDeviceProfile.ForStableKey($"{apiId}:{phone}:{absoluteSessionPath}");
             string Config(string what) => what switch
             {
                 "api_id" => apiId.ToString(),
@@ -465,6 +466,10 @@ public static class SessionDataConverter
                 "session_pathname" => absoluteSessionPath,
                 "phone_number" => NormalizePhone(phone),
                 "user_id" => userId.HasValue && userId.Value > 0 ? userId.Value.ToString() : null!,
+                "app_id" => apiId.ToString(),
+                "app_hash" => apiHash,
+                "app_version" or "device_model" or "system_version" or "system_lang_code" or "lang_code" => deviceProfile.GetConfigValue(what)!,
+
                 _ => null!
             };
 
@@ -632,6 +637,7 @@ public static class SessionDataConverter
         ProxyConnectionOptions? proxy = null,
         CancellationToken cancellationToken = default)
     {
+        var deviceProfile = TelegramClientDeviceProfile.ForStableKey($"{apiId}:{phoneDigits}:{sessionPath}");
         string Config(string what) => what switch
         {
             "api_id" => apiId.ToString(),
@@ -640,6 +646,9 @@ public static class SessionDataConverter
             "session_pathname" => sessionPath,
             "phone_number" => phoneDigits,
             "user_id" => userId?.ToString() ?? "-1",
+            "app_id" => apiId.ToString(),
+            "app_hash" => apiHash,
+            "app_version" or "device_model" or "system_version" or "system_lang_code" or "lang_code" => deviceProfile.GetConfigValue(what)!,
             _ => null!
         };
 

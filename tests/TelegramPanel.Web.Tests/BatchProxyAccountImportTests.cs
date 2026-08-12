@@ -136,6 +136,34 @@ public sealed class BatchProxyAccountImportTests
     }
 
     [Fact]
+    public async Task Zip导入时写入选择的账号分类()
+    {
+        await using var fixture = await BatchImportFixture.CreateAsync();
+        var category = new AccountCategory
+        {
+            Name = "导入分类",
+            Color = "#409eff",
+            Description = "import-test"
+        };
+        fixture.Db.AccountCategories.Add(category);
+        await fixture.Db.SaveChangesAsync();
+        await using var zip = CreateAccountZip(
+            ValidAccount("a/a.json", "8613800001251", 1251));
+
+        var results = await fixture.ImportService.ImportFromZipStreamAsync(
+            "categorized.zip",
+            zip,
+            categoryId: category.Id,
+            perAccountProxyText: "http://category.proxy.test:8125");
+
+        var result = Assert.Single(results);
+        Assert.True(result.Success, result.Error);
+        var account = await fixture.Db.Accounts.AsNoTracking()
+            .SingleAsync(x => x.Phone == "8613800001251");
+        Assert.Equal(category.Id, account.CategoryId);
+    }
+
+    [Fact]
     public async Task 中间账号失败时后续账号仍使用原代理槽位()
     {
         await using var fixture = await BatchImportFixture.CreateAsync();

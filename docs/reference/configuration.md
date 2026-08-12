@@ -81,7 +81,11 @@ Docker 下常用环境变量（见 `docker-compose.yml`）：
 - `Telegram__WebhookBaseUrl`：Webhook 公网 HTTPS 地址
 - `Telegram__WebhookSecretToken`：Webhook 验证密钥
 - `Telegram__MaxRetries`：批量 Telegram 操作的最大自动重试次数，`0` 表示关闭，范围 `1-5`。
-
+- `BucketBackup__Enabled`：启用存储桶在线备份，默认关闭
+- `BucketBackup__UploadUrl`：备份 ZIP 上传 URL，支持 `{date}`、`{timestamp}`、`{version}` 占位符，可填写 S3/R2/OSS/COS 预签名 URL
+- `BucketBackup__Method`：上传 HTTP 方法，支持 `PUT`（默认）或 `POST`
+- `BucketBackup__AuthorizationHeader`：可选 Authorization 请求头；敏感值不会在 UI 回显
+- `BucketBackup__TimeoutSeconds`：上传超时，范围 30-1800 秒，默认 300
 
 ### Telegram API 配置池
 
@@ -159,6 +163,21 @@ Docker 下常用环境变量（见 `docker-compose.yml`）：
 `auto` 需要镜像内存在 `/app/version.txt` 才能比较版本。若旧的一键更新目录缺少
 `version.txt`，会将其视为未知旧版本，归档到 `/data/app-obsolete-*` 并使用有版本号的镜像。
 修改 `TP_UPDATE_MODE` 或 `TP_IMAGE` 后，需要执行 `docker compose up -d --force-recreate`。
+
+
+### 存储桶在线备份
+
+系统设置里的“存储桶备份”会把当前 SQLite 数据库、WAL/SHM、`appsettings.local.json`、`admin_auth.json` 和 `sessions/` 打成 ZIP，然后上传到配置的 URL。适用于 S3、Cloudflare R2、阿里云 OSS、腾讯云 COS 等支持预签名 URL 或自定义 Authorization Header 的对象存储。
+
+推荐使用预签名 `PUT` URL，并在 URL 中加入 `{timestamp}` 生成唯一对象名，例如：
+
+```text
+https://bucket.example.com/telegram-panel/tp-{timestamp}.zip?X-Amz-Signature=...
+```
+
+前置条件是对象存储 URL 在面板容器内可访问，且签名允许对应 HTTP 方法上传 `application/zip`。成功判据是系统设置点击“立即备份”返回成功，存储桶出现 ZIP，解压后能看到 `telegram-panel.db` 和 `sessions/`。失败时先检查 URL 是否过期、方法是否匹配、容器 DNS/网络是否可达，以及 Authorization Header 是否需要清空后重填。回滚方式是关闭 `BucketBackup:Enabled` 或清空上传 URL；已上传对象需要在存储桶侧按生命周期或人工删除。
+
+备份包包含账号 Session 和后台凭据，必须限制对象存储访问权限，不要把备份桶公开读。
 
 ## UI 保存到本地覆盖配置
 
