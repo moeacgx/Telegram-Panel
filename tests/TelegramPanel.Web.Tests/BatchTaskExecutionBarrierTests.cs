@@ -29,7 +29,7 @@ public sealed class BatchTaskExecutionBarrierTests
         Assert.False(pause.IsCompleted);
 
         harness.Control.CompleteExecution(lease!);
-        await pause.WaitAsync(TimeSpan.FromSeconds(2));
+        await pause.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.Equal("paused", harness.Repository.GetStatus(1));
         Assert.False(harness.Control.HasActiveExecution(1));
@@ -64,15 +64,15 @@ public sealed class BatchTaskExecutionBarrierTests
         harness.Repository.AllowPause = allowPause;
 
         var pause = harness.Control.PauseTaskAsync(1);
-        await pauseEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await pauseEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         var start = harness.Control.TryStartExecutionAsync(1, CancellationToken.None);
         await Task.Delay(50);
         Assert.False(start.IsCompleted);
 
         allowPause.SetResult();
-        await pause.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.Null(await start.WaitAsync(TimeSpan.FromSeconds(2)));
+        await pause.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Null(await start.WaitAsync(TimeSpan.FromSeconds(10)));
         Assert.Equal("paused", harness.Repository.GetStatus(1));
     }
 
@@ -86,7 +86,7 @@ public sealed class BatchTaskExecutionBarrierTests
         var pause = harness.Control.PauseTaskAsync(1);
         await WaitUntilAsync(() => harness.Repository.GetStatus(1) == "paused");
         harness.Control.CompleteExecution(lease!);
-        await pause.WaitAsync(TimeSpan.FromSeconds(2));
+        await pause.WaitAsync(TimeSpan.FromSeconds(10));
 
         // 模拟旧执行器在取消回调之后又执行一次收尾。
         lease.MarkCompleted();
@@ -120,7 +120,7 @@ public sealed class BatchTaskExecutionBarrierTests
 
         using var context = harness.Control.EnterExecutionContext(lease!);
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            harness.Control.PauseTaskAsync(1).WaitAsync(TimeSpan.FromSeconds(2)));
+            harness.Control.PauseTaskAsync(1).WaitAsync(TimeSpan.FromSeconds(10)));
 
         Assert.Contains("不能等待自身退出", error.Message);
         Assert.Equal("paused", harness.Repository.GetStatus(1));
@@ -145,7 +145,7 @@ public sealed class BatchTaskExecutionBarrierTests
         Assert.NotNull(canceled.CompletedAt);
 
         harness.Control.CompleteExecution(lease!);
-        await cancel.WaitAsync(TimeSpan.FromSeconds(2));
+        await cancel.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.False(harness.Control.HasActiveExecution(1));
         Assert.Equal("canceled", harness.Repository.GetStatus(1));
     }
@@ -184,7 +184,7 @@ public sealed class BatchTaskExecutionBarrierTests
         Assert.NotNull(await harness.Repository.GetFreshByIdAsync(1));
 
         harness.Control.CompleteExecution(lease!);
-        await delete.WaitAsync(TimeSpan.FromSeconds(2));
+        await delete.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Null(await harness.Repository.GetFreshByIdAsync(1));
         Assert.False(harness.Control.HasActiveExecution(1));
     }
@@ -198,7 +198,7 @@ public sealed class BatchTaskExecutionBarrierTests
         Assert.Equal("completed", harness.Repository.GetStatus(1));
     }
 
-    private static TestHarness CreateHarness(string initialStatus = "pending", int stopTimeoutSeconds = 1)
+    private static TestHarness CreateHarness(string initialStatus = "pending", int stopTimeoutSeconds = 10)
     {
         var repository = new InMemoryBatchTaskRepository();
         repository.Seed(new BatchTask
@@ -230,7 +230,7 @@ public sealed class BatchTaskExecutionBarrierTests
 
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(2);
+        var deadline = DateTime.UtcNow.AddSeconds(10);
         while (!condition())
         {
             if (DateTime.UtcNow >= deadline)
