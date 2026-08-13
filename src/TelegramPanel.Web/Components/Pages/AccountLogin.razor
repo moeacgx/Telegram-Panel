@@ -19,20 +19,20 @@
 
 <MudCard Class="mb-4">
     <MudCardHeader>
-        <MudText Typo="Typo.h6">登录首次 Telegram 连接出口</MudText>
+        <MudText Typo="Typo.h6">手动登录首次 Telegram 连接出口</MudText>
     </MudCardHeader>
     <MudCardContent>
         <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
-            必须在发送验证码之前明确选择。登录会话建立后会冻结出口，避免中途切换 IP。
+            必须先选择；发送验证码或生成二维码之前生效，登录期间不可切换。
         </MudText>
 
         <MudRadioGroup T="string" @bind-Value="proxyStrategy">
             <MudRadio T="string" Value="@("existing")" Color="Color.Primary" Disabled="@(logging || ProxyRouteLocked)">
                 已有代理
             </MudRadio>
-            <MudRadio T="string" Value="@("warp_per_account")" Color="Color.Primary"
-                      Disabled="@(logging || ProxyRouteLocked || !WarpAvailable)">
-                一键创建独立 WARP
+            <MudRadio T="string" Value="@("warp_pool")" Color="Color.Primary"
+                      Disabled="@(logging || ProxyRouteLocked || WarpPoolCount == 0)">
+                自动分配已有 WARP
             </MudRadio>
             <MudRadio T="string" Value="@("global")" Color="Color.Warning" Disabled="@(logging || ProxyRouteLocked)">
                 全局设置
@@ -57,7 +57,7 @@
             @if (proxyOptions.Count == 0)
             {
                 <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-3">
-                    当前没有已启用代理，请先到新版【代理管理】新增代理，或改选独立 WARP。
+                    当前没有已启用代理，请先到新版【代理管理】新增代理，或准备并启用已有 WARP。
                 </MudAlert>
             }
         }
@@ -71,7 +71,7 @@
         else if (string.IsNullOrWhiteSpace(proxyStrategy))
         {
             <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-3">
-                为防止发送验证码时使用面板直连 IP，请先明确选择已有代理或一键 WARP。
+                为防止首个 Telegram 请求使用面板直连 IP，请先明确选择已有代理或自动分配已有 WARP。
             </MudAlert>
         }
         else if (proxyStrategy == "direct")
@@ -86,10 +86,10 @@
                 Telegram 全局代理未配置或配置无效，已阻止登录，避免回退为直连。
             </MudAlert>
         }
-        else if (proxyStrategy == "warp_per_account" && !WarpAvailable)
+        else if (proxyStrategy == "warp_pool")
         {
-            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mt-3">
-                当前环境无法创建 WARP，请检查 WARP 配置和 Docker 状态。
+            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-3">
+                将按当前账号绑定数自动选择已有 WARP；不会创建新容器。当前已启用 @WarpPoolCount 个 WARP。
             </MudAlert>
         }
     </MudCardContent>
@@ -211,7 +211,11 @@
     private string proxyStrategy = "";
     private int? selectedProxyId;
     private List<OutboundProxy> proxyOptions = new();
-    private WarpRuntimeStatus? warpStatus;
+    private int WarpPoolCount => proxyOptions.Count(x =>
+        x.IsEnabled
+        && x.Kind == OutboundProxyKinds.Warp
+        && x.WarpProfile?.DesiredEnabled == true
+        && x.WarpProfile?.Status == "active");
     private readonly CancellationTokenSource _pageCts = new();
 
     private string? username = "";
@@ -223,12 +227,7 @@
         currentStep != LoginStep.Phone
         || (accountId > 0 && LoginProxy.HasState(accountId));
 
-    private bool WarpAvailable => warpStatus is
-    {
-        PlatformSupported: true,
-        Enabled: true,
-        DockerAvailable: true
-    };
+
 
     private bool GlobalProxyConfigured
     {
@@ -250,13 +249,12 @@
         || (proxyStrategy == "existing"
             && (selectedProxyId is not > 0
                 || proxyOptions.All(x => x.Id != selectedProxyId.Value)))
-        || (proxyStrategy == "warp_per_account" && !WarpAvailable)
+        || (proxyStrategy == "warp_pool" && WarpPoolCount == 0)
         || (proxyStrategy == "global" && !GlobalProxyConfigured);
 
     protected override async Task OnInitializedAsync()
     {
         var proxiesTask = ProxyManagement.ListAsync(_pageCts.Token);
-        var warpStatusTask = ProxyManagement.GetWarpStatusAsync(_pageCts.Token);
 
         try
         {
@@ -274,18 +272,7 @@
             Snackbar.Add($"加载代理列表失败：{ex.Message}", Severity.Warning);
         }
 
-        try
-        {
-            warpStatus = await warpStatusTask;
-        }
-        catch (OperationCanceledException) when (_pageCts.IsCancellationRequested)
-        {
-            return;
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"检查 WARP 环境失败：{ex.Message}", Severity.Warning);
-        }
+
     }
 
     public async ValueTask DisposeAsync()
@@ -356,10 +343,10 @@
                 }
                 proxyId = selectedProxyId.Value;
                 return true;
-            case "warp_per_account":
-                if (!WarpAvailable)
+            case "warp_pool":
+                if (WarpPoolCount == 0)
                 {
-                    Snackbar.Add("当前环境无法创建 WARP，请检查 WARP 配置和 Docker 状态", Severity.Error);
+                    Snackbar.Add("没有可自动分配的已有 WARP，请先在代理管理中准备并启用 WARP", Severity.Error);
                     return false;
                 }
                 return true;

@@ -35,11 +35,11 @@ test('一键创建 WARP 支持默认协议和单次 HTTP SOCKS5 覆盖', () => {
   assert.match(proxiesSource, /protocol: warpDialog\.protocol/)
 })
 
-test('仍可创建 WARP 的页面明确提示独立容器的资源消耗', () => {
+test('WARP 创建与首次连接分配说明资源边界', () => {
   assert.match(proxiesSource, /每创建一个 WARP，都会启动一个独立 Docker 容器/)
   assert.match(proxiesSource, /持续占用服务器内存与少量 CPU/)
   assert.match(proxiesSource, /根据服务器资源控制创建数量/)
-  assert.match(accountLoginSource, /本次登录会创建一个独立 Docker 容器和数据卷/)
+  assert.match(accountLoginSource, /不会创建新容器/)
   assert.doesNotMatch(accountImportSource, /每个账号都会创建一个独立 Docker 容器和数据卷/)
   assert.match(accountImportSource, /不会创建新的 Docker 容器|不会创建新容器/)
 })

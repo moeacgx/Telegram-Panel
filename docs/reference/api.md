@@ -91,8 +91,7 @@ Telegram 的限流、权限和 Session 等业务错误不会重试，避免扩�
 `warp_pool` 只自动分配代理管理中已存在、已启用且状态为 `active` 的 WARP，按绑定账号数升序、
 代理 ID 升序选择。它不会创建容器或数据卷，也无需提供 `proxyId`。没有候选项或候选项都在
 维护/被其他首次连接流程占用时，请求会在连接 Telegram 前失败。历史参数
-`warp_per_account` 已从账号导入接口停用并会返回明确错误；手机号和二维码登录接口的策略
-合同不受此次调整影响。
+`warp_per_account` 已从账号导入和手动登录页面停用；账号管理接口仍可用于显式创建独立 WARP。
 
 Zip 专属的一对一代理模式使用以下字段：
 
@@ -187,8 +186,12 @@ proxyText: http://user-a:password-a@proxy-a.example.com:8080
 
 自 v1.31.44 起，`channel_group_private_create` 任务会在 `config.recent_failures`
 返回最近 20 条失败明细。字段包括 `time_utc`、`account_id`、`target_type`、
-`target` 和 `reason`。成功判据是任务的 `failed` 大于零时，详情接口和任务中心均能看到
-对应失败原因；该字段为空表示没有失败或运行的是尚未支持失败明细的旧版本。
+`target` 和 `reason`。自 v1.31.48 起，`user_chat_active` 会在
+`config.recent_failures` 返回最多 100 条账号活跃失败明细，字段包括 `time_utc`、
+`account_id`、`account`、`target` 和 `reason`；`user_join_subscribe` 会在
+`config.failures` 返回最多 200 条失败明细，字段包括 `accountId`、`target` 和 `reason`。
+成功判据是任务的 `failed` 大于零时，详情接口和任务中心均能看到对应失败账号、目标和原因；
+该字段为空表示没有失败或运行的是尚未支持失败明细的旧版本。
 
 失败原因来自当次执行，最长 500 字符。接口调用方不得把其中内容当作稳定错误码；需要自动化
 判断时应优先匹配 Telegram/RPC 的明确错误标识。回滚到 v1.31.43 或更早版本无需修改数据库，

@@ -20,13 +20,13 @@
         <div class="login-proxy-heading">
           <span class="material-icons">vpn_lock</span>
           <div>
-            <div class="cell-main">首次 Telegram 连接出口</div>
-            <div class="cell-sub">发送验证码或生成二维码之前生效，登录期间不可切换</div>
+            <div class="cell-main">手动登录首次连接出口</div>
+            <div class="cell-sub">必须先选择；发送验证码或生成二维码之前生效，登录期间不可切换</div>
           </div>
         </div>
         <el-radio-group v-model="proxyStrategy" class="login-proxy-options" :disabled="proxyRouteLocked">
           <el-radio-button value="existing">已有代理</el-radio-button>
-          <el-radio-button value="warp_per_account" :disabled="!warpAvailable">一键创建独立 WARP</el-radio-button>
+          <el-radio-button value="warp_pool" :disabled="availableWarpPoolCount === 0">自动分配已有 WARP</el-radio-button>
           <el-radio-button value="global">全局设置</el-radio-button>
           <el-radio-button value="direct">直连（确认风险）</el-radio-button>
         </el-radio-group>
@@ -47,22 +47,16 @@
           />
         </el-select>
         <div v-if="!proxyStrategy" class="login-proxy-notice warning">
-          必须先明确选择代理出口。推荐选择已有代理或为本账号一键创建独立 WARP。
+          为防止首个 Telegram 请求使用面板直连 IP，请明确选择已有代理或自动分配已有 WARP。
         </div>
         <div v-else-if="proxyStrategy === 'direct'" class="login-proxy-notice danger">
           已明确选择直连：Telegram 从发送验证码或生成二维码开始即可看到面板公网 IP。
         </div>
         <div v-else-if="proxyStrategy === 'global'" class="login-proxy-notice warning">
-          仅在已配置全局代理时可用；未配置会在首次连接前拒绝，请改选已有代理、WARP 或明确直连。
+          仅在已配置全局代理时可用；未配置会在首次连接前拒绝，请改选已有代理、自动分配已有 WARP 或明确直连。
         </div>
-        <div v-else-if="proxyStrategy === 'warp_per_account' && !warpAvailable" class="login-proxy-notice danger">
-          {{ warpStatus?.error || '当前环境无法创建 WARP，请检查 Docker WARP 配置。' }}
-        </div>
-        <div v-else-if="activeLoginId > 0" class="login-proxy-notice success">
-          当前登录会话的出口已锁定；验证码、二维码和二级密码验证都会继续使用同一路由。
-        </div>
-        <div v-else-if="proxyStrategy === 'warp_per_account'" class="login-proxy-notice warning">
-          本次登录会创建一个独立 Docker 容器和数据卷，并持续占用服务器内存与少量 CPU。
+        <div v-else-if="proxyStrategy === 'warp_pool'" class="login-proxy-notice warning">
+          将按当前账号绑定数自动选择已有 WARP；不会创建新容器。当前已启用 {{ availableWarpPoolCount }} 个 WARP。
         </div>
       </section>
 
@@ -329,7 +323,6 @@ import type {
   AccountProxyStrategy,
   AccountQrLoginResponse,
   OutboundProxy,
-  WarpRuntimeStatus,
 } from '@/api/types'
 
 type LoginStep = 'phone' | 'code' | 'password' | 'done'
@@ -364,7 +357,6 @@ const phonePasswordSource = ref('')
 const savePhonePasswordToSystem = ref(false)
 const saveQrPasswordToSystem = ref(false)
 const proxies = ref<OutboundProxy[]>([])
-const warpStatus = ref<WarpRuntimeStatus | null>(null)
 const proxyStrategy = ref<AccountProxyStrategy | ''>('')
 const proxyId = ref<number | null>(null)
 let qrTimer: number | undefined
@@ -376,15 +368,15 @@ const modeOptions = [
 
 const activeLoginId = computed(() => (loginMode.value === 'qr' ? qrLoginId.value : loginId.value))
 const hasActiveLoginSession = computed(() => loginId.value > 0 || qrLoginId.value > 0)
-const warpAvailable = computed(() => Boolean(
-  warpStatus.value?.platformSupported
-  && warpStatus.value.enabled
-  && warpStatus.value.dockerAvailable,
-))
+const availableWarpPoolCount = computed(() => proxies.value.filter(
+  (proxy) => proxy.kind === 'warp'
+    && proxy.isEnabled
+    && proxy.warpRuntimeStatus === 'active',
+).length)
 const proxySelectionInvalid = computed(() =>
   !proxyStrategy.value
   || (proxyStrategy.value === 'existing' && !proxyId.value)
-  || (proxyStrategy.value === 'warp_per_account' && !warpAvailable.value),
+  || (proxyStrategy.value === 'warp_pool' && availableWarpPoolCount.value === 0),
 )
 const proxyRouteLocked = computed(() => logging.value || hasActiveLoginSession.value)
 
@@ -437,7 +429,7 @@ function ensureProxySelected() {
   if (!proxyStrategy.value) {
     ElMessage.warning('请先明确选择本次登录首次连接使用的代理方式')
   } else {
-    ElMessage.warning(proxyStrategy.value === 'warp_per_account' ? '当前环境无法创建 WARP' : '请选择已有代理')
+    ElMessage.warning(proxyStrategy.value === 'warp_pool' ? '当前没有可自动分配的已有 WARP' : '请选择已有代理')
   }
   return false
 }
@@ -451,13 +443,8 @@ function selectedProxyPayload(): { proxyStrategy: AccountProxyStrategy; proxyId:
 }
 
 async function loadLoginProxyOptions() {
-  const [proxyResult, warpResult] = await Promise.allSettled([
-    panelApi.proxies(),
-    panelApi.warpStatus(),
-  ])
-  proxies.value = proxyResult.status === 'fulfilled' ? proxyResult.value : []
-  warpStatus.value = warpResult.status === 'fulfilled' ? warpResult.value : null
-  if (!warpAvailable.value && proxyStrategy.value === 'warp_per_account') {
+  proxies.value = await panelApi.proxies()
+  if (availableWarpPoolCount.value === 0 && proxyStrategy.value === 'warp_pool') {
     proxyStrategy.value = ''
     proxyId.value = null
   }

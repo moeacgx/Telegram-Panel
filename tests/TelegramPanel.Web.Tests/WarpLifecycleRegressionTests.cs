@@ -561,6 +561,7 @@ public sealed class WarpLifecycleRegressionTests
         Assert.True(loginStates.TryAdd(new AccountLoginProxyState(
             123,
             new AccountProxyBindingInput("existing", proxy.Id),
+            "existing",
             new AccountProxyResolution(frozenProxy, false),
             null,
             null,

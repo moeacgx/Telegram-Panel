@@ -4,6 +4,59 @@
 
 也可以在 **系统设置 → 存储桶备份** 配置对象存储上传 URL，更新前点击“立即备份”把数据库、配置、后台凭据和 sessions 上传到 S3/R2/OSS/COS 等存储桶。
 
+<a id="bucket-backup-restore"></a>
+
+## 从存储桶备份恢复
+
+当前后台面板只提供“立即备份”，不提供运行中导入备份恢复入口。恢复必须停机执行，避免 SQLite 连接、WAL/SHM 和账号 Session 文件在运行中被覆盖。
+
+以下示例假设 Docker 项目目录下的 `docker-data/` 挂载到容器 `/data`；如果你的部署使用自定义数据目录，请把命令中的 `docker-data` 替换为实际持久化目录。
+
+1. 从 S3/R2/OSS/COS 下载备份 ZIP 到服务器，先确认里面至少包含 `telegram-panel.db` 和 `sessions/`：
+
+   ```bash
+   unzip -l /path/to/telegram-panel-backup.zip | sed -n '1,80p'
+   ```
+
+2. 停止面板，并在恢复前保留当前数据快照：
+
+   ```bash
+   docker compose stop telegram-panel
+   ts=$(date +%Y%m%d%H%M%S)
+   cp -a docker-data "docker-data.before-restore-$ts"
+   mkdir -p "/tmp/telegram-panel-restore-$ts"
+   unzip /path/to/telegram-panel-backup.zip -d "/tmp/telegram-panel-restore-$ts"
+   ```
+
+3. 用备份内容替换数据文件。恢复数据库时必须同时处理 WAL/SHM：先删除当前 WAL/SHM，再按备份包实际存在的文件复制，避免旧 WAL 套到新数据库上。
+
+   ```bash
+   restore="/tmp/telegram-panel-restore-$ts"
+
+   rm -f docker-data/telegram-panel.db docker-data/telegram-panel.db-wal docker-data/telegram-panel.db-shm
+   cp "$restore/telegram-panel.db" docker-data/telegram-panel.db
+   [ -f "$restore/telegram-panel.db-wal" ] && cp "$restore/telegram-panel.db-wal" docker-data/telegram-panel.db-wal
+   [ -f "$restore/telegram-panel.db-shm" ] && cp "$restore/telegram-panel.db-shm" docker-data/telegram-panel.db-shm
+
+   [ -f "$restore/appsettings.local.json" ] && cp "$restore/appsettings.local.json" docker-data/appsettings.local.json
+   [ -f "$restore/admin_auth.json" ] && cp "$restore/admin_auth.json" docker-data/admin_auth.json
+   if [ -d "$restore/sessions" ]; then
+     rm -rf docker-data/sessions
+     cp -a "$restore/sessions" docker-data/sessions
+   fi
+   ```
+
+4. 启动并验收：
+
+   ```bash
+   docker compose start telegram-panel
+   docker compose logs --tail=80 telegram-panel
+   ```
+
+   成功判据：容器正常启动，`/api/panel/auth/me` 可访问，后台能登录，账号列表存在，抽查账号 Session 可读取。若恢复后异常，停止容器，把 `docker-data.before-restore-$ts` 改回 `docker-data` 后再启动，即可回到恢复前状态。
+
+备份 ZIP 包含账号 Session 和后台凭据。下载、解压和临时目录都应只允许管理员访问；恢复完成后按需删除服务器上的 ZIP 和 `/tmp/telegram-panel-restore-*` 临时目录。
+
 ## 更新策略
 
 Docker 部署支持通过项目根目录 `.env` 的 `TP_UPDATE_MODE` 切换更新方式：

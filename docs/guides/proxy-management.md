@@ -23,8 +23,8 @@ Telegram Panel 按账号管理 Telegram 连接出口。导入、登录，以及�
 - **已有代理**：绑定代理管理中的 HTTP、SOCKS5、MTProxy、Resin 或外部 WireGuard WARP。
 - **外部 WireGuard WARP**：运营方在面板外运行 WireGuard/gost 等轻量出口，面板只保存
   它暴露出的 HTTP/SOCKS5 监听并绑定账号。
-- **独立 WARP**：登录或账号管理可按需创建并绑定受管 WARP 容器；账号导入只会自动分配
-  已有 WARP，不会按账号创建新容器。
+- **独立 WARP**：账号管理可按需创建并绑定受管 WARP 容器；账号导入和手动登录只会自动分配
+  已有 WARP，不会按账号或登录会话创建新容器。
 
 导入账号、手机号登录和二维码登录都会在第一条 Telegram 请求前要求选择路由。
 选定后，验证码发送、二维码轮询、2FA 验证和 Session 建立会使用同一出口；失败时不会

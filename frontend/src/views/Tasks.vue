@@ -1115,6 +1115,7 @@ function stripRuntimeFields(config: string) {
   if (!obj) return config
   delete obj.items
   delete obj.recent_failures
+  delete obj.failures
   return JSON.stringify(obj, null, 2)
 }
 
@@ -1126,6 +1127,8 @@ function buildReadableConfigDetails(taskType: string, config: string) {
   if (taskType === 'channel_group_publicize') return buildPublicizeDetails(obj)
   if (taskType === 'account_auto_sync') return buildAccountSyncDetails(obj)
   if (taskType === 'auto_change_login_email') return buildAutoLoginEmailDetails(obj)
+
+  if (taskType === 'user_join_subscribe') return buildUserJoinSubscribeDetails(obj)
 
   return buildGenericConfigDetails(obj)
 }
@@ -1201,6 +1204,29 @@ function buildAccountSyncDetails(obj: Record<string, any>) {
     lines.push(`同步结果: 频道 ${formatNumberValue(result.totalChannelsSynced, 0)}，群组 ${formatNumberValue(result.totalGroupsSynced, 0)}`)
   }
   if (Array.isArray(obj.failures) && obj.failures.length > 0) lines.push(`失败记录: ${obj.failures.length} 条`)
+  if (obj.error) lines.push(`错误: ${formatConfigValue(obj.error)}`)
+  return lines
+}
+
+function buildUserJoinSubscribeDetails(obj: Record<string, any>) {
+  const lines = [
+    `操作: ${obj.operation === 'leave' ? '退群/退订/停用 Bot' : '加群/订阅/启用 Bot'}`,
+    `账号数: ${Array.isArray(obj.accountIds) ? obj.accountIds.length : 0}`,
+    `目标数: ${Array.isArray(obj.links) ? obj.links.length : 0}`,
+    `间隔: ${formatDelaySeconds(Number(obj.delayMs || 0))} 秒`,
+  ]
+
+  if (Array.isArray(obj.failures) && obj.failures.length > 0) {
+    lines.push('', `失败记录: ${obj.failures.length} 项`)
+    lines.push(...obj.failures.slice(-80).map((item: any, index: number) => {
+      const accountId = Number(item?.accountId || item?.account_id || 0)
+      const target = String(item?.target || '').trim() || '-'
+      const reason = String(item?.reason || '').trim() || '失败'
+      return `${index + 1}. 账号 #${accountId || '-'} -> ${target}：${reason}`
+    }))
+    if (obj.failures.length > 80) lines.push(`... 仅展示最后 80 项（共 ${obj.failures.length} 项）`)
+  }
+
   if (obj.error) lines.push(`错误: ${formatConfigValue(obj.error)}`)
   return lines
 }
@@ -1453,17 +1479,21 @@ function buildUserChatActiveDetails(config: string) {
 
   const failures = Array.isArray(obj.recent_failures)
     ? obj.recent_failures
-        .map((item: any) => {
-          const account = String(item?.account || '').trim() || '-'
+        .map((item: any, index: number) => {
+          const accountId = Number(item?.account_id || item?.accountId || 0)
+          const account = String(item?.account || '').trim() || (accountId > 0 ? `账号 #${accountId}` : '账号 -')
           const target = String(item?.target || '').trim() || '-'
           const reason = String(item?.reason || '').trim() || '失败'
-          const time = formatTime(item?.time_utc || '', '')
-          return `${account} -> ${target}：${reason}${time ? `（${time}）` : ''}`
+          const time = formatTime(item?.time_utc || item?.timeUtc || '', '')
+          return `${index + 1}. ${account} -> ${target}：${reason}${time ? `（${time}）` : ''}`
         })
-        .slice(-20)
+        .slice(-80)
     : []
 
-  if (failures.length > 0) lines.push('', '最近失败:', ...failures)
+  if (failures.length > 0) {
+    lines.push('', `失败记录: ${obj.recent_failures.length} 项`, ...failures)
+    if (obj.recent_failures.length > 80) lines.push(`... 仅展示最后 80 项（共 ${obj.recent_failures.length} 项）`)
+  }
   return lines
 }
 

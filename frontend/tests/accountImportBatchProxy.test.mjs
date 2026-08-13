@@ -14,7 +14,7 @@ function sourceSection(startMarker, endMarker) {
 }
 
 test('逐账号批量代理仅扩展 Zip 导入策略', () => {
-  assert.match(typesSource, /export type AccountProxyStrategy = 'direct' \| 'global' \| 'existing' \| 'warp_per_account'/)
+  assert.match(typesSource, /export type AccountProxyStrategy = 'direct' \| 'global' \| 'existing' \| 'warp_per_account' \| 'warp_pool'/)
   assert.match(typesSource, /export type AccountImportProxyStrategy = Exclude<AccountProxyStrategy, 'warp_per_account'> \| 'warp_pool'/)
   assert.match(typesSource, /export type ZipImportProxyStrategy = AccountImportProxyStrategy \| 'proxy_per_account'/)
   assert.doesNotMatch(

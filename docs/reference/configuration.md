@@ -177,6 +177,8 @@ https://bucket.example.com/telegram-panel/tp-{timestamp}.zip?X-Amz-Signature=...
 
 前置条件是对象存储 URL 在面板容器内可访问，且签名允许对应 HTTP 方法上传 `application/zip`。成功判据是系统设置点击“立即备份”返回成功，存储桶出现 ZIP，解压后能看到 `telegram-panel.db` 和 `sessions/`。失败时先检查 URL 是否过期、方法是否匹配、容器 DNS/网络是否可达，以及 Authorization Header 是否需要清空后重填。回滚方式是关闭 `BucketBackup:Enabled` 或清空上传 URL；已上传对象需要在存储桶侧按生命周期或人工删除。
 
+当前后台面板不提供“导入备份恢复”入口，也不支持运行中覆盖数据。需要恢复时，先下载备份 ZIP，停机替换持久化数据目录，再重启验收；步骤见[从存储桶备份恢复](../getting-started/update.md#bucket-backup-restore)。
+
 备份包包含账号 Session 和后台凭据，必须限制对象存储访问权限，不要把备份桶公开读。
 
 ## UI 保存到本地覆盖配置

@@ -336,33 +336,38 @@ public sealed class ManualLoginProxyRoutingTests
     }
 
     [Fact]
-    public async Task 一键创建的WARP可作为已有代理贯穿首次登录和正式账号()
+    public async Task 自动分配已有WARP会选择空闲候选并绑定正式账号()
     {
         await using var fixture = await Fixture.CreateAsync();
-        var warp = await fixture.AddProxyAsync(OutboundProxyKinds.Warp);
+        var busyWarp = await fixture.AddActiveWarpProxyAsync("busy-warp");
+        var freeWarp = await fixture.AddActiveWarpProxyAsync("free-warp");
+        var busyState = await fixture.Coordinator.PrepareAsync(1004, "existing", busyWarp.Id);
+        Assert.Equal(busyWarp.Id, busyState.Resolution.Proxy?.ProxyId);
         var account = await fixture.AddInactiveAccountAsync();
 
         var state = await fixture.Coordinator.PrepareAsync(
-            1004,
-            "existing",
-            warp.Id);
+            1005,
+            "warp_pool",
+            null);
 
-        Assert.Equal(OutboundProxyKinds.Warp, state.Resolution.Proxy?.Kind);
-        await fixture.Coordinator.CompleteAsync(1004, account.Id);
+        Assert.Equal("warp_pool", state.FrozenStrategy);
+        Assert.Equal(freeWarp.Id, state.Resolution.Proxy?.ProxyId);
+        await fixture.Coordinator.CompleteAsync(1005, account.Id);
 
-        var saved = await fixture.Db.Accounts.AsNoTracking().SingleAsync();
+        var saved = await fixture.Db.Accounts.AsNoTracking().SingleAsync(x => x.Id == account.Id);
         Assert.True(saved.IsActive);
-        Assert.Equal(warp.Id, saved.ProxyId);
+        Assert.Equal(freeWarp.Id, saved.ProxyId);
     }
 
     [Fact]
-    public async Task WARP环境不可用时不会登记登录会话或开始Telegram连接()
+    public async Task 无可分配已有WARP时不会登记登录会话或开始Telegram连接()
     {
         await using var fixture = await Fixture.CreateAsync();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            fixture.Coordinator.PrepareAsync(1008, "warp_per_account", null));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Coordinator.PrepareAsync(1008, "warp_pool", null));
 
+        Assert.Contains("没有可自动分配的已有 WARP", error.Message);
         Assert.False(fixture.Coordinator.HasState(1008));
         Assert.Empty(await fixture.Db.OutboundProxies.AsNoTracking()
             .Where(x => x.Kind == OutboundProxyKinds.Warp)
@@ -446,6 +451,7 @@ public sealed class ManualLoginProxyRoutingTests
         Assert.True(store.TryAdd(new AccountLoginProxyState(
             1601,
             new AccountProxyBindingInput("existing", proxy.ProxyId),
+            "existing",
             new AccountProxyResolution(proxy, false),
             null,
             null,
@@ -480,6 +486,7 @@ public sealed class ManualLoginProxyRoutingTests
         var state = new AccountLoginProxyState(
             1602,
             new AccountProxyBindingInput("existing", proxy.ProxyId),
+            "existing",
             new AccountProxyResolution(proxy, false),
             null,
             null,
@@ -632,6 +639,7 @@ public sealed class ManualLoginProxyRoutingTests
         var frozen = new AccountLoginProxyState(
             1701,
             new AccountProxyBindingInput("existing", proxy.ProxyId),
+            "warp_per_account",
             new AccountProxyResolution(proxy, false),
             proxy.ProxyId,
             null,
@@ -675,6 +683,7 @@ public sealed class ManualLoginProxyRoutingTests
         var original = new AccountLoginProxyState(
             1702,
             new AccountProxyBindingInput("direct"),
+            "direct",
             new AccountProxyResolution(null, false),
             null,
             null,
@@ -805,6 +814,26 @@ public sealed class ManualLoginProxyRoutingTests
                 UpdatedAtUtc = DateTime.UtcNow
             };
             Db.OutboundProxies.Add(proxy);
+            await Db.SaveChangesAsync();
+            return proxy;
+        }
+
+        public async Task<OutboundProxy> AddActiveWarpProxyAsync(string name)
+        {
+            var proxy = await AddProxyAsync(OutboundProxyKinds.Warp);
+            proxy.Name = name;
+            proxy.WarpProfile = new WarpProfile
+            {
+                ProfileId = $"profile-{name}",
+                RequestId = $"request-{name}",
+                ContainerName = $"container-{name}",
+                ContainerId = $"container-id-{name}",
+                VolumeName = $"volume-{name}",
+                HostPort = 42000 + proxy.Id,
+                Status = "active",
+                DesiredEnabled = true,
+                Proxy = proxy
+            };
             await Db.SaveChangesAsync();
             return proxy;
         }

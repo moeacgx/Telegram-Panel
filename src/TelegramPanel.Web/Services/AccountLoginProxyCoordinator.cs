@@ -6,6 +6,7 @@ using TelegramPanel.Core.Models;
 using TelegramPanel.Core.Services;
 using TelegramPanel.Core.Services.Proxy;
 using TelegramPanel.Core.Utils;
+using TelegramPanel.Data.Entities;
 
 namespace TelegramPanel.Web.Services;
 
@@ -16,6 +17,7 @@ namespace TelegramPanel.Web.Services;
 public sealed record AccountLoginProxyState(
     int LoginId,
     AccountProxyBindingInput Binding,
+    string FrozenStrategy,
     AccountProxyResolution Resolution,
     int? OwnedWarpProxyId,
     ResinLeaseControlSnapshot? ResinLease,
@@ -72,6 +74,16 @@ public sealed class AccountLoginProxyStateStore : IWarpProxyUsageGuard
 
         lock (_stateGate)
             return OwnsWarpProxyCore(proxyId);
+    }
+
+    public bool CanUseWarpProxy(int proxyId)
+    {
+        if (proxyId <= 0)
+            return false;
+
+        lock (_stateGate)
+            return !_maintenanceWarpProxyIds.Contains(proxyId)
+                   && !OwnsWarpProxyCore(proxyId);
     }
 
     public IDisposable? TryAcquireUsage(int proxyId)
@@ -521,10 +533,11 @@ public sealed class AccountLoginProxyCoordinator
         if (string.IsNullOrWhiteSpace(normalizedStrategy))
         {
             throw new ArgumentException(
-                "请先明确选择登录代理；可选择已有代理、一键创建 WARP，或明确选择直连");
+                "请先明确选择登录代理；可选择已有代理、自动分配已有 WARP，或明确选择直连");
         }
 
         AccountProxyBindingInput binding;
+        string frozenStrategy;
         AccountProxyResolution resolution;
         ResinLeaseControlSnapshot? resinLease = null;
         string? temporaryResinKey = null;
@@ -536,6 +549,7 @@ public sealed class AccountLoginProxyCoordinator
             case "direct":
                 binding = new AccountProxyBindingInput("direct");
                 resolution = new AccountProxyResolution(null, false);
+                frozenStrategy = "direct";
                 break;
 
             case "global":
@@ -577,6 +591,7 @@ public sealed class AccountLoginProxyCoordinator
                     binding = new AccountProxyBindingInput("global");
                     // 使用当前配置/数据库快照，而不是让临时登录 ID 再次动态解析全局设置。
                     resolution = new AccountProxyResolution(globalProxy, false);
+                    frozenStrategy = "global";
                     break;
                 }
 
@@ -616,54 +631,32 @@ public sealed class AccountLoginProxyCoordinator
 
                     binding = new AccountProxyBindingInput("existing", proxy.Id);
                     resolution = new AccountProxyResolution(connection, false);
+                    frozenStrategy = "existing";
                     break;
                 }
 
-            case "warp_per_account":
+            case "warp_pool":
                 {
-                    var requestId = $"{ManagedWarpRequestPrefix}{loginId}.{Guid.NewGuid():N}";
-                    var requestClaim = _temporaryWarpClaims.ClaimRequest(requestId);
-                    try
-                    {
-                        var warp = await _proxyManagement.CreateWarpAsync(
-                            $"WARP · 登录会话 {loginId}",
-                            requestId,
-                            cancellationToken);
-                        try
-                        {
-                            var connection = AccountProxyResolver.BuildConnectionOptions(
-                                warp,
-                                $"tg_login_{loginId}");
-                            binding = new AccountProxyBindingInput("existing", warp.Id);
-                            resolution = new AccountProxyResolution(connection, false);
-                            ownedWarpProxyId = warp.Id;
-                            warpRequestClaim = requestClaim;
-                        }
-                        catch
-                        {
-                            await DeleteOwnedWarpBestEffortAsync(
-                                warp.Id,
-                                CancellationToken.None);
-                            throw;
-                        }
-                    }
-                    catch
-                    {
-                        requestClaim.Dispose();
-                        throw;
-                    }
+                    var proxy = (await ListAvailableWarpPoolAsync(cancellationToken)).First();
+                    var connection = AccountProxyResolver.BuildConnectionOptions(
+                        proxy,
+                        $"tg_login_{loginId}");
 
+                    binding = new AccountProxyBindingInput("existing", proxy.Id);
+                    resolution = new AccountProxyResolution(connection, false);
+                    frozenStrategy = "warp_pool";
                     break;
                 }
 
             default:
                 throw new ArgumentException(
-                    "登录代理策略仅支持 direct、global、existing 或 warp_per_account");
+                    "登录代理策略仅支持 direct、global、existing 或 warp_pool");
         }
 
         var state = new AccountLoginProxyState(
             loginId,
             binding,
+            frozenStrategy,
             resolution,
             ownedWarpProxyId,
             resinLease,
@@ -687,6 +680,32 @@ public sealed class AccountLoginProxyCoordinator
         {
             warpRequestClaim?.Dispose();
         }
+    }
+
+    private async Task<IReadOnlyList<OutboundProxy>> ListAvailableWarpPoolAsync(
+        CancellationToken cancellationToken)
+    {
+        var proxies = await _proxyManagement.ListAsync(cancellationToken);
+        var candidates = proxies
+            .Where(x => x.IsEnabled
+                        && x.Kind == OutboundProxyKinds.Warp
+                        && x.WarpProfile is
+                        {
+                            DesiredEnabled: true,
+                            Status: "active"
+                        }
+                        && _store.CanUseWarpProxy(x.Id)
+                        && !_temporaryWarpClaims.OwnsRequest(x.WarpProfile.RequestId))
+            .OrderBy(x => x.Accounts.Count)
+            .ThenBy(x => x.Id)
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "没有可自动分配的已有 WARP；请先在代理管理中准备并启用 WARP，系统不会为登录创建新容器");
+        }
+
+        return candidates;
     }
 
     /// <summary>
@@ -974,9 +993,7 @@ public sealed class AccountLoginProxyCoordinator
         int? proxyId)
     {
         var requestedStrategy = (strategy ?? string.Empty).Trim().ToLowerInvariant();
-        var frozenStrategy = state.OwnedWarpProxyId is > 0
-            ? "warp_per_account"
-            : state.Binding.Strategy.Trim().ToLowerInvariant();
+        var frozenStrategy = state.FrozenStrategy.Trim().ToLowerInvariant();
         var proxyMatches = frozenStrategy == "existing"
             ? proxyId == state.Binding.ProxyId
             : proxyId is not > 0;
