@@ -230,10 +230,58 @@ jobs:
           {
             echo "## 本次版本主要更新"
             echo
-            NOTES_BLOCK="$(git log --no-merges --format='%B%n---END-COMMIT---' "$RANGE" | python3 -c 'exec("""import sys\ntext=sys.stdin.read()\nblocks=[]\nfor commit in text.split(\"---END-COMMIT---\"):\n    lines=commit.splitlines()\n    for i,line in enumerate(lines):\n        if line.strip()==\"## 本次版本主要更新\":\n            picked=[]\n            for body_line in lines[i+1:]:\n                if body_line.startswith(\"## \"):\n                    break\n                picked.append(body_line)\n            block=\"\\n\".join(picked).strip()\n            if block:\n                blocks.append(block)\n            break\nprint(\"\\n\\n\".join(blocks))\n""")')"
+            NOTES_BLOCK="$(
+              python3 - "$RANGE" <<'PY'
+          import subprocess
+          import sys
+
+          range_ref = sys.argv[1]
+          text = subprocess.check_output(
+              ["git", "log", "--no-merges", "--format=%B%n---END-COMMIT---", range_ref],
+              text=True,
+          )
+          section_icons = {
+              "新增功能": "✨ 新增功能",
+              "修复问题": "🐛 修复问题",
+              "性能优化": "⚡ 性能优化",
+              "文档更新": "📚 文档更新",
+              "代码重构": "🧹 代码重构",
+              "测试改进": "✅ 测试改进",
+              "构建发布": "📦 构建发布",
+              "CI/CD": "🔧 CI/CD",
+              "版本发布": "🚀 版本发布",
+              "其他变更": "🧩 其他变更",
+          }
+
+          def normalize_heading(line: str) -> str:
+              if not line.startswith("### "):
+                  return line
+              title = line[4:].strip()
+              if title in section_icons:
+                  return f"### {section_icons[title]}"
+              return line
+
+          blocks = []
+          for commit in text.split("---END-COMMIT---"):
+              lines = commit.splitlines()
+              for i, line in enumerate(lines):
+                  if line.strip() == "## 本次版本主要更新":
+                      picked = []
+                      for body_line in lines[i + 1:]:
+                          if body_line.startswith("## "):
+                              break
+                          picked.append(normalize_heading(body_line))
+                      block = "\n".join(picked).strip()
+                      if block:
+                          blocks.append(block)
+                      break
+          print("\n\n".join(blocks))
+          PY
+            )"
             if [[ -n "$NOTES_BLOCK" ]]; then
               printf '%s\n\n' "$NOTES_BLOCK"
             else
+              mapfile -t COMMITS < <(git log --no-merges --format='%s%x09%h' "$RANGE")
               declare -A SECTIONS=( [feat]="✨ 新增功能" [fix]="🐛 修复问题" [perf]="⚡ 性能优化" [docs]="📚 文档更新" [refactor]="🧹 代码重构" [test]="✅ 测试改进" [build]="📦 构建发布" [ci]="🔧 CI/CD" [release]="🚀 版本发布" [chore]="🧩 其他变更" [other]="🧩 其他变更" )
               TYPES=(feat fix perf docs refactor test build ci release chore other)
               declare -A BUCKETS
@@ -264,7 +312,7 @@ jobs:
               done
             fi
             if [[ -n "$PREVIOUS_TAG" ]]; then
-              echo "完整变更记录： https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...${TAG}"
+              echo "🔗 完整变更记录： https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...${TAG}"
               echo
             fi
             echo "> [!WARNING]"
@@ -272,22 +320,22 @@ jobs:
             echo "> 先停止容器并备份宿主机 \`docker-data\` 与容器内 \`/app\`；本版可以恢复仍存在的旧库，"
             echo "> 但无法重新生成已经被旧更新器或人工操作删除的文件。"
             echo
-            echo "## 部署与更新"
+            echo "## 🚀 部署与更新"
             echo
-            echo "### 1. Docker 镜像"
+            echo "### 🐳 1. Docker 镜像"
             echo "拉取对应 tag 的镜像："
             echo
             echo '```bash'
             echo "docker pull ghcr.io/${{ github.repository }}:${TAG}"
             echo '```'
             echo
-            echo "### 2. 面板内一键更新（Docker）"
+            echo "### 🔄 2. 面板内一键更新（Docker）"
             echo "路径：\`左上角版本号 -> 版本信息弹窗 -> 一键更新并重启\`"
             echo
-            echo "### 3. Windows 桌面版"
+            echo "### 🖥️ 3. Windows 桌面版"
             echo "下载 \`telegram-panel-${TAG}-windows-x64-setup.exe\` 安装包。"
             echo
-            echo "## 应用内更新资产"
+            echo "## 📦 应用内更新资产"
             echo
             echo "- \`telegram-panel-${TAG}-linux-x64.zip\`"
             echo "- \`telegram-panel-${TAG}-linux-arm64.zip\`"

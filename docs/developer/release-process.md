@@ -96,11 +96,11 @@ Docker PR 工作流必须覆盖会改变镜像内容或运行版本的路径；�
 Release 正文由 `.github/workflows/release.yml` 的 `Generate Chinese release notes` 步骤生成，不再直接使用 GitHub 默认的英文 `What's Changed`。生成规则：
 
 - 正文顶部固定为 `## 本次版本主要更新`；变更列表在部署说明之前；
-- 如果 release/squash 提交正文中包含 `## 本次版本主要更新` 小节，工作流会优先原样提取该小节内容，直到下一个二级标题为止；
+- 如果 release/squash 提交正文中包含 `## 本次版本主要更新` 小节，工作流会优先提取该小节内容，直到下一个二级标题为止，并为 `### 新增功能`、`### 修复问题`、`### 文档更新` 等已知分类标题补齐 emoji；
 - 如果提交正文没有该小节，工作流才回退到 commit 标题分类生成；
-- conventional commit 类型会映射到中文分类，如 `feat` → `新增功能`、`fix` → `修复问题`、`release` → `版本发布`；
+- conventional commit 类型会映射到带 emoji 的中文分类，如 `feat` → `✨ 新增功能`、`fix` → `🐛 修复问题`、`release` → `🚀 版本发布`；
 - 回退生成的列表项会去掉 `fix:`、`feat:` 等英文前缀，只保留中文或可读标题与短 SHA；
-- 底部保留 GitHub compare 链接，标题为 `完整变更记录`。
+- 底部保留 GitHub compare 链接，标题为 `🔗 完整变更记录`。
 
 发布 PR 的 squash 正文必须包含面向用户的 `## 本次版本主要更新` 小节，示例：
 
