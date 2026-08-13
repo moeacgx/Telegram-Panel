@@ -4,6 +4,8 @@
 
 也可以在 **系统设置 → 存储桶备份** 配置对象存储上传 URL，更新前点击“立即备份”把数据库、配置、后台凭据和 sessions 上传到 S3/R2/OSS/COS 等存储桶。
 
+Cloudflare R2 预签名 `PUT` URL 若返回 `Missing x-amz-content-sha256`，升级到包含该修复的版本后重试；面板会对 R2 上传自动发送 `x-amz-content-sha256: UNSIGNED-PAYLOAD`。
+
 <a id="bucket-backup-restore"></a>
 
 ## 从存储桶备份恢复

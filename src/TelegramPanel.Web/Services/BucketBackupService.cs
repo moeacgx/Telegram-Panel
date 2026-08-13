@@ -12,6 +12,12 @@ public sealed class BucketBackupOptions
     public int TimeoutSeconds { get; set; } = 300;
 }
 
+internal static class BucketBackupS3Headers
+{
+    public const string ContentSha256 = "x-amz-content-sha256";
+    public const string UnsignedPayload = "UNSIGNED-PAYLOAD";
+}
+
 public sealed record BucketBackupSettingsDto(bool Enabled, string UploadUrl, string Method, bool HasAuthorizationHeader, int TimeoutSeconds);
 public sealed record SaveBucketBackupSettingsDto(bool Enabled, string? UploadUrl, string? Method, string? AuthorizationHeader, bool ClearAuthorizationHeader, int TimeoutSeconds);
 public sealed record BucketBackupResultDto(bool Success, string Message, string? Url, long? SizeBytes, DateTimeOffset CompletedAtUtc);
@@ -77,6 +83,7 @@ public sealed class BucketBackupService
             request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/zip");
             if (!string.IsNullOrWhiteSpace(options.AuthorizationHeader))
                 request.Headers.TryAddWithoutValidation("Authorization", options.AuthorizationHeader.Trim());
+            AddS3ContentSha256HeaderIfNeeded(request, uri);
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(TimeSpan.FromSeconds(timeout));
@@ -162,6 +169,53 @@ public sealed class BucketBackupService
         string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase) ? "POST" : "PUT";
 
     private static int NormalizeTimeout(int timeoutSeconds) => Math.Clamp(timeoutSeconds <= 0 ? 300 : timeoutSeconds, 30, 1800);
+
+    internal static void AddS3ContentSha256HeaderIfNeeded(HttpRequestMessage request, Uri uri)
+    {
+        if (!string.Equals(request.Method.Method, "PUT", StringComparison.OrdinalIgnoreCase)
+            || request.Headers.Contains(BucketBackupS3Headers.ContentSha256))
+            return;
+
+        if (!HostLooksLikeCloudflareR2(uri.Host))
+            return;
+
+        var contentSha256 = TryGetQueryValue(uri, "X-Amz-Content-Sha256");
+        if (string.IsNullOrWhiteSpace(contentSha256))
+            contentSha256 = BucketBackupS3Headers.UnsignedPayload;
+
+        request.Headers.TryAddWithoutValidation(
+            BucketBackupS3Headers.ContentSha256,
+            contentSha256);
+    }
+
+    private static bool HostLooksLikeCloudflareR2(string host) =>
+        host.EndsWith(".r2.cloudflarestorage.com", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(host, "r2.cloudflarestorage.com", StringComparison.OrdinalIgnoreCase);
+
+
+    private static string? TryGetQueryValue(Uri uri, string name)
+    {
+        var query = uri.Query;
+        if (string.IsNullOrEmpty(query))
+            return null;
+
+        if (query[0] == '?')
+            query = query[1..];
+
+        foreach (var pair in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var separator = pair.IndexOf('=', StringComparison.Ordinal);
+            var rawName = separator >= 0 ? pair[..separator] : pair;
+            if (!string.Equals(Uri.UnescapeDataString(rawName), name, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            return separator >= 0
+                ? Uri.UnescapeDataString(pair[(separator + 1)..])
+                : string.Empty;
+        }
+
+        return null;
+    }
 
     private static BucketBackupResultDto Fail(string message) => new(false, message, null, null, DateTimeOffset.UtcNow);
 
