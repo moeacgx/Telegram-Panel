@@ -2,8 +2,11 @@
 @inject AccountManagementService AccountManagement
 @inject TelegramPanel.Core.Services.Telegram.AccountTelegramToolsService AccountTelegramTools
 @inject TelegramPanel.Core.Services.AccountRiskService RiskService
+@inject TemplateRenderingService TemplateRendering
+@inject DataDictionaryService DictionaryService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
+@using System.Text.RegularExpressions
 @using TelegramPanel.Data.Entities
 
 <MudDialog>
@@ -16,7 +19,12 @@
             <MudText Typo="Typo.subtitle2">账号数量：@accounts.Count</MudText>
 
             <MudTextField @bind-Value="bio" Label="Bio（简介）" Variant="Variant.Outlined" Lines="4"
-                          HelperText="将对所有选中账号写入相同 Bio" />
+                          HelperText="将对所有选中账号写入同一 Bio；支持 {time}、文本字典变量以及 \\n 或 /n 换行" />
+
+            @if (textDictionaryNames.Count > 0)
+            {
+                <MudText Typo="Typo.caption">可用文本变量：@string.Join("、", textDictionaryNames.Select(x => $"{{{x}}}"))</MudText>
+            }
 
             @if (running || results.Count > 0)
             {
@@ -71,9 +79,13 @@
 {
     [CascadingParameter] private MudDialogInstance MudDialog { get; set; } = default!;
     [Parameter] public IReadOnlyList<int> AccountIds { get; set; } = Array.Empty<int>();
+    private static readonly Regex TemplateTokenRegex = new(@"\{(?<name>[a-zA-Z0-9_]+)\}", RegexOptions.Compiled);
+
+    private readonly HashSet<string> supportedTextTokens = new(StringComparer.OrdinalIgnoreCase);
 
     private List<Account> accounts = new();
     private string bio = "";
+    private List<string> textDictionaryNames = new();
 
     private bool running;
     private int processed;
@@ -89,6 +101,17 @@
 
         var all = await AccountManagement.GetAllAccountsAsync();
         accounts = all.Where(a => ids.Contains(a.Id)).OrderBy(a => a.Id).ToList();
+
+        var dictionaries = await DictionaryService.GetAllAsync();
+        textDictionaryNames = dictionaries
+            .Where(x => x.IsEnabled && string.Equals(x.Type, DataDictionaryTypes.Text, StringComparison.OrdinalIgnoreCase))
+            .Select(x => x.Name)
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        supportedTextTokens.Clear();
+        foreach (var item in textDictionaryNames)
+            supportedTextTokens.Add(item);
     }
 
     private async Task Start()
@@ -99,6 +122,12 @@
         if (accounts.Count == 0)
         {
             Snackbar.Add("未选择账号", Severity.Warning);
+            return;
+        }
+
+        if (!ValidateTemplate(bio, out var templateError))
+        {
+            Snackbar.Add(templateError ?? "Bio 模板不合法", Severity.Warning);
             return;
         }
 
@@ -152,10 +181,24 @@
         {
             foreach (var a in accounts)
             {
+                string renderedBio;
+                try
+                {
+                    renderedBio = await TemplateRendering.RenderTextTemplateAsync(bio, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    processed++;
+                    failed++;
+                    results.Add(new ResultRow(a.DisplayPhone, false, $"Bio 模板解析失败：{ex.Message}"));
+                    StateHasChanged();
+                    continue;
+                }
+
                 var (ok, err) = await AccountTelegramTools.UpdateUserProfileAsync(
                     accountId: a.Id,
                     nickname: null,
-                    bio: bio,
+                    bio: renderedBio,
                     cancellationToken: CancellationToken.None);
 
                 processed++;
@@ -174,6 +217,25 @@
         {
             running = false;
         }
+    }
+
+    private bool ValidateTemplate(string? template, out string? error)
+    {
+        error = null;
+        foreach (Match token in TemplateTokenRegex.Matches(template ?? string.Empty))
+        {
+            var tokenName = token.Groups["name"].Value;
+            if (string.Equals(tokenName, "time", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (!supportedTextTokens.Contains(tokenName))
+            {
+                error = $"不支持的文本变量：{{{tokenName}}}。请使用 {{time}} 或已启用的文本字典变量。";
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private void Cancel() => MudDialog.Close();

@@ -635,7 +635,7 @@ public class BotTelegramService
 
         var delayMs = ReadInt(_configuration, "Telegram:DefaultDelayMs", 1000);
         if (delayMs < 0) delayMs = 0;
-        if (delayMs > 10000) delayMs = 10000;
+        if (delayMs > 60000) delayMs = 60000;
 
         var maxRetries = ReadInt(_configuration, "Telegram:MaxRetries", 1);
         if (maxRetries < 0) maxRetries = 0;

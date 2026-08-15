@@ -19,6 +19,12 @@ test('批量加群订阅任务展示失败账号目标和原因', () => {
   assert.match(tasksSource, /账号 #\$\{accountId \|\| '-'\} -> \$\{target\}：\$\{reason\}/)
 })
 
+test('历史任务优先展示批量任务名称并保留类型说明', () => {
+  assert.match(tasksSource, /function batchTaskName\(task: BatchTask\)/)
+  assert.match(tasksSource, /task\.name\?\.trim\(\) \|\| `\$\{taskName\(task\.taskType\)\} #\$\{task\.id\}`/)
+  assert.match(tasksSource, /<div class="cell-sub">类型：\{\{ taskName\(row\.taskType\) \}\}<\/div>/)
+})
+
 
 test('重新运行任务会清除旧的运行态失败记录', () => {
   assert.match(tasksSource, /config:\s*fullTask\.config\s*\?\s*stripRuntimeFields\(fullTask\.config\)\s*:\s*null/)

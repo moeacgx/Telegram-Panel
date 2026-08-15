@@ -133,7 +133,7 @@
             </MudCardHeader>
             <MudCardContent>
                 <MudNumericField @bind-Value="defaultDelay" Label="默认操作间隔 (毫秒)" Variant="Variant.Outlined"
-                                 Min="1000" Max="10000" HelperText="建议2000-5000ms" />
+                                 Min="1000" Max="60000" HelperText="建议2000-5000ms；最高60000ms" />
                 <MudNumericField @bind-Value="maxConcurrent" Label="最大并发任务数" Variant="Variant.Outlined" Class="mt-3"
                                  Min="1" Max="10" HelperText="同时执行的任务数量" />
                 <MudNumericField @bind-Value="historyRetentionLimit" Label="历史任务保留上限" Variant="Variant.Outlined" Class="mt-3"
@@ -732,9 +732,9 @@
 
     private async Task SaveBatchConfig()
     {
-        if (defaultDelay < 1000 || defaultDelay > 10000)
+        if (defaultDelay < 1000 || defaultDelay > 60000)
         {
-            Snackbar.Add("默认操作间隔范围应为 1000-10000ms", Severity.Error);
+            Snackbar.Add("默认操作间隔范围应为 1000-60000ms", Severity.Error);
             return;
         }
 

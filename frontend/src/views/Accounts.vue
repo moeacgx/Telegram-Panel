@@ -510,9 +510,12 @@
           </el-checkbox>
           <div v-if="textVariableText" class="field-help">可用文本变量：{{ textVariableText }}</div>
         </template>
-        <el-form-item v-else-if="batchProfile.mode === 'bio'" label="Bio（简介）">
-          <el-input v-model="batchProfile.value" type="textarea" :rows="4" placeholder="将对所有选中账号写入相同 Bio，留空可清空" />
-        </el-form-item>
+        <template v-else-if="batchProfile.mode === 'bio'">
+          <el-form-item label="Bio（简介）">
+            <el-input v-model="batchProfile.value" type="textarea" :rows="4" placeholder="支持 {time}、文本字典变量以及 \\n 或 /n 换行；留空可清空" />
+          </el-form-item>
+          <div v-if="textVariableText" class="field-help">可用文本变量：{{ textVariableText }}</div>
+        </template>
         <template v-else-if="batchProfile.mode === 'username'">
           <el-alert
             title="用户名模板不要带开头的 @，批量执行时建议使用文本字典提供不同值。"

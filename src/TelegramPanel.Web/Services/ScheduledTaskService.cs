@@ -156,6 +156,7 @@ public sealed class ScheduledTaskService
 
         var created = await _batchTaskManagement.CreateTaskAsync(new BatchTask
         {
+            Name = NormalizeBatchTaskName(scheduledTask.Name),
             TaskType = scheduledTask.TaskType,
             Total = Math.Max(0, scheduledTask.Total),
             Completed = 0,
@@ -171,6 +172,12 @@ public sealed class ScheduledTaskService
         await _scheduledTaskRepository.UpdateAsync(scheduledTask);
 
         return created;
+    }
+
+    private static string? NormalizeBatchTaskName(string? name)
+    {
+        var value = (name ?? string.Empty).Trim();
+        return value.Length == 0 ? null : value;
     }
 
     public string ValidateCronOrThrow(string expression)

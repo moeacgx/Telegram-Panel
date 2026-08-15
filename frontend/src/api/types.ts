@@ -657,6 +657,7 @@ export interface LoginEmailStatus {
 
 export interface BatchTask {
   id: number
+  name?: string | null
   taskType: string
   status: string
   total: number

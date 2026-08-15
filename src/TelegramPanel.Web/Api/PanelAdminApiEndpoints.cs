@@ -849,7 +849,7 @@ public static class PanelAdminApiEndpoints
             return Results.BadRequest(new OperationResultDto(false, "操作类型无效"));
 
         var results = new List<AccountOperationItemDto>();
-        var delayMs = Math.Clamp(request.DelayMs ?? 0, 0, 10000);
+        var delayMs = Math.Clamp(request.DelayMs ?? 0, 0, 60000);
         foreach (var id in ids)
         {
             var account = await accountManagement.GetAccountAsync(id);
@@ -1045,6 +1045,11 @@ public static class PanelAdminApiEndpoints
                 return Results.BadRequest(new OperationResultDto(false, usernameTemplateError ?? "用户名模板不合法"));
         }
 
+        var bioTemplate = request.Bio ?? string.Empty;
+        if (mode == "bio"
+            && !ValidateTextTemplates(new[] { bioTemplate }, textDictionaryNames, out var bioTemplateError))
+            return Results.BadRequest(new OperationResultDto(false, bioTemplateError ?? "Bio 模板不合法"));
+
         var index = 0;
         var usedNicknames = new Dictionary<string, int>(StringComparer.Ordinal);
         var generatedUsernames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1080,7 +1085,8 @@ public static class PanelAdminApiEndpoints
                         }
                     case "bio":
                         {
-                            var (ok, err) = await accountTools.UpdateUserProfileAsync(id, null, request.Bio ?? string.Empty, cancellationToken);
+                            var renderedBio = await templateRendering.RenderTextTemplateAsync(bioTemplate, cancellationToken);
+                            var (ok, err) = await accountTools.UpdateUserProfileAsync(id, null, renderedBio, cancellationToken);
                             results.Add(new AccountOperationItemDto(id, account?.DisplayPhone, ok, ok ? "Bio 已修改" : "修改失败", err));
                             break;
                         }
@@ -2784,8 +2790,8 @@ public static class PanelAdminApiEndpoints
 
     private static async Task<IResult> SaveBatchSettingsAsync(BatchSettingsDto request, IConfiguration configuration, IWebHostEnvironment environment, BatchTaskManagementService tasks, CancellationToken cancellationToken)
     {
-        if (request.DefaultDelayMs < 1000 || request.DefaultDelayMs > 10000)
-            return Results.BadRequest(new OperationResultDto(false, "默认操作间隔范围应为 1000-10000ms"));
+        if (request.DefaultDelayMs < 1000 || request.DefaultDelayMs > 60000)
+            return Results.BadRequest(new OperationResultDto(false, "默认操作间隔范围应为 1000-60000ms"));
         if (request.MaxConcurrent < 1 || request.MaxConcurrent > 10)
             return Results.BadRequest(new OperationResultDto(false, "最大并发任务数范围应为 1-10"));
         if (request.HistoryRetentionLimit < 0 || request.HistoryRetentionLimit > 5000)
@@ -5822,7 +5828,11 @@ public static class PanelAdminApiEndpoints
             auth.Region,
             auth.CreatedAtUtc,
             auth.LastActiveAtUtc,
-            auth.Title);
+            auth.Title,
+            auth.ApiFamily,
+            auth.ApiDisplayName,
+            auth.ApiDescription,
+            auth.DeviceDisplayName);
 
     private static AccountChannelMembershipDto ToDto(AccountChannel membership)
     {
@@ -5855,6 +5865,7 @@ public static class PanelAdminApiEndpoints
     private static BatchTaskDto ToDto(BatchTask task) =>
         new(
             task.Id,
+            task.Name,
             task.TaskType,
             task.Status,
             task.Total,
@@ -5868,6 +5879,7 @@ public static class PanelAdminApiEndpoints
     private static BatchTaskDto ToTaskListDto(BatchTask task) =>
         new(
             task.Id,
+            task.Name,
             task.TaskType,
             task.Status,
             task.Total,
@@ -7617,7 +7629,11 @@ public sealed record TelegramAuthorizationDto(
     string? Region,
     DateTime? CreatedAtUtc,
     DateTime? LastActiveAtUtc,
-    string Title);
+    string Title,
+    string ApiFamily,
+    string ApiDisplayName,
+    string ApiDescription,
+    string DeviceDisplayName);
 
 public sealed record AccountChannelMembershipDto(
     int Id,
@@ -7826,6 +7842,7 @@ public sealed record TelegramStatusDto(bool Ok, string Summary, string? Details,
 
 public sealed record BatchTaskDto(
     int Id,
+    string? Name,
     string TaskType,
     string Status,
     int Total,

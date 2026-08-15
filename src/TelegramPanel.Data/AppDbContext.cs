@@ -193,6 +193,7 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<BatchTask>(entity =>
         {
             entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).HasMaxLength(100);
             entity.Property(e => e.TaskType).IsRequired().HasMaxLength(50);
             entity.Property(e => e.Status).IsRequired().HasMaxLength(20);
 

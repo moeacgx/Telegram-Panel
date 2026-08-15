@@ -83,6 +83,7 @@ public sealed class ScheduledTaskBackgroundService : BackgroundService
 
             var task = new BatchTask
             {
+                Name = NormalizeBatchTaskName(scheduledTask.Name),
                 TaskType = scheduledTask.TaskType,
                 Total = Math.Max(0, scheduledTask.Total),
                 Completed = 0,
@@ -99,5 +100,11 @@ public sealed class ScheduledTaskBackgroundService : BackgroundService
                 created.TaskType);
             await scheduledTaskService.MarkTriggeredAsync(scheduledTask.Id, nowUtc, created.Id, cancellationToken);
         }
+    }
+
+    private static string? NormalizeBatchTaskName(string? name)
+    {
+        var value = (name ?? string.Empty).Trim();
+        return value.Length == 0 ? null : value;
     }
 }

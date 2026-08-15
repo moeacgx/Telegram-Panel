@@ -10,7 +10,7 @@
 - `Channels`：频道信息（主要是账号创建的频道）与分组/展示字段
 - `Groups`：群组信息（主要是账号创建的群组）
 - `Bots` / `BotChannels`：机器人与其管理的频道（如果启用机器人管理）
-- `BatchTasks`：批量任务（pending/running/completed/failed）
+- `BatchTasks`：批量任务（pending/running/completed/failed），`Name` 可保存计划任务触发后的用户可读名称
 - `TaskLogs`：任务日志（用于任务中心展示与排障）
 
 ## 常见问题

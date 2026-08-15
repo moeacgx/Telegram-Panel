@@ -74,7 +74,7 @@ public sealed class TemplateRenderingService
         template = template ?? string.Empty;
         var matches = TokenRegex.Matches(template);
         if (matches.Count == 0)
-            return template;
+            return NormalizeEscapedNewlines(template);
 
         var builder = new StringBuilder();
         var lastIndex = 0;
@@ -92,7 +92,14 @@ public sealed class TemplateRenderingService
         }
 
         builder.Append(template, lastIndex, template.Length - lastIndex);
-        return builder.ToString();
+        return NormalizeEscapedNewlines(builder.ToString());
+    }
+
+    public static string NormalizeEscapedNewlines(string? value)
+    {
+        return (value ?? string.Empty)
+            .Replace("\\n", "\n", StringComparison.Ordinal)
+            .Replace("/n", "\n", StringComparison.Ordinal);
     }
 
     public async Task<IReadOnlyList<string>> ResolveTextDictionaryValuesAsync(string tokenExpression, CancellationToken cancellationToken = default)
@@ -116,7 +123,7 @@ public sealed class TemplateRenderingService
             .Where(x => x.IsEnabled)
             .OrderBy(x => x.SortOrder)
             .ThenBy(x => x.Id)
-            .Select(x => (x.TextValue ?? string.Empty).Trim())
+            .Select(x => NormalizeEscapedNewlines((x.TextValue ?? string.Empty).Trim()))
             .Where(x => x.Length > 0)
             .ToList();
 

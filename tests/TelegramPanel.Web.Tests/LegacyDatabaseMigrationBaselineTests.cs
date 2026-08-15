@@ -37,6 +37,7 @@ public sealed class LegacyDatabaseMigrationBaselineTests
         Assert.True(await TableExistsAsync(connection, "OutboundProxies"));
         Assert.True(await ColumnExistsAsync(connection, "Accounts", "UseGlobalProxy"));
         Assert.True(await ColumnExistsAsync(connection, "ScheduledTasks", "Name"));
+        Assert.True(await ColumnExistsAsync(connection, "BatchTasks", "Name"));
     }
 
     [Fact]

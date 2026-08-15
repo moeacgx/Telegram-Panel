@@ -238,6 +238,10 @@ namespace TelegramPanel.Data.Migrations
                     b.Property<int>("Failed")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("Name")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime?>("StartedAt")
                         .HasColumnType("TEXT");
 

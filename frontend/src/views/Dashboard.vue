@@ -204,7 +204,7 @@ function displayStatus(task: BatchTask) {
 }
 
 function taskName(task: BatchTask) {
-  return `${fallbackTaskName(task.taskType)} #${task.id}`
+  return task.name?.trim() || `${fallbackTaskName(task.taskType)} #${task.id}`
 }
 
 function fallbackTaskName(type: string) {

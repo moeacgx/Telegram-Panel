@@ -45,8 +45,8 @@
       </div>
 
       <el-form-item label="操作间隔（毫秒）" class="mt-4">
-        <el-input-number v-model="delayMs" :min="0" :max="10000" :step="500" :disabled="submitting" />
-        <div class="field-help">建议设置 1500-4000ms，避免触发风控（会额外加少量随机抖动）。</div>
+        <el-input-number v-model="delayMs" :min="0" :max="60000" :step="500" :disabled="submitting" />
+        <div class="field-help">建议设置 1500-4000ms；最高 60000ms，账号风控较高时可调大。</div>
       </el-form-item>
 
       <div v-if="operation === 'leave'" class="muted">

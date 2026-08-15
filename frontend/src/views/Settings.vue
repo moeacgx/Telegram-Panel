@@ -136,8 +136,8 @@
           <template #header>批量操作设置</template>
           <el-form label-position="top">
             <el-form-item label="默认操作间隔（毫秒）">
-              <el-input-number v-model="batch.defaultDelayMs" :min="1000" :max="10000" :step="500" />
-              <div class="muted mt-2">建议 2000-5000ms。</div>
+              <el-input-number v-model="batch.defaultDelayMs" :min="1000" :max="60000" :step="500" />
+              <div class="muted mt-2">建议 2000-5000ms；最高 60000ms，用于降低批量操作频率。</div>
             </el-form-item>
             <el-form-item label="最大并发任务数">
               <el-input-number v-model="batch.maxConcurrent" :min="1" :max="10" />

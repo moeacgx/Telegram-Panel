@@ -131,7 +131,7 @@ public sealed class UserJoinSubscribeTaskHandler : IModuleTaskHandler
 
     private static async Task<bool> DelayAsync(IModuleTaskExecutionHost host, int delayMs, CancellationToken cancellationToken)
     {
-        delayMs = Math.Clamp(delayMs, 0, 10000);
+        delayMs = Math.Clamp(delayMs, 0, 60000);
         if (delayMs <= 0)
             return true;
 
@@ -196,7 +196,7 @@ public sealed class UserJoinSubscribeTaskHandler : IModuleTaskHandler
         config.Operation = string.Equals(config.Operation, UserJoinSubscribeOperations.Leave, StringComparison.OrdinalIgnoreCase)
             ? UserJoinSubscribeOperations.Leave
             : UserJoinSubscribeOperations.Join;
-        config.DelayMs = Math.Clamp(config.DelayMs, 0, 10000);
+        config.DelayMs = Math.Clamp(config.DelayMs, 0, 60000);
 
         if (config.AccountIds.Count == 0)
             throw new InvalidOperationException("任务缺少账号列表");

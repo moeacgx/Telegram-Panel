@@ -81,8 +81,11 @@
         <el-table-column label="归属" width="110">
           <template #default="{ row }"><el-tag size="small">{{ categoryName(taskCategory(row.taskType)) }}</el-tag></template>
         </el-table-column>
-        <el-table-column label="任务类型" min-width="260">
-          <template #default="{ row }">{{ taskName(row.taskType) }}</template>
+        <el-table-column label="任务名称" min-width="260">
+          <template #default="{ row }">
+            <div>{{ batchTaskName(row) }}</div>
+            <div class="cell-sub">类型：{{ taskName(row.taskType) }}</div>
+          </template>
         </el-table-column>
         <el-table-column label="状态" width="100">
           <template #default="{ row }">
@@ -138,8 +141,11 @@
         <el-table-column label="归属" width="110">
           <template #default="{ row }"><el-tag size="small">{{ categoryName(taskCategory(row.taskType)) }}</el-tag></template>
         </el-table-column>
-        <el-table-column label="任务类型" min-width="260">
-          <template #default="{ row }">{{ taskName(row.taskType) }}</template>
+        <el-table-column label="任务名称" min-width="260">
+          <template #default="{ row }">
+            <div>{{ batchTaskName(row) }}</div>
+            <div class="cell-sub">类型：{{ taskName(row.taskType) }}</div>
+          </template>
         </el-table-column>
         <el-table-column label="状态" width="100">
           <template #default="{ row }">
@@ -554,6 +560,10 @@ function taskName(type: string) {
 }
 
 function scheduledName(task: ScheduledTask) {
+  return task.name?.trim() || `${taskName(task.taskType)} #${task.id}`
+}
+
+function batchTaskName(task: BatchTask) {
   return task.name?.trim() || `${taskName(task.taskType)} #${task.id}`
 }
 
@@ -1030,6 +1040,7 @@ async function showTaskDetails(task: BatchTask) {
   task = fullTask
   const extraDetails = buildTaskExtraDetails(task)
   const lines = [
+    `任务名称: ${batchTaskName(task)}`,
     `任务类型: ${taskName(task.taskType)}`,
     `状态: ${statusName(displayStatus(task))}`,
     `总数: ${task.total}`,

@@ -207,6 +207,7 @@ public class BatchTaskRepository : Repository<BatchTask>, IBatchTaskRepository
     private static BatchTask ToListItem(BatchTask task) => new()
     {
         Id = task.Id,
+        Name = task.Name,
         TaskType = task.TaskType,
         Status = task.Status,
         Total = task.Total,

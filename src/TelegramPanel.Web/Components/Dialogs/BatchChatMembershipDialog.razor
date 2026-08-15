@@ -39,8 +39,8 @@
                 </MudText>
             }
 
-            <MudNumericField @bind-Value="delayMs" Label="操作间隔（毫秒）" Variant="Variant.Outlined" Min="0" Max="10000"
-                             HelperText="建议设置 1500-4000ms，避免触发风控（会额外加少量随机抖动）。" />
+            <MudNumericField @bind-Value="delayMs" Label="操作间隔（毫秒）" Variant="Variant.Outlined" Min="0" Max="60000"
+                             HelperText="建议设置 1500-4000ms；最高 60000ms，账号风控较高时可调大。" />
 
             @if (!IsJoin)
             {
@@ -306,7 +306,7 @@
     private static int ClampDelayMs(int value)
     {
         if (value < 0) return 0;
-        if (value > 10000) return 10000;
+        if (value > 60000) return 60000;
         return value;
     }
 

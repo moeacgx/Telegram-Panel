@@ -1163,16 +1163,29 @@ public class AccountTelegramToolsService
 
                     var inputUser = new InputUser(user.id, user.access_hash);
                     var randomId = Random.Shared.NextInt64();
-                    await ExecuteTelegramRequestAsync(
-                        accountId,
-                        "启用 Bot",
-                        () => client.Messages_StartBot(
-                            bot: inputUser,
-                            peer: new InputPeerSelf(),
-                            random_id: randomId,
-                            start_param: finalStart),
-                        cancellationToken,
-                        resetClientOnTimeout: false);
+                    if (string.IsNullOrWhiteSpace(finalStart))
+                    {
+                        var inputPeer = new InputPeerUser(user.id, user.access_hash);
+                        await ExecuteTelegramRequestAsync(
+                            accountId,
+                            "启用 Bot",
+                            () => client.SendMessageAsync(inputPeer, "/start"),
+                            cancellationToken,
+                            resetClientOnTimeout: false);
+                    }
+                    else
+                    {
+                        await ExecuteTelegramRequestAsync(
+                            accountId,
+                            "启用 Bot",
+                            () => client.Messages_StartBot(
+                                bot: inputUser,
+                                peer: new InputPeerSelf(),
+                                random_id: randomId,
+                                start_param: finalStart),
+                            cancellationToken,
+                            resetClientOnTimeout: false);
+                    }
 
                     return (true, null, "@" + username);
                 },
