@@ -939,9 +939,10 @@
             "asset_scope_id" => "资源作用域",
             "targets" => "目标",
             "dictionary" => "文字词典",
+            "message_rules" => "消息规则",
             "account_mode" => "账号模式",
             "target_mode" => "目标模式",
-            "message_mode" => "词典模式",
+            "message_mode" => "消息规则模式",
             "max_messages" => "最多发送",
             "enable_ai_verification" => "AI 验证",
             "ai_model" => "AI 模型",
@@ -1144,7 +1145,7 @@
             details += $"词典数: {dictCount}\n";
             details += $"账号模式: {NormalizeTaskModeDisplay(accountMode)}\n";
             details += $"目标模式: {NormalizeTaskModeDisplay(targetMode)}\n";
-            details += $"词典模式: {NormalizeTaskModeDisplay(messageMode)}\n";
+            details += $"消息规则模式: {NormalizeTaskModeDisplay(messageMode)}\n";
             details += $"间隔: {FormatDelaySeconds(delayMin)} ~ {FormatDelaySeconds(delayMax)} 秒\n";
             details += $"最多发送: {(maxMessages <= 0 ? "持续运行（直到取消）" : maxMessages.ToString())}\n";
 

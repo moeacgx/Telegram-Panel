@@ -194,9 +194,23 @@ proxyText: http://user-a:password-a@proxy-a.example.com:8080
 `config.recent_failures` 返回最多 100 条账号活跃失败明细，字段包括 `time_utc`、
 `account_id`、`account`、`target` 和 `reason`；自 v1.31.54 起，`user_chat_active`
 目标支持群组、频道和 Bot 私聊（`@xxxbot`、`t.me/xxxbot?start=...`、
-`tg://resolve?domain=xxxbot`），可用于给外部 Bot 发送文字词典内容。`user_join_subscribe`
-会在 `config.failures` 返回最多 200 条失败明细，字段包括 `accountId`、`target` 和
-`reason`，并会对 Telegram 瞬时连接错误执行一次客户端重建重试。
+`tg://resolve?domain=xxxbot`）。
+
+自 v1.31.55 起，`user_chat_active.config.message_rules` 是消息选择的主合同。它是对象数组，
+每项包含可选的 `text` 和 `image_dictionary_token`：`text` 保留内部换行，可用于多段消息；
+`image_dictionary_token` 必须是单个已启用图片字典变量，例如 `{active_images}`。一条规则可以
+只含文字、只含图片，或同时包含图片和说明文字；`message_mode=random|queue` 针对整条规则选择，
+不会再把段落中的每一行拆成独立消息。前置条件是引用的文本/图片字典已启用且至少有一个可用项。
+
+兼容字段 `dictionary` 和 `image_dictionary_token` 仍会读写：旧配置会在加载时转换为等价规则；
+`dictionary` 保存所有非空规则文字，只有全部规则共享同一个非空图片字典时才回写全局
+`image_dictionary_token`。成功判据是保存后任务详情包含 `message_rules`，重新编辑仍保留段落换行和
+每条图片字典，实际执行按规则随机或循环。图片字典无效时创建页或任务启动会返回模板校验错误。
+回滚到 v1.31.54 或更早版本时，旧字段仍可继续发送文字；每条规则使用不同图片字典的配置无法被旧版
+完整表达，回滚前应改为全部规则共用一个图片字典或纯文字规则。
+
+`user_join_subscribe` 会在 `config.failures` 返回最多 200 条失败明细，字段包括 `accountId`、
+`target` 和 `reason`，并会对 Telegram 瞬时连接错误执行一次客户端重建重试。
 成功判据是任务的 `failed` 大于零时，详情接口和任务中心均能看到对应失败账号、目标和原因；
 该字段为空表示没有失败或运行的是尚未支持失败明细的旧版本。
 

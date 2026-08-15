@@ -4,7 +4,7 @@
 
     <template v-if="taskType === 'user_chat_active'">
       <el-alert
-        title="MaxMessages=0 表示持续运行，直到在任务中心手动取消；MaxMessages>0 时每次运行最多按可用账号数发送，每个账号最多 1 条。目标支持群组、频道和 Bot 用户名/链接；词典消息支持 {time} 和文本字典变量。"
+        title="MaxMessages=0 表示持续运行，直到在任务中心手动取消；MaxMessages>0 时每次运行最多按可用账号数发送，每个账号最多 1 条。目标支持群组、频道和 Bot 用户名/链接；每条消息规则支持多段文字、图片字典、{time} 和文本字典变量。"
         type="info"
         :closable="false"
         class="mb-3"
@@ -17,17 +17,39 @@
       <el-form-item label="目标">
         <el-input v-model="forms.userChatActive.targetsText" type="textarea" :rows="5" placeholder="每行一个群组/频道/Bot 链接、用户名或 ID" />
       </el-form-item>
-      <el-form-item label="词典">
-        <el-input v-model="forms.userChatActive.dictionaryText" type="textarea" :rows="6" placeholder="每行一条文字消息，支持 {time} 和文本字典变量" />
-      </el-form-item>
-      <div class="form-hint">可用文本变量：{{ textVariableHint }}</div>
-      <el-form-item label="图片字典">
-        <el-select v-model="forms.userChatActive.imageDictionaryName" class="full" placeholder="不发送图片">
-          <el-option label="不发送图片" value="" />
-          <el-option v-for="name in imageDictionaryNames" :key="name" :label="name" :value="name" />
-        </el-select>
-      </el-form-item>
-      <div class="form-hint">选择后每轮发送一张图片，文字词典会作为图片说明文字。</div>
+      <div class="message-rule-section">
+        <div class="message-rule-toolbar">
+          <div>
+            <strong>消息规则</strong>
+            <div class="form-hint no-offset compact">规则按「消息规则模式」随机或队列循环；每条规则可以是多段文字、图片字典，或图片 + 说明文字。</div>
+          </div>
+          <el-button type="primary" plain size="small" @click="addUserChatActiveRule()">添加规则</el-button>
+        </div>
+
+        <div v-for="(rule, index) in forms.userChatActive.messageRules" :key="rule.id" class="message-rule-card">
+          <div class="message-rule-card-head">
+            <span>规则 {{ index + 1 }}</span>
+            <el-button link type="danger" :disabled="forms.userChatActive.messageRules.length <= 1" @click="removeUserChatActiveRule(index)">删除</el-button>
+          </div>
+          <el-form-item label="消息内容">
+            <el-input v-model="rule.text" type="textarea" :rows="4" placeholder="可写多行段落，支持 {time} 和文本字典变量；留空时可只发送图片。" />
+          </el-form-item>
+          <el-form-item label="图片字典">
+            <el-select v-model="rule.imageDictionaryName" class="full" placeholder="不发送图片">
+              <el-option label="不发送图片" value="" />
+              <el-option v-for="name in imageDictionaryNames" :key="name" :label="name" :value="name" />
+            </el-select>
+          </el-form-item>
+        </div>
+
+        <el-form-item label="批量追加">
+          <el-input v-model="forms.userChatActive.bulkRulesText" type="textarea" :rows="3" placeholder="一行一条文字消息；点击追加后会生成多条规则。需要段落格式时，直接在上方规则卡片里写多行。" />
+        </el-form-item>
+        <div class="form-hint">
+          <el-button size="small" @click="appendUserChatActiveLineRules">按行追加为规则</el-button>
+          可用文本变量：{{ textVariableHint }}
+        </div>
+      </div>
 
       <el-row :gutter="12">
         <el-col :span="8">
@@ -65,7 +87,7 @@
           </el-form-item>
         </el-col>
         <el-col :span="8">
-          <el-form-item label="词典模式">
+          <el-form-item label="消息规则模式">
             <el-select v-model="forms.userChatActive.messageMode" class="full">
               <el-option label="随机" value="random" />
               <el-option label="队列循环" value="queue" />
@@ -362,6 +384,12 @@ export interface TaskConfigDraft {
   validationError: string | null
 }
 
+interface UserChatActiveMessageRuleForm {
+  id: string
+  text: string
+  imageDictionaryName: string
+}
+
 const props = defineProps<{
   taskType: string
   initialConfigJson?: string | null
@@ -485,8 +513,10 @@ function applyInitialConfig() {
     const form = forms.userChatActive
     form.categoryIds = normalizeIds(cfg.category_ids, readNumber(cfg.category_id))
     form.targetsText = readStringArray(cfg.targets).join('\n')
-    form.dictionaryText = readStringArray(cfg.dictionary).join('\n')
-    form.imageDictionaryName = extractDictionaryName(readString(cfg.image_dictionary_token))
+    const legacyDictionary = readStringArray(cfg.dictionary)
+    const legacyImageDictionaryName = extractDictionaryName(readString(cfg.image_dictionary_token))
+    form.messageRules = readUserChatActiveMessageRules(cfg.message_rules, legacyDictionary, legacyImageDictionaryName)
+    form.bulkRulesText = ''
     form.delayMinSeconds = millisecondsToSeconds(readNumber(cfg.delay_min_ms, 15000))
     form.delayMaxSeconds = millisecondsToSeconds(readNumber(cfg.delay_max_ms, 45000))
     form.maxMessages = readNumber(cfg.max_messages, 0)
@@ -595,11 +625,15 @@ function buildUserChatActiveDraft(): TaskConfigDraft {
   const categoryIds = normalizedSelectedIds(form.categoryIds)
   const selectedCategories = selectedAccountCategories(categoryIds)
   const targets = uniqueLines(form.targetsText)
-  const dictionary = parseLines(form.dictionaryText)
+  const messageRules = normalizeUserChatActiveMessageRules(form.messageRules)
+  const dictionary = messageRules.map((x) => x.text).filter(Boolean)
+  const sharedImageDictionaryName = sharedRuleImageDictionaryName(messageRules)
   if (categoryIds.length === 0 || selectedCategories.length === 0) throw new Error('请至少选择一个执行账号分类')
   if (targets.length === 0) throw new Error('请至少填写一个目标群组/频道/Bot')
-  if (form.imageDictionaryName && !imageDictionaryNames.value.includes(form.imageDictionaryName)) throw new Error('请选择有效的图片字典')
-  if (dictionary.length === 0 && !form.imageDictionaryName) throw new Error('请至少填写一条文字词典或选择图片字典')
+  if (messageRules.length === 0) throw new Error('请至少添加一条消息规则')
+  for (const rule of messageRules) {
+    if (rule.imageDictionaryName && !imageDictionaryNames.value.includes(rule.imageDictionaryName)) throw new Error('请选择有效的图片字典')
+  }
   if (form.delayMaxSeconds < form.delayMinSeconds) throw new Error('最大间隔不能小于最小间隔')
   if (!isValidMode(form.accountMode) || !isValidMode(form.targetMode) || !isValidMode(form.messageMode)) throw new Error('模式参数无效')
 
@@ -631,7 +665,11 @@ function buildUserChatActiveDraft(): TaskConfigDraft {
     category_names: selectedCategories.map((x) => x.name),
     targets,
     dictionary,
-    image_dictionary_token: form.imageDictionaryName ? dictionaryToken(form.imageDictionaryName) : null,
+    image_dictionary_token: sharedImageDictionaryName ? dictionaryToken(sharedImageDictionaryName) : null,
+    message_rules: messageRules.map((rule) => ({
+      text: rule.text,
+      image_dictionary_token: rule.imageDictionaryName ? dictionaryToken(rule.imageDictionaryName) : null,
+    })),
     delay_min_ms: secondsToMilliseconds(form.delayMinSeconds),
     delay_max_ms: secondsToMilliseconds(form.delayMaxSeconds),
     account_mode: form.accountMode,
@@ -842,8 +880,8 @@ function defaultUserChatActiveForm() {
   return {
     categoryIds: [] as number[],
     targetsText: '',
-    dictionaryText: '',
-    imageDictionaryName: '',
+    messageRules: [defaultUserChatActiveMessageRule()],
+    bulkRulesText: '',
     delayMinSeconds: 15,
     delayMaxSeconds: 45,
     maxMessages: 0,
@@ -863,6 +901,42 @@ function defaultUserChatActiveForm() {
     verificationBotUsernamesText: '',
   }
 }
+
+function defaultUserChatActiveMessageRule(text = '', imageDictionaryName = ''): UserChatActiveMessageRuleForm {
+  return {
+    id: newScopeId(),
+    text,
+    imageDictionaryName,
+  }
+}
+
+function addUserChatActiveRule(text = '', imageDictionaryName = '') {
+  forms.userChatActive.messageRules.push(defaultUserChatActiveMessageRule(text, imageDictionaryName))
+}
+
+function removeUserChatActiveRule(index: number) {
+  if (forms.userChatActive.messageRules.length <= 1) return
+  forms.userChatActive.messageRules.splice(index, 1)
+}
+
+function appendUserChatActiveLineRules() {
+  const lines = parseLines(forms.userChatActive.bulkRulesText)
+  if (lines.length === 0) {
+    ElMessage.warning('请先填写要追加的消息文字')
+    return
+  }
+
+  const rules = forms.userChatActive.messageRules
+  if (rules.length === 1 && !rules[0].text.trim() && !rules[0].imageDictionaryName.trim()) {
+    rules.splice(0, 1)
+  }
+
+  for (const line of lines) {
+    rules.push(defaultUserChatActiveMessageRule(line))
+  }
+  forms.userChatActive.bulkRulesText = ''
+}
+
 
 function defaultPrivateCreateForm() {
   return {
@@ -923,6 +997,43 @@ function defaultAutoLoginEmailForm() {
     triggerPhrasesText: '',
   }
 }
+
+function readUserChatActiveMessageRules(value: unknown, legacyDictionary: string[], legacyImageDictionaryName: string) {
+  const rules: UserChatActiveMessageRuleForm[] = []
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (!item || typeof item !== 'object') continue
+      const record = item as Record<string, unknown>
+      const text = normalizeMultilineText(readString(record.text))
+      const imageDictionaryName = extractDictionaryName(readString(record.image_dictionary_token))
+      if (text || imageDictionaryName) rules.push(defaultUserChatActiveMessageRule(text, imageDictionaryName))
+    }
+  }
+
+  if (rules.length > 0) return rules
+  if (legacyDictionary.length > 0) return legacyDictionary.map((text) => defaultUserChatActiveMessageRule(text, legacyImageDictionaryName))
+  if (legacyImageDictionaryName) return [defaultUserChatActiveMessageRule('', legacyImageDictionaryName)]
+  return [defaultUserChatActiveMessageRule()]
+}
+
+function normalizeUserChatActiveMessageRules(rules: UserChatActiveMessageRuleForm[]) {
+  return rules
+    .map((rule) => ({
+      text: normalizeMultilineText(rule.text),
+      imageDictionaryName: rule.imageDictionaryName.trim(),
+    }))
+    .filter((rule) => rule.text || rule.imageDictionaryName)
+}
+
+function sharedRuleImageDictionaryName(rules: Array<{ imageDictionaryName: string }>) {
+  const names = Array.from(new Set(rules.map((x) => x.imageDictionaryName.trim())))
+  return names.length === 1 && names[0] ? names[0] : ''
+}
+
+function normalizeMultilineText(value: string) {
+  return value.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim()
+}
+
 
 
 function parseLines(value: string) {
@@ -1060,6 +1171,7 @@ const DelayFields = defineComponent({
 const AvatarFields = defineComponent({
   name: 'AvatarFields',
   props: {
+
     avatarSource: { type: String, required: true },
     fixedAvatarAssetPath: { type: String, required: true },
     avatarDictionaryName: { type: String, required: true },
@@ -1126,6 +1238,38 @@ const AvatarFields = defineComponent({
 
 .form-hint.no-offset {
   margin-left: 0;
+}
+.message-rule-section {
+  margin-bottom: 14px;
+}
+
+.message-rule-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.message-rule-card {
+  padding: 12px 12px 2px;
+  margin-bottom: 10px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  background: var(--el-fill-color-lighter);
+}
+
+.message-rule-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  color: var(--el-text-color-regular);
+  font-weight: 600;
+}
+
+.form-hint.compact {
+  margin-bottom: 0;
 }
 
 .avatar-path {

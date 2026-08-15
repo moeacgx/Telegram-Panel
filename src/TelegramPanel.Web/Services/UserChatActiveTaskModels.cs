@@ -49,6 +49,9 @@ public sealed class UserChatActiveTaskConfig
     [JsonPropertyName("image_dictionary_token")]
     public string? ImageDictionaryToken { get; set; }
 
+    [JsonPropertyName("message_rules")]
+    public List<UserChatActiveMessageRule> MessageRules { get; set; } = new();
+
     [JsonPropertyName("delay_min_ms")]
     public int DelayMinMs { get; set; } = 15000;
 
@@ -103,6 +106,100 @@ public sealed class UserChatActiveTaskConfig
     [JsonPropertyName("recent_failures")]
     public List<UserChatActiveTaskRuntimeFailure> RecentFailures { get; set; } = new();
 }
+
+public sealed class UserChatActiveMessageRule
+{
+    [JsonPropertyName("text")]
+    public string? Text { get; set; }
+
+    [JsonPropertyName("image_dictionary_token")]
+    public string? ImageDictionaryToken { get; set; }
+}
+
+internal static class UserChatActiveMessageRuleNormalizer
+{
+    public static List<UserChatActiveMessageRule> Normalize(UserChatActiveTaskConfig config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        var legacyDictionary = (config.Dictionary ?? new List<string>())
+            .Select(NormalizeMultilineText)
+            .Where(x => x.Length > 0)
+            .ToList();
+        var legacyImageDictionaryToken = NormalizeOptionalTemplateToken(config.ImageDictionaryToken);
+        var rules = (config.MessageRules ?? new List<UserChatActiveMessageRule>())
+            .Select(NormalizeRule)
+            .Where(x => x != null)
+            .Select(x => x!)
+            .ToList();
+
+        if (rules.Count == 0)
+        {
+            rules.AddRange(legacyDictionary.Select(text => new UserChatActiveMessageRule
+            {
+                Text = text,
+                ImageDictionaryToken = legacyImageDictionaryToken
+            }));
+
+            if (rules.Count == 0 && legacyImageDictionaryToken != null)
+            {
+                rules.Add(new UserChatActiveMessageRule
+                {
+                    Text = string.Empty,
+                    ImageDictionaryToken = legacyImageDictionaryToken
+                });
+            }
+        }
+
+        config.Dictionary = rules
+            .Select(x => x.Text ?? string.Empty)
+            .Where(x => x.Length > 0)
+            .ToList();
+
+        var imageTokens = rules
+            .Select(x => (x.ImageDictionaryToken ?? string.Empty).Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        config.ImageDictionaryToken = imageTokens.Count == 1 && imageTokens[0].Length > 0
+            ? imageTokens[0]
+            : null;
+        config.MessageRules = rules;
+        return rules;
+    }
+
+    private static UserChatActiveMessageRule? NormalizeRule(UserChatActiveMessageRule? rule)
+    {
+        if (rule == null)
+            return null;
+
+        var text = NormalizeMultilineText(rule.Text);
+        var imageDictionaryToken = NormalizeOptionalTemplateToken(rule.ImageDictionaryToken);
+        if (text.Length == 0 && imageDictionaryToken == null)
+            return null;
+
+        return new UserChatActiveMessageRule
+        {
+            Text = text,
+            ImageDictionaryToken = imageDictionaryToken
+        };
+    }
+
+    private static string NormalizeMultilineText(string? value)
+    {
+        return (value ?? string.Empty)
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Trim();
+    }
+
+    private static string? NormalizeOptionalTemplateToken(string? value)
+    {
+        var token = (value ?? string.Empty).Trim();
+        return token.Length == 0 ? null : token;
+    }
+}
+
+
 
 public sealed class UserChatActiveTaskRuntimeFailure
 {

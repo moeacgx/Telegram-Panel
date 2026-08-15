@@ -103,8 +103,13 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
 
         var config = DeserializeConfig(host.Config);
         ValidateAndNormalizeConfig(config);
-        if (!string.IsNullOrWhiteSpace(config.ImageDictionaryToken))
-            await templateRendering.ValidateImageTemplateAsync(config.ImageDictionaryToken, cancellationToken);
+        foreach (var imageDictionaryToken in config.MessageRules
+                     .Select(x => x.ImageDictionaryToken)
+                     .Where(x => !string.IsNullOrWhiteSpace(x))
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            await templateRendering.ValidateImageTemplateAsync(imageDictionaryToken!, cancellationToken);
+        }
 
         config.Canceled = false;
         config.Error = null;
@@ -168,7 +173,7 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
             ? UserChatActiveSendPlanner.BuildFiniteRunPlan(
                 accountSlots.Count,
                 Math.Max(0, config.MaxMessages - progress.Completed),
-                config.Dictionary.Count,
+                config.MessageRules.Count,
                 config.AccountMode,
                 config.MessageMode)
             : null;
@@ -261,8 +266,9 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
 
                 var messageIdx = finiteSendPlan is not null
                     ? plannedSend.MessageIndex
-                    : SelectIndex(config.MessageMode, config.Dictionary.Count, ref messageQueueIndex);
-                var textTemplate = config.Dictionary[messageIdx];
+                    : SelectIndex(config.MessageMode, config.MessageRules.Count, ref messageQueueIndex);
+                var messageRule = config.MessageRules[messageIdx];
+                var textTemplate = messageRule.Text ?? string.Empty;
 
                 if (!await host.IsStillRunningAsync(cancellationToken))
                 {
@@ -287,7 +293,7 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
                         config,
                         accountSlot.Account,
                         targetSlot.RawTarget,
-                        $"词典模板解析失败：{ex.Message}",
+                        $"消息规则模板解析失败：{ex.Message}",
                         configGate,
                         cancellationToken);
 
@@ -310,7 +316,7 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
                     continue;
                 }
 
-                var imageDictionaryToken = (config.ImageDictionaryToken ?? string.Empty).Trim();
+                var imageDictionaryToken = (messageRule.ImageDictionaryToken ?? string.Empty).Trim();
                 var hasImageDictionary = imageDictionaryToken.Length > 0;
 
                 if (text.Length == 0 && !hasImageDictionary)
@@ -324,7 +330,7 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
                         config,
                         accountSlot.Account,
                         targetSlot.RawTarget,
-                        "词典模板解析结果为空，无法发送",
+                        "消息规则模板解析结果为空，无法发送",
                         configGate,
                         cancellationToken);
 
@@ -623,22 +629,13 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        config.Dictionary = config.Dictionary
-            .Select(x => (x ?? string.Empty).Trim())
-            .Where(x => x.Length > 0)
-            .ToList();
-        config.ImageDictionaryToken = (config.ImageDictionaryToken ?? string.Empty).Trim();
-        if (config.ImageDictionaryToken.Length == 0)
-            config.ImageDictionaryToken = null;
+        config.MessageRules = UserChatActiveMessageRuleNormalizer.Normalize(config);
 
         if (config.Targets.Count == 0)
             throw new InvalidOperationException("任务缺少目标群组/频道/Bot");
 
-        if (config.Dictionary.Count == 0 && string.IsNullOrWhiteSpace(config.ImageDictionaryToken))
-            throw new InvalidOperationException("任务缺少词典消息或图片字典");
-
-        if (config.Dictionary.Count == 0)
-            config.Dictionary.Add(string.Empty);
+        if (config.MessageRules.Count == 0)
+            throw new InvalidOperationException("任务缺少消息规则");
 
         if (config.DelayMinMs < 0) config.DelayMinMs = 0;
         if (config.DelayMaxMs < 0) config.DelayMaxMs = 0;
@@ -693,6 +690,7 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
 
         config.RecentFailures ??= new List<UserChatActiveTaskRuntimeFailure>();
     }
+
 
     private static List<int> NormalizeSelectedCategoryIds(UserChatActiveTaskConfig config)
     {

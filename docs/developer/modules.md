@@ -972,7 +972,7 @@ public IEnumerable<ModuleTaskDefinition> GetTasks(ModuleHostContext context)
 
 这些宿主方法会对 `A task was canceled`、连接关闭、代理断开等瞬时连接错误执行一次客户端重建重试；调用方取消任务时仍会传播取消，不会被当作普通失败。
 
-`user_chat_active` 账号持续活跃任务的目标字段也使用同一套目标解析边界：群组/频道链接按聊天目标解析，`@xxxbot`、`t.me/xxxbot?start=abc` 和 `tg://resolve?domain=xxxbot` 会解析为 Bot 私聊目标并发送词典内容，可用于 Bot 月活保活。图片字典只适用于群组/频道等支持媒体发送的目标；Bot 私聊保活建议使用文字词典。
+`user_chat_active` 账号持续活跃任务的目标字段也使用同一套目标解析边界：群组/频道链接按聊天目标解析，`@xxxbot`、`t.me/xxxbot?start=abc` 和 `tg://resolve?domain=xxxbot` 会解析为 Bot 私聊目标。自 v1.31.55 起，消息配置使用 `message_rules` 数组；每条规则由多行 `text` 和可选的单个 `image_dictionary_token` 组成，执行器按 `message_mode` 对整条规则随机或队列循环。规则可为纯文字、纯图片或图片加说明文字，内部换行必须原样保留。模块编辑器保存时同时维护旧版 `dictionary`，且仅在所有规则共享同一个非空图片字典时维护全局 `image_dictionary_token`；读取时若 `message_rules` 为空，则从这两个旧字段迁移。前置条件是目标和引用字典均可由宿主模板服务解析；成功判据是创建、重跑和实际执行使用同一套规则归一化结果。无效图片字典应在创建或启动阶段失败，不得静默降级。回滚到 v1.31.54 或更早版本前，应把配置收敛为纯文字或所有规则共享同一图片字典，否则旧版无法完整表达每条独立图片字典。图片字典只适用于群组/频道等支持媒体发送的目标；Bot 私聊保活建议使用文字规则。
 
 ### 3) 使用 `CreateRoute` 提供自定义创建页
 

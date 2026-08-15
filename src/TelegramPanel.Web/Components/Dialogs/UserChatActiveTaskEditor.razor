@@ -12,7 +12,7 @@
 <MudStack Spacing="2">
     <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
         持续活跃任务会在后台循环执行并按间隔发送内容。MaxMessages=0 表示持续运行，直到你在任务中心手动取消。
-        目标支持群组、频道、Bot 用户名/链接和文本字典变量；词典消息支持 <code>{time}</code> 和文本字典变量。
+        目标支持群组、频道、Bot 用户名/链接和文本字典变量；每条消息规则支持多段文字、图片字典、<code>{time}</code> 和文本字典变量。
     </MudAlert>
 
     @if (loading)
@@ -43,35 +43,58 @@
                       Immediate="true"
                       HelperText="支持固定目标或文本字典变量，例如 {groups}。字典内容可放 t.me 链接、at 用户名、频道ID、Bot 用户名/链接；每行、空格或逗号分隔均可。" />
 
-        <MudTextField @bind-Value="dictionaryText" @bind-Value:after="OnInputsChanged"
-                      Label="文字词典（每行一个）"
-                      Variant="Variant.Outlined"
-                      Lines="6"
-                      Immediate="true"
-                      HelperText="支持 {time} 和文本字典变量。选择图片字典后，这里的解析结果会作为图片说明文字发送。" />
+        <MudPaper Outlined="true" Class="pa-3">
+            <MudStack Spacing="2">
+                <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Start">
+                    <div>
+                        <MudText Typo="Typo.subtitle2">消息规则</MudText>
+                        <MudText Typo="Typo.caption">规则按消息规则模式随机或队列循环；每条规则可以是多段文字、图片字典，或图片 + 说明文字。</MudText>
+                    </div>
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary" OnClick="AddMessageRule">添加规则</MudButton>
+                </MudStack>
 
-        <MudSelect T="string"
-                   @bind-Value="selectedImageDictionaryName"
-                   @bind-Value:after="OnInputsChanged"
-                   Label="图片字典（可选）"
-                   Variant="Variant.Outlined"
-                   Dense="true"
-                   HelperText="选择后每轮会从该图片字典取一张图发送，文字词典作为 caption。">
-            <MudSelectItem Value="@string.Empty">不发送图片</MudSelectItem>
-            @foreach (var name in imageDictionaryNames)
-            {
-                <MudSelectItem Value="@name">@name</MudSelectItem>
-            }
-        </MudSelect>
+                @foreach (var item in messageRules.Select((Rule, Index) => new { Rule, Index }))
+                {
+                    <MudPaper Outlined="true" Class="pa-3">
+                        <MudStack Spacing="1">
+                            <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+                                <MudText Typo="Typo.subtitle2">规则 @(item.Index + 1)</MudText>
+                                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error" Disabled="@(messageRules.Count <= 1)" OnClick="@(() => RemoveMessageRule(item.Index))">删除</MudButton>
+                            </MudStack>
+                            <MudTextField @bind-Value="item.Rule.Text" @bind-Value:after="OnInputsChanged"
+                                          Label="消息内容"
+                                          Variant="Variant.Outlined"
+                                          Lines="4"
+                                          Immediate="true"
+                                          HelperText="可写多行段落，支持 {time} 和文本字典变量；留空时可只发送图片。" />
+                            <MudSelect T="string"
+                                       @bind-Value="item.Rule.ImageDictionaryName"
+                                       @bind-Value:after="OnInputsChanged"
+                                       Label="图片字典"
+                                       Variant="Variant.Outlined"
+                                       Dense="true">
+                                <MudSelectItem Value="@string.Empty">不发送图片</MudSelectItem>
+                                @foreach (var name in imageDictionaryNames)
+                                {
+                                    <MudSelectItem Value="@name">@name</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudStack>
+                    </MudPaper>
+                }
 
-        @if (textDictionaryNames.Count > 0)
-        {
-            <MudText Typo="Typo.caption">可用文本变量：<code>{time}</code>、@(string.Join("、", textDictionaryNames.Select(x => $"{{{x}}}")))</MudText>
-        }
-        else
-        {
-            <MudText Typo="Typo.caption">当前可用内置变量：<code>{time}</code></MudText>
-        }
+                <MudTextField @bind-Value="bulkRulesText"
+                              Label="批量追加"
+                              Variant="Variant.Outlined"
+                              Lines="3"
+                              Immediate="true"
+                              HelperText="一行一条文字消息；点击追加后会生成多条规则。需要段落格式时，直接在上方规则卡片里写多行。" />
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="AppendBulkRules">按行追加为规则</MudButton>
+            </MudStack>
+        </MudPaper>
+
+        <MudText Typo="Typo.caption">可用文本变量：<code>{time}</code>@(textDictionaryNames.Count > 0 ? "、" + string.Join("、", textDictionaryNames.Select(x => $"{{{x}}}")) : string.Empty)</MudText>
+
 
         <MudGrid>
             <MudItem xs="12" md="4">
@@ -108,7 +131,7 @@
             </MudItem>
             <MudItem xs="12" md="4">
                 <MudSelect T="string" @bind-Value="messageMode" @bind-Value:after="OnInputsChanged"
-                           Label="词典取值模式" Variant="Variant.Outlined" Dense="true">
+                           Label="消息规则模式" Variant="Variant.Outlined" Dense="true">
                     <MudSelectItem Value="@UserChatActiveTaskModes.Random">随机</MudSelectItem>
                     <MudSelectItem Value="@UserChatActiveTaskModes.Queue">队列循环</MudSelectItem>
                 </MudSelect>
@@ -233,8 +256,8 @@
 
     private IEnumerable<int> selectedCategoryIds = Array.Empty<int>();
     private string targetsText = string.Empty;
-    private string dictionaryText = string.Empty;
-    private string selectedImageDictionaryName = string.Empty;
+    private List<MessageRuleDraft> messageRules = new() { new MessageRuleDraft() };
+    private string bulkRulesText = string.Empty;
     private decimal delayMinSeconds = 15m;
     private decimal delayMaxSeconds = 45m;
     private int maxMessages;
@@ -314,8 +337,10 @@
 
             selectedCategoryIds = NormalizeCategoryIds(cfg.CategoryIds, cfg.CategoryId);
             targetsText = string.Join(Environment.NewLine, cfg.Targets ?? new List<string>());
-            dictionaryText = string.Join(Environment.NewLine, cfg.Dictionary ?? new List<string>());
-            selectedImageDictionaryName = ExtractDictionaryName(cfg.ImageDictionaryToken);
+            var legacyDictionary = cfg.Dictionary ?? new List<string>();
+            var legacyImageDictionaryName = ExtractDictionaryName(cfg.ImageDictionaryToken);
+            messageRules = BuildMessageRuleDrafts(cfg.MessageRules, legacyDictionary, legacyImageDictionaryName);
+            bulkRulesText = string.Empty;
             delayMinSeconds = ConvertMillisecondsToSeconds(cfg.DelayMinMs);
             delayMaxSeconds = ConvertMillisecondsToSeconds(cfg.DelayMaxMs);
             maxMessages = cfg.MaxMessages;
@@ -396,7 +421,9 @@
     private async Task PushDraftAsync()
     {
         var targets = ParseTargetLines(targetsText);
-        var dictionary = ParseMessageLines(dictionaryText);
+        var normalizedMessageRules = NormalizeMessageRuleDrafts(messageRules);
+        var dictionary = normalizedMessageRules.Select(x => x.Text ?? string.Empty).Where(x => x.Length > 0).ToList();
+        var sharedImageDictionaryToken = ResolveSharedImageDictionaryToken(normalizedMessageRules);
         var verificationKeywords = ParseVerificationLines(verificationKeywordsText);
         var verificationRegexes = ParseVerificationLines(verificationRegexText);
         var verificationBotUsernames = ParseBotUsernames(verificationBotUsernamesText);
@@ -444,26 +471,38 @@
             }
         }
 
-        var imageDictionaryToken = string.IsNullOrWhiteSpace(selectedImageDictionaryName)
-            ? null
-            : $"{{{selectedImageDictionaryName.Trim().Trim('{', '}')}}}";
-
-        if (dictionary.Count == 0 && string.IsNullOrWhiteSpace(imageDictionaryToken))
+        if (normalizedMessageRules.Count == 0)
         {
-            await DraftChanged.InvokeAsync(new ModuleTaskDraft(0, null, false, "请至少填写一条文字词典或选择图片字典"));
+            await DraftChanged.InvokeAsync(new ModuleTaskDraft(0, null, false, "请至少添加一条消息规则"));
             return;
         }
 
-        foreach (var template in dictionary)
+        foreach (var rule in normalizedMessageRules)
         {
-            try
+            if (!string.IsNullOrWhiteSpace(rule.Text))
             {
-                await TemplateRendering.ValidateTextTemplateAsync(template);
+                try
+                {
+                    await TemplateRendering.ValidateTextTemplateAsync(rule.Text);
+                }
+                catch (Exception ex)
+                {
+                    await DraftChanged.InvokeAsync(new ModuleTaskDraft(0, null, false, $"消息规则模板无效：{ex.Message}"));
+                    return;
+                }
             }
-            catch (Exception ex)
+
+            if (!string.IsNullOrWhiteSpace(rule.ImageDictionaryToken))
             {
-                await DraftChanged.InvokeAsync(new ModuleTaskDraft(0, null, false, $"词典消息模板无效：{ex.Message}"));
-                return;
+                try
+                {
+                    await TemplateRendering.ValidateImageTemplateAsync(rule.ImageDictionaryToken);
+                }
+                catch (Exception ex)
+                {
+                    await DraftChanged.InvokeAsync(new ModuleTaskDraft(0, null, false, $"图片字典无效：{ex.Message}"));
+                    return;
+                }
             }
         }
 
@@ -542,18 +581,6 @@
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(imageDictionaryToken))
-        {
-            try
-            {
-                await TemplateRendering.ValidateImageTemplateAsync(imageDictionaryToken);
-            }
-            catch (Exception ex)
-            {
-                await DraftChanged.InvokeAsync(new ModuleTaskDraft(0, null, false, $"图片字典无效：{ex.Message}"));
-                return;
-            }
-        }
 
         var categoryNames = selectedCategories.Select(x => x.Name).ToList();
         var cfg = new UserChatActiveTaskConfig
@@ -564,7 +591,8 @@
             CategoryNames = categoryNames,
             Targets = targets,
             Dictionary = dictionary,
-            ImageDictionaryToken = imageDictionaryToken,
+            ImageDictionaryToken = sharedImageDictionaryToken,
+            MessageRules = normalizedMessageRules,
             DelayMinMs = ConvertSecondsToMilliseconds(delayMinSeconds),
             DelayMaxMs = ConvertSecondsToMilliseconds(delayMaxSeconds),
             MaxMessages = maxMessages,
@@ -585,6 +613,106 @@
         var total = maxMessages > 0 ? maxMessages : 0;
         var json = JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true });
         await DraftChanged.InvokeAsync(new ModuleTaskDraft(total, json, true, null));
+    }
+
+    private async Task AddMessageRule()
+    {
+        messageRules.Add(new MessageRuleDraft());
+        await PushDraftAsync();
+    }
+
+    private async Task RemoveMessageRule(int index)
+    {
+        if (messageRules.Count <= 1 || index < 0 || index >= messageRules.Count)
+            return;
+
+        messageRules.RemoveAt(index);
+        await PushDraftAsync();
+    }
+
+    private async Task AppendBulkRules()
+    {
+        var lines = ParseTargetLines(bulkRulesText);
+        if (lines.Count == 0)
+            return;
+
+        if (messageRules.Count == 1
+            && string.IsNullOrWhiteSpace(messageRules[0].Text)
+            && string.IsNullOrWhiteSpace(messageRules[0].ImageDictionaryName))
+        {
+            messageRules.Clear();
+        }
+
+        messageRules.AddRange(lines.Select(x => new MessageRuleDraft { Text = x }));
+        bulkRulesText = string.Empty;
+        await PushDraftAsync();
+    }
+
+    private static List<MessageRuleDraft> BuildMessageRuleDrafts(
+        IEnumerable<UserChatActiveMessageRule>? configuredRules,
+        IEnumerable<string>? legacyDictionary,
+        string legacyImageDictionaryName)
+    {
+        var rules = (configuredRules ?? Array.Empty<UserChatActiveMessageRule>())
+            .Select(x => new MessageRuleDraft
+            {
+                Text = NormalizeMultilineText(x?.Text),
+                ImageDictionaryName = ExtractDictionaryName(x?.ImageDictionaryToken)
+            })
+            .Where(x => x.Text.Length > 0 || x.ImageDictionaryName.Length > 0)
+            .ToList();
+
+        if (rules.Count > 0)
+            return rules;
+
+        rules = (legacyDictionary ?? Array.Empty<string>())
+            .Select(x => NormalizeMultilineText(x))
+            .Where(x => x.Length > 0)
+            .Select(x => new MessageRuleDraft { Text = x, ImageDictionaryName = legacyImageDictionaryName })
+            .ToList();
+
+        if (rules.Count == 0 && legacyImageDictionaryName.Length > 0)
+            rules.Add(new MessageRuleDraft { ImageDictionaryName = legacyImageDictionaryName });
+
+        if (rules.Count == 0)
+            rules.Add(new MessageRuleDraft());
+
+        return rules;
+    }
+
+    private static List<UserChatActiveMessageRule> NormalizeMessageRuleDrafts(IEnumerable<MessageRuleDraft>? drafts)
+    {
+        return (drafts ?? Array.Empty<MessageRuleDraft>())
+            .Select(x => new UserChatActiveMessageRule
+            {
+                Text = NormalizeMultilineText(x?.Text),
+                ImageDictionaryToken = BuildDictionaryToken(x?.ImageDictionaryName)
+            })
+            .Where(x => !string.IsNullOrWhiteSpace(x.Text) || !string.IsNullOrWhiteSpace(x.ImageDictionaryToken))
+            .ToList();
+    }
+
+    private static string? ResolveSharedImageDictionaryToken(IEnumerable<UserChatActiveMessageRule> rules)
+    {
+        var tokens = rules
+            .Select(x => (x.ImageDictionaryToken ?? string.Empty).Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return tokens.Count == 1 && tokens[0].Length > 0 ? tokens[0] : null;
+    }
+
+    private static string? BuildDictionaryToken(string? name)
+    {
+        var normalized = (name ?? string.Empty).Trim().Trim('{', '}');
+        return normalized.Length == 0 ? null : $"{{{normalized}}}";
+    }
+
+    private static string NormalizeMultilineText(string? value)
+    {
+        return (value ?? string.Empty)
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Trim();
     }
 
     private static List<int> NormalizeCategoryIds(IEnumerable<int>? values, int fallback)
@@ -650,16 +778,11 @@
             .ToList();
     }
 
-    private static List<string> ParseMessageLines(string? text)
+    private sealed class MessageRuleDraft
     {
-        if (string.IsNullOrWhiteSpace(text))
-            return new List<string>();
-
-        return text
-            .Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.RemoveEmptyEntries)
-            .Select(x => (x ?? string.Empty).Trim())
-            .Where(x => x.Length > 0)
-            .ToList();
+        public string Id { get; } = Guid.NewGuid().ToString("N");
+        public string Text { get; set; } = string.Empty;
+        public string ImageDictionaryName { get; set; } = string.Empty;
     }
 
     private static List<string> ParseVerificationLines(string? text)

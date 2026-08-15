@@ -55,22 +55,13 @@ public sealed class UserChatActiveTaskRerunBuilder : IModuleTaskRerunBuilder
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        cfg.Dictionary = (cfg.Dictionary ?? new List<string>())
-            .Select(x => (x ?? string.Empty).Trim())
-            .Where(x => x.Length > 0)
-            .ToList();
-        cfg.ImageDictionaryToken = (cfg.ImageDictionaryToken ?? string.Empty).Trim();
-        if (cfg.ImageDictionaryToken.Length == 0)
-            cfg.ImageDictionaryToken = null;
+        cfg.MessageRules = UserChatActiveMessageRuleNormalizer.Normalize(cfg);
 
         if (cfg.Targets.Count == 0)
             throw new InvalidOperationException("任务缺少目标群组/频道/Bot，无法重新运行");
 
-        if (cfg.Dictionary.Count == 0 && string.IsNullOrWhiteSpace(cfg.ImageDictionaryToken))
-            throw new InvalidOperationException("任务缺少词典消息或图片字典，无法重新运行");
-
-        if (cfg.Dictionary.Count == 0)
-            cfg.Dictionary.Add(string.Empty);
+        if (cfg.MessageRules.Count == 0)
+            throw new InvalidOperationException("任务缺少消息规则，无法重新运行");
 
         if (cfg.DelayMinMs < 0) cfg.DelayMinMs = 0;
         if (cfg.DelayMaxMs < 0) cfg.DelayMaxMs = 0;
@@ -128,6 +119,7 @@ public sealed class UserChatActiveTaskRerunBuilder : IModuleTaskRerunBuilder
 
         return cfg;
     }
+
 
     private static List<int> NormalizeCategoryIdsForRerun(IEnumerable<int>? values, int fallback)
     {
