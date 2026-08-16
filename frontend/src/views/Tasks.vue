@@ -197,23 +197,23 @@
       </div>
     </el-card>
 
-    <el-dialog v-model="createDialog.visible" title="新建任务" width="760px" destroy-on-close>
+    <el-dialog v-model="createDialog.visible" title="新建任务" width="min(760px, calc(100vw - 24px))" destroy-on-close>
       <el-alert
         title="立即执行会创建一条后台执行记录；Cron 计划会在任务中心的计划任务区域持续调度。"
         type="info"
         :closable="false"
         class="mb-3"
       />
-      <el-form label-width="96px">
+      <el-form :label-position="isTaskDialogCompact ? 'top' : 'right'" :label-width="isTaskDialogCompact ? 'auto' : '96px'">
         <el-row :gutter="12">
-          <el-col :span="12">
+          <el-col :xs="24" :sm="12">
             <el-form-item label="任务分类">
               <el-select v-model="createDialog.form.category" class="full" @change="ensureTaskType">
                 <el-option v-for="category in creatableCategories" :key="category" :label="categoryName(category)" :value="category" />
               </el-select>
             </el-form-item>
           </el-col>
-          <el-col :span="12">
+          <el-col :xs="24" :sm="12">
             <el-form-item label="任务类型">
               <el-select v-model="createDialog.form.taskType" class="full" @change="onTaskTypeChanged">
                 <el-option v-for="item in creatableDefinitions" :key="item.taskType" :label="item.displayName" :value="item.taskType" />
@@ -311,21 +311,21 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="detailDialog.visible" :title="detailDialog.title" width="720px">
+    <el-dialog v-model="detailDialog.visible" :title="detailDialog.title" width="min(720px, calc(100vw - 24px))">
       <pre class="detail-pre">{{ detailDialog.content }}</pre>
       <template #footer>
         <el-button type="primary" @click="detailDialog.visible = false">关闭</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="editTaskDialog.visible" :title="`编辑任务 #${editTaskDialog.id}`" width="760px" destroy-on-close>
+    <el-dialog v-model="editTaskDialog.visible" :title="`编辑任务 #${editTaskDialog.id}`" width="min(760px, calc(100vw - 24px))" destroy-on-close>
       <el-alert
         title="编辑会更新当前任务配置；若任务已完成或失败，可保存后使用重跑创建新任务。"
         type="info"
         :closable="false"
         class="mb-3"
       />
-      <el-form label-width="96px">
+      <el-form :label-position="isTaskDialogCompact ? 'top' : 'right'" :label-width="isTaskDialogCompact ? 'auto' : '96px'">
         <el-form-item label="任务类型">
           <el-input :model-value="taskName(editTaskDialog.form.taskType)" disabled />
         </el-form-item>
@@ -413,6 +413,7 @@ import type { BatchTask, ScheduledTask, TaskDefinition } from '@/api/types'
 import StatusTag from '@/components/StatusTag.vue'
 import TaskConfigForm, { type TaskConfigDraft } from '@/components/TaskConfigForm.vue'
 import { formatTime, taskProgress } from '@/utils/format'
+import { useMediaQuery } from '@/utils/useMediaQuery'
 
 const loading = ref(false)
 const router = useRouter()
@@ -428,6 +429,7 @@ const historyPageSize = ref(50)
 const hasLoaded = ref(false)
 let timer: number | undefined
 let loadPromise: Promise<void> | null = null
+const isTaskDialogCompact = useMediaQuery('(max-width: 640px)')
 
 const needsAutoRefresh = computed(() =>
   tasks.value.some((task) => isActiveStatus(displayStatus(task)))

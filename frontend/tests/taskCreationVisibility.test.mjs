@@ -66,3 +66,14 @@ test('账号持续活跃支持回复消息与转发来源配置', () => {
   assert.match(tasksSource, /去重发送: \$\{skipIfLastMessageFromSelf \? '启用/)
 
 })
+
+test('新建任务弹窗在手机端收窄并纵向排版', () => {
+  assert.match(tasksSource, /width="min\(760px, calc\(100vw - 24px\)\)"/)
+  assert.match(tasksSource, /width="min\(720px, calc\(100vw - 24px\)\)"/)
+  assert.match(tasksSource, /:label-position="isTaskDialogCompact \? 'top' : 'right'"/)
+  assert.match(tasksSource, /:label-width="isTaskDialogCompact \? 'auto' : '96px'"/)
+  assert.match(tasksSource, /:xs="24" :sm="12"/)
+  assert.match(taskConfigFormSource, /@media \(max-width: 640px\)/)
+  assert.match(taskConfigFormSource, /grid-template-columns: 1fr;/)
+  assert.match(taskConfigFormSource, /:deep\(\.el-form-item__content\)/)
+})

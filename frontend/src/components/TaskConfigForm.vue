@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <div class="task-config-form">
     <el-alert v-if="loading" title="正在加载配置项..." type="info" :closable="false" class="mb-3" />
 
     <template v-if="taskType === 'user_chat_active'">
@@ -1324,6 +1324,10 @@ const AvatarFields = defineComponent({
 .form-hint.no-offset {
   margin-left: 0;
 }
+
+.task-config-form {
+  min-width: 0;
+}
 .message-rule-section {
   margin-bottom: 14px;
 }
@@ -1355,6 +1359,64 @@ const AvatarFields = defineComponent({
 
 .form-hint.compact {
   margin-bottom: 0;
+}
+
+@media (max-width: 640px) {
+  .form-hint {
+    margin-left: 0;
+  }
+
+  .message-rule-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .message-rule-toolbar .el-button {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  :deep(.el-row) {
+    row-gap: 0;
+  }
+
+  :deep(.el-col) {
+    flex: 0 0 100%;
+    max-width: 100%;
+  }
+
+  :deep(.el-form-item) {
+    display: block;
+  }
+
+  :deep(.el-form-item__label) {
+    justify-content: flex-start;
+    width: 100%;
+    height: auto;
+    margin-bottom: 6px;
+    line-height: 1.4;
+  }
+
+  :deep(.el-form-item__content) {
+    min-width: 0;
+    margin-left: 0 !important;
+  }
+
+  :deep(.el-radio-group) {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  :deep(.el-radio-button),
+  :deep(.el-radio-button__inner) {
+    width: 100%;
+  }
+
+  :deep(.el-radio-button__inner) {
+    white-space: normal;
+    line-height: 1.35;
+  }
 }
 
 .avatar-path {
