@@ -1332,6 +1332,12 @@ function configKeyName(key: string) {
     image_dictionary_token: '图片字典',
     asset_scope_id: '资源作用域',
     targets: '目标',
+    message_action_mode: '发送动作',
+    reply_to_message_url: '回复消息链接',
+    reply_to_message_id: '回复消息 ID',
+    forward_source_urls: '转发来源消息',
+    forward_mode: '转发方式',
+    skip_if_last_message_from_self: '去重发送',
     dictionary: '文字词典',
     message_rules: '消息规则',
     account_mode: '账号模式',
@@ -1472,6 +1478,12 @@ function buildUserChatActiveDetails(config: string) {
   const categoryText = buildSelectedCategorySummary(obj)
   const targetCount = Array.isArray(obj.targets) ? obj.targets.length : 0
   const dictionaryCount = Array.isArray(obj.dictionary) ? obj.dictionary.length : 0
+  const messageRuleCount = Array.isArray(obj.message_rules) && obj.message_rules.length > 0 ? obj.message_rules.length : dictionaryCount
+  const actionMode = String(obj.message_action_mode || 'send_generated_text')
+  const isForwardMode = actionMode === 'forward_url'
+  const forwardSourceCount = Array.isArray(obj.forward_source_urls) ? obj.forward_source_urls.length : 0
+  const replyToMessageId = Number(obj.reply_to_message_id || 0)
+  const skipIfLastMessageFromSelf = obj.skip_if_last_message_from_self === true
   const delayMin = Number(obj.delay_min_ms || 0)
   const delayMax = Number(obj.delay_max_ms || 0)
   const maxMessages = Number(obj.max_messages || 0)
@@ -1481,10 +1493,13 @@ function buildUserChatActiveDetails(config: string) {
     '配置摘要:',
     `分类: ${categoryText}`,
     `目标数: ${targetCount}`,
-    `词典数: ${dictionaryCount}`,
+    `发送动作: ${isForwardMode ? '转发消息链接' : '发送消息规则'}`,
+    isForwardMode ? `转发来源数: ${forwardSourceCount}` : `消息规则数: ${messageRuleCount}`,
+    isForwardMode ? `转发方式: ${obj.forward_mode === 'hide_attribution' ? '不带引用转发' : '带引用转发'}` : `回复消息: ${replyToMessageId > 0 ? replyToMessageId : String(obj.reply_to_message_url || '').trim() || '未设置'}`,
+    `去重发送: ${skipIfLastMessageFromSelf ? '启用（上一条仍是当前账号则跳过）' : '关闭'}`,
     `账号模式: ${normalizeTaskModeDisplay(obj.account_mode)}`,
     `目标模式: ${normalizeTaskModeDisplay(obj.target_mode)}`,
-    `消息规则模式: ${normalizeTaskModeDisplay(obj.message_mode)}`,
+    `内容模式: ${normalizeTaskModeDisplay(obj.message_mode)}`,
     `间隔: ${formatDelaySeconds(delayMin)} ~ ${formatDelaySeconds(delayMax)} 秒`,
     `最多发送: ${maxMessages <= 0 ? '持续运行（直到取消）' : maxMessages}`,
   ]

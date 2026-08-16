@@ -938,6 +938,12 @@
             "image_dictionary_token" => "图片字典",
             "asset_scope_id" => "资源作用域",
             "targets" => "目标",
+            "message_action_mode" => "发送动作",
+            "reply_to_message_url" => "回复消息链接",
+            "reply_to_message_id" => "回复消息 ID",
+            "forward_source_urls" => "转发来源消息",
+            "forward_mode" => "转发方式",
+            "skip_if_last_message_from_self" => "去重发送",
             "dictionary" => "文字词典",
             "message_rules" => "消息规则",
             "account_mode" => "账号模式",
@@ -1117,6 +1123,19 @@
             var dictCount = root.TryGetProperty("dictionary", out var dictEl) && dictEl.ValueKind == JsonValueKind.Array
                 ? dictEl.GetArrayLength()
                 : 0;
+            var messageRuleCount = root.TryGetProperty("message_rules", out var rulesEl) && rulesEl.ValueKind == JsonValueKind.Array && rulesEl.GetArrayLength() > 0
+                ? rulesEl.GetArrayLength()
+                : dictCount;
+            var actionMode = root.TryGetProperty("message_action_mode", out var actionModeEl) ? (actionModeEl.GetString() ?? "send_generated_text").Trim() : "send_generated_text";
+            var isForwardMode = string.Equals(actionMode, "forward_url", StringComparison.Ordinal);
+            var forwardSourceCount = root.TryGetProperty("forward_source_urls", out var forwardEl) && forwardEl.ValueKind == JsonValueKind.Array
+                ? forwardEl.GetArrayLength()
+                : 0;
+            var replyToMessage = root.TryGetProperty("reply_to_message_id", out var replyIdEl) && replyIdEl.TryGetInt32(out var replyId) && replyId > 0
+                ? replyId.ToString()
+                : root.TryGetProperty("reply_to_message_url", out var replyUrlEl) ? (replyUrlEl.GetString() ?? "").Trim() : "";
+            var forwardMode = root.TryGetProperty("forward_mode", out var forwardModeEl) ? (forwardModeEl.GetString() ?? "").Trim() : "";
+            var skipIfLastMessageFromSelf = root.TryGetProperty("skip_if_last_message_from_self", out var skipEl) && skipEl.ValueKind == JsonValueKind.True;
 
             var lines = new List<string>();
             if (root.TryGetProperty("recent_failures", out var failuresEl) && failuresEl.ValueKind == JsonValueKind.Array)
@@ -1142,10 +1161,13 @@
             details += "\n配置摘要:\n";
             details += $"分类: {categoryText}\n";
             details += $"目标数: {targetCount}\n";
-            details += $"词典数: {dictCount}\n";
+            details += $"发送动作: {(isForwardMode ? "转发消息链接" : "发送消息规则")}\n";
+            details += isForwardMode ? $"转发来源数: {forwardSourceCount}\n" : $"消息规则数: {messageRuleCount}\n";
+            details += isForwardMode ? $"转发方式: {(string.Equals(forwardMode, "hide_attribution", StringComparison.Ordinal) ? "不带引用转发" : "带引用转发")}\n" : $"回复消息: {(replyToMessage.Length > 0 ? replyToMessage : "未设置")}\n";
+            details += $"去重发送: {(skipIfLastMessageFromSelf ? "启用（上一条仍是当前账号则跳过）" : "关闭")}\n";
             details += $"账号模式: {NormalizeTaskModeDisplay(accountMode)}\n";
             details += $"目标模式: {NormalizeTaskModeDisplay(targetMode)}\n";
-            details += $"消息规则模式: {NormalizeTaskModeDisplay(messageMode)}\n";
+            details += $"内容模式: {NormalizeTaskModeDisplay(messageMode)}\n";
             details += $"间隔: {FormatDelaySeconds(delayMin)} ~ {FormatDelaySeconds(delayMax)} 秒\n";
             details += $"最多发送: {(maxMessages <= 0 ? "持续运行（直到取消）" : maxMessages.ToString())}\n";
 

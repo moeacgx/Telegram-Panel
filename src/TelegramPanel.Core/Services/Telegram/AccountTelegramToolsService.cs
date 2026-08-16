@@ -1282,6 +1282,99 @@ public class AccountTelegramToolsService
     }
 
     public sealed record ResolvedChatTarget(InputPeer Peer, string Title, string CanonicalId);
+    public sealed record TelegramMessageReference(string RawUrl, string SourceTarget, int MessageId);
+
+    internal static bool TryParseTelegramMessageReference(string? input, out TelegramMessageReference? reference, out string? error)
+    {
+        reference = null;
+        error = null;
+        var raw = (input ?? string.Empty).Trim();
+        if (raw.Length == 0)
+        {
+            error = "消息链接为空";
+            return false;
+        }
+
+        var url = raw.StartsWith("t.me/", StringComparison.OrdinalIgnoreCase)
+                  || raw.StartsWith("telegram.me/", StringComparison.OrdinalIgnoreCase)
+            ? "https://" + raw
+            : raw;
+
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            error = "消息链接格式无效";
+            return false;
+        }
+        var host = (uri.Host ?? string.Empty).Trim().ToLowerInvariant();
+        if (host.StartsWith("www.", StringComparison.Ordinal))
+            host = host[4..];
+        if (host is not ("t.me" or "telegram.me"))
+        {
+            error = "仅支持 t.me 或 telegram.me 消息链接";
+            return false;
+        }
+
+        var segments = uri.AbsolutePath
+            .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(Uri.UnescapeDataString)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .ToArray();
+        if (segments.Length < 2)
+        {
+            error = "消息链接缺少频道/群组和消息 ID";
+            return false;
+        }
+
+        var offset = string.Equals(segments[0], "s", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+        if (segments.Length - offset < 2)
+        {
+            error = "消息链接缺少消息 ID";
+            return false;
+        }
+
+        string sourceTarget;
+        int firstMessageSegment;
+        if (string.Equals(segments[offset], "c", StringComparison.OrdinalIgnoreCase))
+        {
+            if (segments.Length - offset < 3)
+            {
+                error = "私密消息链接缺少频道/群组 ID 或消息 ID";
+                return false;
+            }
+
+            var chatIdText = segments[offset + 1].Trim();
+            if (!long.TryParse(chatIdText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var chatId) || chatId <= 0)
+            {
+                error = "私密消息链接中的频道/群组 ID 无效";
+                return false;
+            }
+
+            sourceTarget = "-100" + chatId.ToString(CultureInfo.InvariantCulture);
+            firstMessageSegment = offset + 2;
+        }
+        else
+        {
+            var username = segments[offset].Trim().TrimStart('@');
+            if (username.Length == 0 || username.StartsWith("+", StringComparison.Ordinal))
+            {
+                error = "消息链接中的频道/群组用户名无效";
+                return false;
+            }
+
+            sourceTarget = username;
+            firstMessageSegment = offset + 1;
+        }
+
+        var messageIdText = segments.Skip(firstMessageSegment).LastOrDefault(x => int.TryParse(x, NumberStyles.Integer, CultureInfo.InvariantCulture, out _));
+        if (!int.TryParse(messageIdText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var messageId) || messageId <= 0)
+        {
+            error = "消息链接缺少有效消息 ID";
+            return false;
+        }
+
+        reference = new TelegramMessageReference(raw, sourceTarget, messageId);
+        return true;
+    }
 
     /// <summary>
     /// 解析群组/频道/Bot 目标，支持：
@@ -1406,6 +1499,99 @@ public class AccountTelegramToolsService
             var msg = string.IsNullOrWhiteSpace(details) ? summary : $"{summary}：{details}";
             return (false, msg, null);
         }
+    }
+
+    /// <summary>
+    /// 转发 Telegram 消息链接到已解析的群组/频道/Bot 目标。
+    /// </summary>
+    public async Task<(bool Success, string? Error, int? MessageId)> ForwardMessageToResolvedChatAsync(
+        int accountId,
+        string sourceMessageUrl,
+        ResolvedChatTarget target,
+        bool dropAuthor,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            if (!TryParseTelegramMessageReference(sourceMessageUrl, out var messageReference, out var parseError) || messageReference == null)
+                return (false, parseError ?? "转发消息链接无效", null);
+
+            var source = await ResolveChatTargetAsync(accountId, messageReference.SourceTarget, cancellationToken);
+            if (!source.Success || source.Target == null)
+                return (false, $"转发来源解析失败：{source.Error ?? messageReference.SourceTarget}", null);
+
+            var client = await GetOrCreateConnectedClientAsync(accountId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var forwarded = await client.ForwardMessagesAsync(
+                source.Target.Peer,
+                new[] { messageReference.MessageId },
+                target.Peer,
+                drop_author: dropAuthor,
+                drop_media_captions: false);
+            var sent = forwarded?.FirstOrDefault(x => x != null && x.id > 0);
+            return sent == null
+                ? (false, "Telegram 未返回转发后的消息 ID", null)
+                : (true, null, sent.id);
+        }
+        catch (Exception ex)
+        {
+            var (summary, details) = MapTelegramException(ex);
+            var msg = string.IsNullOrWhiteSpace(details) ? summary : $"{summary}：{details}";
+            return (false, msg, null);
+        }
+    }
+
+    /// <summary>
+    /// 读取目标会话最新普通消息，判断它是否由当前账号发出。
+    /// </summary>
+    public async Task<(bool Success, string? Error, bool IsFromCurrentAccount, int? MessageId)> IsLatestMessageFromCurrentAccountAsync(
+        int accountId,
+        long accountUserId,
+        ResolvedChatTarget target,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var client = await GetOrCreateConnectedClientAsync(accountId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var history = await ExecuteTelegramRequestAsync(
+                accountId,
+                "读取目标最新消息",
+                () => client.Messages_GetHistory(target.Peer, limit: 10),
+                cancellationToken,
+                resetClientOnTimeout: true);
+
+            var latestMessage = history.Messages?
+                .OfType<Message>()
+                .OrderByDescending(x => x.id)
+                .FirstOrDefault();
+
+            return latestMessage == null
+                ? (true, null, false, null)
+                : (true, null, IsMessageFromCurrentAccount(latestMessage, accountUserId), latestMessage.id);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            var (summary, details) = MapTelegramException(ex);
+            var msg = string.IsNullOrWhiteSpace(details) ? summary : $"{summary}：{details}";
+            return (false, msg, false, null);
+        }
+    }
+
+    internal static bool IsMessageFromCurrentAccount(Message message, long accountUserId)
+    {
+        if (message.flags.HasFlag(Message.Flags.out_))
+            return true;
+
+        return accountUserId > 0
+               && message.from_id is PeerUser sender
+               && sender.user_id == accountUserId;
     }
 
     /// <summary>

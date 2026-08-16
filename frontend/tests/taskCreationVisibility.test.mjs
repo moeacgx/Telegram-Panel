@@ -51,3 +51,18 @@ test('待执行或执行中任务编辑前必须经过暂停屏障', () => {
   const reloadIndex = editBlock.indexOf('await load()')
   assert.ok(confirmIndex < pauseIndex && pauseIndex < reloadIndex, '暂停屏障调用顺序必须为确认、暂停、刷新')
 })
+
+test('账号持续活跃支持回复消息与转发来源配置', () => {
+  assert.match(taskConfigFormSource, /messageActionMode:\s*'send_generated_text'/)
+  assert.match(taskConfigFormSource, /reply_to_message_url:/)
+  assert.match(taskConfigFormSource, /reply_to_message_id:/)
+  assert.match(taskConfigFormSource, /forward_source_urls:/)
+  assert.match(taskConfigFormSource, /forward_mode:/)
+  assert.match(taskConfigFormSource, /skip_if_last_message_from_self:/)
+  assert.match(taskConfigFormSource, /skipIfLastMessageFromSelf:\s*false/)
+  assert.match(taskConfigFormSource, /去重发送/)
+  assert.match(taskConfigFormSource, /转发来源消息链接/)
+  assert.match(tasksSource, /发送动作: \$\{isForwardMode \? '转发消息链接' : '发送消息规则'\}/)
+  assert.match(tasksSource, /去重发送: \$\{skipIfLastMessageFromSelf \? '启用/)
+
+})

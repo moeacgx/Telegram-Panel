@@ -1,6 +1,7 @@
 ﻿using System.Text.Json;
 using System.Text.RegularExpressions;
 using TelegramPanel.Core.BatchTasks;
+using TelegramPanel.Core.Services.Telegram;
 using TelegramPanel.Data.Entities;
 using TelegramPanel.Modules;
 
@@ -55,13 +56,59 @@ public sealed class UserChatActiveTaskRerunBuilder : IModuleTaskRerunBuilder
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        cfg.MessageRules = UserChatActiveMessageRuleNormalizer.Normalize(cfg);
+        cfg.MessageActionMode = UserChatActiveMessageActionModes.Normalize(cfg.MessageActionMode);
+        cfg.ForwardMode = UserChatActiveForwardModes.Normalize(cfg.ForwardMode);
+        var isForwardSourceMode = string.Equals(cfg.MessageActionMode, UserChatActiveMessageActionModes.ForwardUrl, StringComparison.Ordinal);
+        if (isForwardSourceMode)
+        {
+            cfg.ReplyToMessageUrl = null;
+            cfg.ReplyToMessageId = null;
+            cfg.ForwardSourceUrls = NormalizeForwardSourceUrls(cfg.ForwardSourceUrls);
+            cfg.MessageRules = new List<UserChatActiveMessageRule>();
+            cfg.Dictionary = new List<string>();
+            cfg.ImageDictionaryToken = null;
+            cfg.EnableAiVerification = false;
+            cfg.AiModel = null;
+        }
+        else
+        {
+            cfg.ReplyToMessageUrl = NormalizeOptionalText(cfg.ReplyToMessageUrl);
+            cfg.ReplyToMessageId = cfg.ReplyToMessageId is > 0 ? cfg.ReplyToMessageId : null;
+            cfg.ForwardSourceUrls = new List<string>();
+            cfg.MessageRules = UserChatActiveMessageRuleNormalizer.Normalize(cfg);
+        }
 
         if (cfg.Targets.Count == 0)
             throw new InvalidOperationException("任务缺少目标群组/频道/Bot，无法重新运行");
 
-        if (cfg.MessageRules.Count == 0)
-            throw new InvalidOperationException("任务缺少消息规则，无法重新运行");
+        if (isForwardSourceMode)
+        {
+            if (cfg.ForwardSourceUrls.Count == 0)
+                throw new InvalidOperationException("转发模式缺少消息链接，无法重新运行");
+
+            foreach (var sourceUrl in cfg.ForwardSourceUrls)
+            {
+                if (!AccountTelegramToolsService.TryParseTelegramMessageReference(sourceUrl, out _, out var error))
+                    throw new InvalidOperationException($"转发消息链接无效：{error ?? sourceUrl}");
+            }
+        }
+        else
+        {
+            if (cfg.MessageRules.Count == 0)
+                throw new InvalidOperationException("任务缺少消息规则，无法重新运行");
+
+            if (!string.IsNullOrWhiteSpace(cfg.ReplyToMessageUrl))
+            {
+                if (!AccountTelegramToolsService.TryParseTelegramMessageReference(cfg.ReplyToMessageUrl, out var reference, out var error) || reference == null)
+                    throw new InvalidOperationException($"回复消息链接无效：{error ?? cfg.ReplyToMessageUrl}");
+
+                if (cfg.ReplyToMessageId is > 0 && cfg.ReplyToMessageId.Value != reference.MessageId)
+                    throw new InvalidOperationException("回复消息链接和消息 ID 不一致");
+
+                cfg.ReplyToMessageId = reference.MessageId;
+                cfg.ReplyToMessageUrl = reference.RawUrl;
+            }
+        }
 
         if (cfg.DelayMinMs < 0) cfg.DelayMinMs = 0;
         if (cfg.DelayMaxMs < 0) cfg.DelayMaxMs = 0;
@@ -82,6 +129,17 @@ public sealed class UserChatActiveTaskRerunBuilder : IModuleTaskRerunBuilder
         cfg.VerificationKeywords = NormalizeVerificationItems(cfg.VerificationKeywords);
         cfg.VerificationRegexes = NormalizeVerificationItems(cfg.VerificationRegexes);
         cfg.VerificationBotUsernames = NormalizeBotUsernames(cfg.VerificationBotUsernames);
+        if (isForwardSourceMode)
+        {
+            cfg.VerificationTimeoutSeconds = 15;
+            cfg.VerificationTimeoutAsFailure = false;
+            cfg.VerificationMatchMode = UserChatActiveAiVerificationMatchModes.MentionOrReply;
+            cfg.VerificationKeywords = new List<string>();
+            cfg.VerificationRegexes = new List<string>();
+            cfg.VerificationBotUsernameFilterEnabled = false;
+            cfg.VerificationBotUsernames = new List<string>();
+        }
+
 
         if (cfg.EnableAiVerification)
         {
@@ -154,6 +212,22 @@ public sealed class UserChatActiveTaskRerunBuilder : IModuleTaskRerunBuilder
         return string.Equals((mode ?? string.Empty).Trim(), UserChatActiveTaskModes.Queue, StringComparison.OrdinalIgnoreCase)
             ? UserChatActiveTaskModes.Queue
             : UserChatActiveTaskModes.Random;
+    }
+
+    private static string? NormalizeOptionalText(string? value)
+    {
+        var text = (value ?? string.Empty).Trim();
+        return text.Length == 0 ? null : text;
+    }
+
+    private static List<string> NormalizeForwardSourceUrls(IEnumerable<string>? urls)
+    {
+        return (urls ?? Array.Empty<string>())
+            .SelectMany(x => (x ?? string.Empty).Split(new[] { "\r\n", "\n", "\r", ",", " " }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Select(x => (x ?? string.Empty).Trim())
+            .Where(x => x.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private static List<string> NormalizeVerificationItems(IEnumerable<string>? items)

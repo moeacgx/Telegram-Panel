@@ -17,7 +17,44 @@
       <el-form-item label="目标">
         <el-input v-model="forms.userChatActive.targetsText" type="textarea" :rows="5" placeholder="每行一个群组/频道/Bot 链接、用户名或 ID" />
       </el-form-item>
-      <div class="message-rule-section">
+      <el-form-item label="发送动作">
+        <el-radio-group v-model="forms.userChatActive.messageActionMode">
+          <el-radio-button label="send_generated_text">发送消息规则</el-radio-button>
+          <el-radio-button label="forward_url">转发消息链接</el-radio-button>
+        </el-radio-group>
+        <div class="form-hint no-offset">发送消息规则可选回复指定消息；转发模式会把来源消息转发到目标，支持保留或隐藏引用来源。</div>
+      </el-form-item>
+      <el-form-item label="去重发送">
+        <el-switch v-model="forms.userChatActive.skipIfLastMessageFromSelf" active-text="启用" inactive-text="关闭" />
+        <div class="form-hint no-offset">启用后，发送前读取目标最新消息；如果上一条普通消息仍是当前执行账号发出的，本轮跳过不发送。</div>
+      </el-form-item>
+      <template v-if="forms.userChatActive.messageActionMode === 'send_generated_text'">
+        <el-row :gutter="12">
+          <el-col :span="16">
+            <el-form-item label="回复消息链接">
+              <el-input v-model="forms.userChatActive.replyToMessageUrl" placeholder="可选，例如 https://t.me/channel/123；用于提取回复消息 ID" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="回复消息 ID">
+              <el-input-number v-model="forms.userChatActive.replyToMessageId" :min="0" :max="2147483647" class="full" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+      </template>
+      <template v-else>
+        <el-form-item label="转发来源消息链接">
+          <el-input v-model="forms.userChatActive.forwardSourceUrlsText" type="textarea" :rows="4" placeholder="每行一个 Telegram 消息链接，例如 https://t.me/channel/123 或 https://t.me/c/1234567890/123" />
+        </el-form-item>
+        <el-form-item label="转发方式">
+          <el-radio-group v-model="forms.userChatActive.forwardMode">
+            <el-radio-button label="with_attribution">带引用转发</el-radio-button>
+            <el-radio-button label="hide_attribution">不带引用转发</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+      </template>
+
+      <div v-if="forms.userChatActive.messageActionMode === 'send_generated_text'" class="message-rule-section">
         <div class="message-rule-toolbar">
           <div>
             <strong>消息规则</strong>
@@ -87,7 +124,7 @@
           </el-form-item>
         </el-col>
         <el-col :span="8">
-          <el-form-item label="消息规则模式">
+          <el-form-item label="内容模式">
             <el-select v-model="forms.userChatActive.messageMode" class="full">
               <el-option label="随机" value="random" />
               <el-option label="队列循环" value="queue" />
@@ -96,10 +133,10 @@
         </el-col>
       </el-row>
 
-      <el-form-item label="AI 验证">
+      <el-form-item v-if="forms.userChatActive.messageActionMode === 'send_generated_text'" label="AI 验证">
         <el-switch v-model="forms.userChatActive.enableAiVerification" active-text="启用" inactive-text="关闭" />
       </el-form-item>
-      <template v-if="forms.userChatActive.enableAiVerification">
+      <template v-if="forms.userChatActive.messageActionMode === 'send_generated_text' && forms.userChatActive.enableAiVerification">
         <el-row :gutter="12">
           <el-col :span="12">
             <el-form-item label="任务模型">
@@ -376,6 +413,8 @@ import type { AccountCategory, DataDictionary, OperationAccount, SimpleCategory 
 
 type AvatarSource = 'none' | 'fixed' | 'dictionary'
 type AutomationKind = 'privateCreate' | 'publicize'
+type UserChatActiveMessageActionMode = 'send_generated_text' | 'forward_url'
+type UserChatActiveForwardMode = 'with_attribution' | 'hide_attribution'
 
 export interface TaskConfigDraft {
   total: number
@@ -513,6 +552,12 @@ function applyInitialConfig() {
     const form = forms.userChatActive
     form.categoryIds = normalizeIds(cfg.category_ids, readNumber(cfg.category_id))
     form.targetsText = readStringArray(cfg.targets).join('\n')
+    form.messageActionMode = normalizeMessageActionMode(readString(cfg.message_action_mode, 'send_generated_text'))
+    form.replyToMessageUrl = readString(cfg.reply_to_message_url)
+    form.replyToMessageId = readOptionalPositiveNumber(cfg.reply_to_message_id)
+    form.forwardSourceUrlsText = readStringArray(cfg.forward_source_urls).join('\n')
+    form.forwardMode = normalizeForwardMode(readString(cfg.forward_mode, 'with_attribution'))
+    form.skipIfLastMessageFromSelf = readBoolean(cfg.skip_if_last_message_from_self)
     const legacyDictionary = readStringArray(cfg.dictionary)
     const legacyImageDictionaryName = extractDictionaryName(readString(cfg.image_dictionary_token))
     form.messageRules = readUserChatActiveMessageRules(cfg.message_rules, legacyDictionary, legacyImageDictionaryName)
@@ -592,8 +637,6 @@ function applyInitialConfig() {
     form.triggerPhrasesText = readStringArray(cfg.trigger_phrases).join('\n')
     return
   }
-
-
 }
 
 function pushDraft() {
@@ -625,22 +668,30 @@ function buildUserChatActiveDraft(): TaskConfigDraft {
   const categoryIds = normalizedSelectedIds(form.categoryIds)
   const selectedCategories = selectedAccountCategories(categoryIds)
   const targets = uniqueLines(form.targetsText)
-  const messageRules = normalizeUserChatActiveMessageRules(form.messageRules)
+  const messageRules = form.messageActionMode === 'send_generated_text'
+    ? normalizeUserChatActiveMessageRules(form.messageRules)
+    : []
   const dictionary = messageRules.map((x) => x.text).filter(Boolean)
   const sharedImageDictionaryName = sharedRuleImageDictionaryName(messageRules)
+  const forwardSourceUrls = form.messageActionMode === 'forward_url' ? uniqueLines(form.forwardSourceUrlsText) : []
   if (categoryIds.length === 0 || selectedCategories.length === 0) throw new Error('请至少选择一个执行账号分类')
   if (targets.length === 0) throw new Error('请至少填写一个目标群组/频道/Bot')
-  if (messageRules.length === 0) throw new Error('请至少添加一条消息规则')
-  for (const rule of messageRules) {
-    if (rule.imageDictionaryName && !imageDictionaryNames.value.includes(rule.imageDictionaryName)) throw new Error('请选择有效的图片字典')
+  if (form.messageActionMode === 'forward_url') {
+    if (forwardSourceUrls.length === 0) throw new Error('请至少填写一个转发来源消息链接')
+  } else {
+    if (messageRules.length === 0) throw new Error('请至少添加一条消息规则')
+    for (const rule of messageRules) {
+      if (rule.imageDictionaryName && !imageDictionaryNames.value.includes(rule.imageDictionaryName)) throw new Error('请选择有效的图片字典')
+    }
   }
   if (form.delayMaxSeconds < form.delayMinSeconds) throw new Error('最大间隔不能小于最小间隔')
   if (!isValidMode(form.accountMode) || !isValidMode(form.targetMode) || !isValidMode(form.messageMode)) throw new Error('模式参数无效')
+  if (!isValidMessageActionMode(form.messageActionMode) || !isValidForwardMode(form.forwardMode)) throw new Error('发送动作参数无效')
 
   const verificationKeywords = form.enableAiVerification ? uniqueLines(form.verificationKeywordsText) : []
   const verificationRegexes = form.enableAiVerification ? uniqueLines(form.verificationRegexText) : []
   const verificationBotUsernames = form.enableAiVerification ? uniqueLines(form.verificationBotUsernamesText).map((x) => x.replace(/^@+/, '')) : []
-  if (form.enableAiVerification) {
+  if (form.messageActionMode === 'send_generated_text' && form.enableAiVerification) {
     if (form.selectedAiModelOption === '__custom__' && !form.customAiModel.trim()) throw new Error('请填写自定义模型名')
     if (form.verificationMatchMode === 'keyword' && verificationKeywords.length === 0) throw new Error('请至少填写一个验证关键词')
     if (form.verificationMatchMode === 'regex') {
@@ -664,6 +715,12 @@ function buildUserChatActiveDraft(): TaskConfigDraft {
     category_ids: categoryIds,
     category_names: selectedCategories.map((x) => x.name),
     targets,
+    message_action_mode: form.messageActionMode,
+    reply_to_message_url: form.messageActionMode === 'send_generated_text' ? form.replyToMessageUrl.trim() || null : null,
+    reply_to_message_id: form.messageActionMode === 'send_generated_text' && form.replyToMessageId && form.replyToMessageId > 0 ? Math.trunc(form.replyToMessageId) : null,
+    forward_source_urls: forwardSourceUrls,
+    forward_mode: form.forwardMode,
+    skip_if_last_message_from_self: form.skipIfLastMessageFromSelf,
     dictionary,
     image_dictionary_token: sharedImageDictionaryName ? dictionaryToken(sharedImageDictionaryName) : null,
     message_rules: messageRules.map((rule) => ({
@@ -676,15 +733,15 @@ function buildUserChatActiveDraft(): TaskConfigDraft {
     message_mode: form.messageMode,
     target_mode: form.targetMode,
     max_messages: Math.max(0, form.maxMessages),
-    enable_ai_verification: form.enableAiVerification,
-    ai_model: form.enableAiVerification ? resolveAiModel() : null,
+    enable_ai_verification: form.messageActionMode === 'send_generated_text' && form.enableAiVerification,
+    ai_model: form.messageActionMode === 'send_generated_text' && form.enableAiVerification ? resolveAiModel() : null,
     verification_timeout_seconds: form.enableAiVerification ? form.verificationTimeoutSeconds : 15,
-    verification_timeout_as_failure: form.enableAiVerification && form.verificationTimeoutAsFailure,
+    verification_timeout_as_failure: form.messageActionMode === 'send_generated_text' && form.enableAiVerification && form.verificationTimeoutAsFailure,
     verification_match_mode: normalizeVerificationMode(form.verificationMatchMode),
-    verification_keywords: verificationKeywords,
-    verification_regexes: verificationRegexes,
-    verification_bot_username_filter: form.enableAiVerification && form.verificationBotUsernameFilterEnabled,
-    verification_bot_usernames: verificationBotUsernames,
+    verification_keywords: form.messageActionMode === 'send_generated_text' ? verificationKeywords : [],
+    verification_regexes: form.messageActionMode === 'send_generated_text' ? verificationRegexes : [],
+    verification_bot_username_filter: form.messageActionMode === 'send_generated_text' && form.enableAiVerification && form.verificationBotUsernameFilterEnabled,
+    verification_bot_usernames: form.messageActionMode === 'send_generated_text' ? verificationBotUsernames : [],
   }
 
   return validDraft(Math.max(0, form.maxMessages), config)
@@ -882,6 +939,12 @@ function defaultUserChatActiveForm() {
     targetsText: '',
     messageRules: [defaultUserChatActiveMessageRule()],
     bulkRulesText: '',
+    messageActionMode: 'send_generated_text' as UserChatActiveMessageActionMode,
+    replyToMessageUrl: '',
+    replyToMessageId: null as number | null,
+    forwardSourceUrlsText: '',
+    forwardMode: 'with_attribution' as UserChatActiveForwardMode,
+    skipIfLastMessageFromSelf: false,
     delayMinSeconds: 15,
     delayMaxSeconds: 45,
     maxMessages: 0,
@@ -1093,6 +1156,12 @@ function readNumber(value: unknown, fallback = 0) {
   return Number.isFinite(n) ? n : fallback
 }
 
+function readOptionalPositiveNumber(value: unknown) {
+  if (value === null || value === undefined) return null
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null
+}
+
 function readBoolean(value: unknown) {
   return value === true
 }
@@ -1111,6 +1180,22 @@ function normalizeMode(value: string) {
 
 function isValidMode(value: string) {
   return value === 'random' || value === 'queue'
+}
+
+function normalizeMessageActionMode(value: string): UserChatActiveMessageActionMode {
+  return value === 'forward_url' ? 'forward_url' : 'send_generated_text'
+}
+
+function isValidMessageActionMode(value: string) {
+  return value === 'send_generated_text' || value === 'forward_url'
+}
+
+function normalizeForwardMode(value: string): UserChatActiveForwardMode {
+  return value === 'hide_attribution' ? 'hide_attribution' : 'with_attribution'
+}
+
+function isValidForwardMode(value: string) {
+  return value === 'with_attribution' || value === 'hide_attribution'
 }
 
 function normalizeVerificationMode(value: string) {

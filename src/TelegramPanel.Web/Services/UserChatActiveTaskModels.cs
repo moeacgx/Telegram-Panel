@@ -8,6 +8,32 @@ public static class UserChatActiveTaskModes
     public const string Queue = "queue";
 }
 
+public static class UserChatActiveMessageActionModes
+{
+    public const string SendGeneratedText = "send_generated_text";
+    public const string ForwardUrl = "forward_url";
+
+    public static string Normalize(string? value)
+    {
+        return string.Equals((value ?? string.Empty).Trim(), ForwardUrl, StringComparison.OrdinalIgnoreCase)
+            ? ForwardUrl
+            : SendGeneratedText;
+    }
+}
+
+public static class UserChatActiveForwardModes
+{
+    public const string WithAttribution = "with_attribution";
+    public const string HideAttribution = "hide_attribution";
+
+    public static string Normalize(string? value)
+    {
+        return string.Equals((value ?? string.Empty).Trim(), HideAttribution, StringComparison.OrdinalIgnoreCase)
+            ? HideAttribution
+            : WithAttribution;
+    }
+}
+
 public static class UserChatActiveAiVerificationMatchModes
 {
     public const string MentionOrReply = "mention_or_reply";
@@ -51,6 +77,24 @@ public sealed class UserChatActiveTaskConfig
 
     [JsonPropertyName("message_rules")]
     public List<UserChatActiveMessageRule> MessageRules { get; set; } = new();
+
+    [JsonPropertyName("message_action_mode")]
+    public string MessageActionMode { get; set; } = UserChatActiveMessageActionModes.SendGeneratedText;
+
+    [JsonPropertyName("reply_to_message_url")]
+    public string? ReplyToMessageUrl { get; set; }
+
+    [JsonPropertyName("reply_to_message_id")]
+    public int? ReplyToMessageId { get; set; }
+
+    [JsonPropertyName("forward_source_urls")]
+    public List<string> ForwardSourceUrls { get; set; } = new();
+
+    [JsonPropertyName("forward_mode")]
+    public string ForwardMode { get; set; } = UserChatActiveForwardModes.WithAttribution;
+
+    [JsonPropertyName("skip_if_last_message_from_self")]
+    public bool SkipIfLastMessageFromSelf { get; set; }
 
     [JsonPropertyName("delay_min_ms")]
     public int DelayMinMs { get; set; } = 15000;

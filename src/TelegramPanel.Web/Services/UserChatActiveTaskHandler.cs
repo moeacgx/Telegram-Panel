@@ -103,12 +103,15 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
 
         var config = DeserializeConfig(host.Config);
         ValidateAndNormalizeConfig(config);
-        foreach (var imageDictionaryToken in config.MessageRules
-                     .Select(x => x.ImageDictionaryToken)
-                     .Where(x => !string.IsNullOrWhiteSpace(x))
-                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        if (IsGeneratedMessageMode(config))
         {
-            await templateRendering.ValidateImageTemplateAsync(imageDictionaryToken!, cancellationToken);
+            foreach (var imageDictionaryToken in config.MessageRules
+                         .Select(x => x.ImageDictionaryToken)
+                         .Where(x => !string.IsNullOrWhiteSpace(x))
+                         .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                await templateRendering.ValidateImageTemplateAsync(imageDictionaryToken!, cancellationToken);
+            }
         }
 
         config.Canceled = false;
@@ -169,11 +172,14 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
         var messageQueueIndex = 0;
         var targetQueueIndexByAccountId = new Dictionary<int, int>();
         var lastProgressPersistAt = DateTime.UtcNow;
+        var useForwardSource = IsForwardSourceMode(config);
+        var contentItemCount = ResolveContentItemCount(config);
+        var replyToMessageId = useForwardSource ? null : ResolveReplyToMessageId(config);
         var finiteSendPlan = config.MaxMessages > 0
             ? UserChatActiveSendPlanner.BuildFiniteRunPlan(
                 accountSlots.Count,
                 Math.Max(0, config.MaxMessages - progress.Completed),
-                config.MessageRules.Count,
+                contentItemCount,
                 config.AccountMode,
                 config.MessageMode)
             : null;
@@ -264,11 +270,9 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
                 targetQueueIndexByAccountId[accountSlot.Account.Id] = targetQueueIndex;
                 var targetSlot = accountSlot.Targets[targetIdx];
 
-                var messageIdx = finiteSendPlan is not null
+                var contentIdx = finiteSendPlan is not null
                     ? plannedSend.MessageIndex
-                    : SelectIndex(config.MessageMode, config.MessageRules.Count, ref messageQueueIndex);
-                var messageRule = config.MessageRules[messageIdx];
-                var textTemplate = messageRule.Text ?? string.Empty;
+                    : SelectIndex(config.MessageMode, contentItemCount, ref messageQueueIndex);
 
                 if (!await host.IsStillRunningAsync(cancellationToken))
                 {
@@ -277,109 +281,156 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
                     break;
                 }
 
-                string text;
-                try
+                var forwardSourceUrl = useForwardSource ? config.ForwardSourceUrls[contentIdx] : string.Empty;
+                var messageRule = useForwardSource ? null : config.MessageRules[contentIdx];
+                var textTemplate = messageRule?.Text ?? string.Empty;
+                var text = string.Empty;
+                var imageDictionaryToken = string.Empty;
+                var hasImageDictionary = false;
+
+                if (!useForwardSource)
                 {
-                    text = (await templateRendering.RenderTextTemplateAsync(textTemplate, cancellationToken)).Trim();
+                    try
+                    {
+                        text = (await templateRendering.RenderTextTemplateAsync(textTemplate, cancellationToken)).Trim();
+                    }
+                    catch (Exception ex)
+                    {
+                        var completed = Interlocked.Increment(ref progress.Completed);
+                        Interlocked.Increment(ref progress.Failed);
+                        var hadTemplateFailure = true;
+                        await AddFailureAndPersistAsync(
+                            taskManagement,
+                            host.TaskId,
+                            config,
+                            accountSlot.Account,
+                            targetSlot.RawTarget,
+                            $"消息规则模板解析失败：{ex.Message}",
+                            configGate,
+                            cancellationToken);
+
+                        if (ShouldPersistProgress(completed, hadTemplateFailure, lastProgressPersistAt))
+                        {
+                            await host.UpdateProgressAsync(completed, progress.Failed, cancellationToken);
+                            lastProgressPersistAt = DateTime.UtcNow;
+                        }
+
+                        if (config.MaxMessages > 0 && completed >= config.MaxMessages)
+                            break;
+
+                        if (!await DelayUntilNextSendAsync(loopTimer, intervalMs))
+                        {
+                            config.Canceled = true;
+                            verificationTokenSource.Cancel();
+                            break;
+                        }
+
+                        continue;
+                    }
+
+                    imageDictionaryToken = (messageRule?.ImageDictionaryToken ?? string.Empty).Trim();
+                    hasImageDictionary = imageDictionaryToken.Length > 0;
+
+                    if (text.Length == 0 && !hasImageDictionary)
+                    {
+                        var completed = Interlocked.Increment(ref progress.Completed);
+                        Interlocked.Increment(ref progress.Failed);
+                        var hadEmptyMessageFailure = true;
+                        await AddFailureAndPersistAsync(
+                            taskManagement,
+                            host.TaskId,
+                            config,
+                            accountSlot.Account,
+                            targetSlot.RawTarget,
+                            "消息规则模板解析结果为空，无法发送",
+                            configGate,
+                            cancellationToken);
+
+                        if (ShouldPersistProgress(completed, hadEmptyMessageFailure, lastProgressPersistAt))
+                        {
+                            await host.UpdateProgressAsync(completed, progress.Failed, cancellationToken);
+                            lastProgressPersistAt = DateTime.UtcNow;
+                        }
+
+                        if (config.MaxMessages > 0 && completed >= config.MaxMessages)
+                            break;
+
+                        if (!await DelayUntilNextSendAsync(loopTimer, intervalMs))
+                        {
+                            config.Canceled = true;
+                            verificationTokenSource.Cancel();
+                            break;
+                        }
+
+                        continue;
+                    }
                 }
-                catch (Exception ex)
+
+                async Task<(bool Success, string? Error, int? MessageId, bool SkippedByDedupe)> SendCurrentMessageAsync()
                 {
-                    var completed = Interlocked.Increment(ref progress.Completed);
-                    Interlocked.Increment(ref progress.Failed);
-                    var hadTemplateFailure = true;
-                    await AddFailureAndPersistAsync(
-                        taskManagement,
-                        host.TaskId,
-                        config,
-                        accountSlot.Account,
-                        targetSlot.RawTarget,
-                        $"消息规则模板解析失败：{ex.Message}",
-                        configGate,
-                        cancellationToken);
-
-                    if (ShouldPersistProgress(completed, hadTemplateFailure, lastProgressPersistAt))
+                    if (config.SkipIfLastMessageFromSelf)
                     {
-                        await host.UpdateProgressAsync(completed, progress.Failed, cancellationToken);
-                        lastProgressPersistAt = DateTime.UtcNow;
+                        var latest = await accountTools.IsLatestMessageFromCurrentAccountAsync(
+                            accountSlot.Account.Id,
+                            accountSlot.Account.UserId,
+                            targetSlot.Resolved,
+                            cancellationToken);
+
+                        if (!latest.Success)
+                            return (false, $"发送前去重检查失败：{latest.Error ?? "无法读取目标最新消息"}", null, false);
+
+                        if (latest.IsFromCurrentAccount)
+                        {
+                            logger.LogInformation(
+                                "UserChatActive skipped send because latest message was from current account: taskId={TaskId}, accountId={AccountId}, target={Target}, latestMessageId={LatestMessageId}",
+                                host.TaskId,
+                                accountSlot.Account.Id,
+                                targetSlot.RawTarget,
+                                latest.MessageId);
+                            return (true, null, null, true);
+                        }
                     }
 
-                    if (config.MaxMessages > 0 && completed >= config.MaxMessages)
-                        break;
-
-                    if (!await DelayUntilNextSendAsync(loopTimer, intervalMs))
+                    if (useForwardSource)
                     {
-                        config.Canceled = true;
-                        verificationTokenSource.Cancel();
-                        break;
+                        var result = await accountTools.ForwardMessageToResolvedChatAsync(
+                            accountSlot.Account.Id,
+                            forwardSourceUrl,
+                            targetSlot.Resolved,
+                            dropAuthor: string.Equals(config.ForwardMode, UserChatActiveForwardModes.HideAttribution, StringComparison.Ordinal),
+                            cancellationToken: cancellationToken);
+                        return (result.Success, result.Error, result.MessageId, false);
                     }
 
-                    continue;
-                }
-
-                var imageDictionaryToken = (messageRule.ImageDictionaryToken ?? string.Empty).Trim();
-                var hasImageDictionary = imageDictionaryToken.Length > 0;
-
-                if (text.Length == 0 && !hasImageDictionary)
-                {
-                    var completed = Interlocked.Increment(ref progress.Completed);
-                    Interlocked.Increment(ref progress.Failed);
-                    var hadEmptyMessageFailure = true;
-                    await AddFailureAndPersistAsync(
-                        taskManagement,
-                        host.TaskId,
-                        config,
-                        accountSlot.Account,
-                        targetSlot.RawTarget,
-                        "消息规则模板解析结果为空，无法发送",
-                        configGate,
-                        cancellationToken);
-
-                    if (ShouldPersistProgress(completed, hadEmptyMessageFailure, lastProgressPersistAt))
-                    {
-                        await host.UpdateProgressAsync(completed, progress.Failed, cancellationToken);
-                        lastProgressPersistAt = DateTime.UtcNow;
-                    }
-
-                    if (config.MaxMessages > 0 && completed >= config.MaxMessages)
-                        break;
-
-                    if (!await DelayUntilNextSendAsync(loopTimer, intervalMs))
-                    {
-                        config.Canceled = true;
-                        verificationTokenSource.Cancel();
-                        break;
-                    }
-
-                    continue;
-                }
-
-                async Task<(bool Success, string? Error, int? MessageId)> SendCurrentMessageAsync()
-                {
                     if (hasImageDictionary)
                     {
                         try
                         {
                             var asset = await templateRendering.ResolveImageTemplateAsync(imageDictionaryToken, cancellationToken);
                             await using var image = await assetStorage.OpenReadAsync(asset.AssetPath, cancellationToken);
-                            return await accountTools.SendPhotoToResolvedChatAsync(
+                            var result = await accountTools.SendPhotoToResolvedChatAsync(
                                 accountSlot.Account.Id,
                                 targetSlot.Resolved,
                                 image,
                                 asset.FileName,
                                 text,
-                                cancellationToken: cancellationToken);
+                                replyToMessageId,
+                                cancellationToken);
+                            return (result.Success, result.Error, result.MessageId, false);
                         }
                         catch (Exception ex)
                         {
-                            return (false, $"图片字典解析/发送准备失败：{ex.Message}", null);
+                            return (false, $"图片字典解析/发送准备失败：{ex.Message}", null, false);
                         }
                     }
 
-                    return await accountTools.SendMessageToResolvedChatAsync(
+                    var sendResult = await accountTools.SendMessageToResolvedChatAsync(
                         accountSlot.Account.Id,
                         targetSlot.Resolved,
                         text,
-                        cancellationToken: cancellationToken);
+                        replyToMessageId,
+                        cancellationToken);
+                    return (sendResult.Success, sendResult.Error, sendResult.MessageId, false);
                 }
 
                 var send = await SendCurrentMessageAsync();
@@ -479,7 +530,7 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
                             targetSlot.Resolved = refresh.Target;
                     }
                 }
-                else if (config.EnableAiVerification)
+                else if (!send.SkippedByDedupe && config.EnableAiVerification)
                 {
                     if (!send.MessageId.HasValue || send.MessageId.Value <= 0)
                     {
@@ -511,7 +562,7 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
 
                         verificationTasks[verificationTaskId] = verificationTask;
                         _ = verificationTask.ContinueWith(
-                            _ => verificationTasks.TryRemove(verificationTaskId, out _),
+                            _ => ((ICollection<KeyValuePair<Guid, Task>>)verificationTasks).Remove(new KeyValuePair<Guid, Task>(verificationTaskId, verificationTask)),
                             CancellationToken.None,
                             TaskContinuationOptions.ExecuteSynchronously,
                             TaskScheduler.Default);
@@ -629,13 +680,49 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        config.MessageRules = UserChatActiveMessageRuleNormalizer.Normalize(config);
+        config.MessageActionMode = UserChatActiveMessageActionModes.Normalize(config.MessageActionMode);
+        config.ForwardMode = UserChatActiveForwardModes.Normalize(config.ForwardMode);
+        var isForwardSourceMode = IsForwardSourceMode(config);
+        if (isForwardSourceMode)
+        {
+            config.ReplyToMessageUrl = null;
+            config.ReplyToMessageId = null;
+            config.ForwardSourceUrls = NormalizeForwardSourceUrls(config.ForwardSourceUrls);
+            config.MessageRules = new List<UserChatActiveMessageRule>();
+            config.Dictionary = new List<string>();
+            config.ImageDictionaryToken = null;
+            config.EnableAiVerification = false;
+            config.AiModel = null;
+        }
+        else
+        {
+            config.ReplyToMessageUrl = NormalizeOptionalText(config.ReplyToMessageUrl);
+            config.ReplyToMessageId = config.ReplyToMessageId is > 0 ? config.ReplyToMessageId : null;
+            config.ForwardSourceUrls = new List<string>();
+            config.MessageRules = UserChatActiveMessageRuleNormalizer.Normalize(config);
+        }
 
         if (config.Targets.Count == 0)
             throw new InvalidOperationException("任务缺少目标群组/频道/Bot");
 
-        if (config.MessageRules.Count == 0)
-            throw new InvalidOperationException("任务缺少消息规则");
+        if (isForwardSourceMode)
+        {
+            if (config.ForwardSourceUrls.Count == 0)
+                throw new InvalidOperationException("转发模式缺少消息链接");
+
+            foreach (var sourceUrl in config.ForwardSourceUrls)
+            {
+                if (!AccountTelegramToolsService.TryParseTelegramMessageReference(sourceUrl, out _, out var error))
+                    throw new InvalidOperationException($"转发消息链接无效：{error ?? sourceUrl}");
+            }
+        }
+        else
+        {
+            if (config.MessageRules.Count == 0)
+                throw new InvalidOperationException("任务缺少消息规则");
+
+            _ = ResolveReplyToMessageId(config);
+        }
 
         if (config.DelayMinMs < 0) config.DelayMinMs = 0;
         if (config.DelayMaxMs < 0) config.DelayMaxMs = 0;
@@ -657,6 +744,17 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
         config.VerificationKeywords = NormalizeVerificationItems(config.VerificationKeywords);
         config.VerificationRegexes = NormalizeVerificationItems(config.VerificationRegexes);
         config.VerificationBotUsernames = NormalizeBotUsernames(config.VerificationBotUsernames);
+        if (isForwardSourceMode)
+        {
+            config.VerificationTimeoutSeconds = 15;
+            config.VerificationTimeoutAsFailure = false;
+            config.VerificationMatchMode = UserChatActiveAiVerificationMatchModes.MentionOrReply;
+            config.VerificationKeywords = new List<string>();
+            config.VerificationRegexes = new List<string>();
+            config.VerificationBotUsernameFilterEnabled = false;
+            config.VerificationBotUsernames = new List<string>();
+        }
+
 
         if (config.EnableAiVerification)
         {
@@ -725,6 +823,47 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
         return string.Equals((mode ?? string.Empty).Trim(), UserChatActiveTaskModes.Queue, StringComparison.OrdinalIgnoreCase)
             ? UserChatActiveTaskModes.Queue
             : UserChatActiveTaskModes.Random;
+    }
+
+    private static bool IsForwardSourceMode(UserChatActiveTaskConfig config) =>
+        string.Equals(config.MessageActionMode, UserChatActiveMessageActionModes.ForwardUrl, StringComparison.Ordinal);
+
+    private static bool IsGeneratedMessageMode(UserChatActiveTaskConfig config) => !IsForwardSourceMode(config);
+
+    private static int ResolveContentItemCount(UserChatActiveTaskConfig config) =>
+        IsForwardSourceMode(config) ? config.ForwardSourceUrls.Count : config.MessageRules.Count;
+
+    private static string? NormalizeOptionalText(string? value)
+    {
+        var text = (value ?? string.Empty).Trim();
+        return text.Length == 0 ? null : text;
+    }
+
+    private static List<string> NormalizeForwardSourceUrls(IEnumerable<string>? urls)
+    {
+        return (urls ?? Array.Empty<string>())
+            .SelectMany(SplitTargetValues)
+            .Select(x => (x ?? string.Empty).Trim())
+            .Where(x => x.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static int? ResolveReplyToMessageId(UserChatActiveTaskConfig config)
+    {
+        if (!string.IsNullOrWhiteSpace(config.ReplyToMessageUrl))
+        {
+            if (!AccountTelegramToolsService.TryParseTelegramMessageReference(config.ReplyToMessageUrl, out var reference, out var error) || reference == null)
+                throw new InvalidOperationException($"回复消息链接无效：{error ?? config.ReplyToMessageUrl}");
+
+            if (config.ReplyToMessageId is > 0 && config.ReplyToMessageId.Value != reference.MessageId)
+                throw new InvalidOperationException("回复消息链接和消息 ID 不一致");
+
+            config.ReplyToMessageId = reference.MessageId;
+            config.ReplyToMessageUrl = reference.RawUrl;
+        }
+
+        return config.ReplyToMessageId is > 0 ? config.ReplyToMessageId : null;
     }
 
     private static List<string> NormalizeVerificationItems(IEnumerable<string>? items)
