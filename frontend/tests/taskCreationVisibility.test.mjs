@@ -55,7 +55,7 @@ test('待执行或执行中任务编辑前必须经过暂停屏障', () => {
 test('账号持续活跃支持回复消息与转发来源配置', () => {
   assert.match(taskConfigFormSource, /messageActionMode:\s*'send_generated_text'/)
   assert.match(taskConfigFormSource, /reply_to_message_url:/)
-  assert.match(taskConfigFormSource, /reply_to_message_id:/)
+  assert.doesNotMatch(taskConfigFormSource, /reply_to_message_id|replyToMessageId|回复消息 ID/)
   assert.match(taskConfigFormSource, /forward_source_urls:/)
   assert.match(taskConfigFormSource, /forward_mode:/)
   assert.match(taskConfigFormSource, /skip_if_last_message_from_self:/)
@@ -64,6 +64,9 @@ test('账号持续活跃支持回复消息与转发来源配置', () => {
   assert.match(taskConfigFormSource, /转发来源消息链接/)
   assert.match(tasksSource, /发送动作: \$\{isForwardMode \? '转发消息链接' : '发送消息规则'\}/)
   assert.match(tasksSource, /去重发送: \$\{skipIfLastMessageFromSelf \? '启用/)
+  assert.match(taskConfigFormSource, /v-if="forms\.userChatActive\.messageActionMode === 'send_generated_text'" :span="8"/)
+  assert.match(taskConfigFormSource, /message_mode: effectiveMessageMode/)
+  assert.match(tasksSource, /\.\.\.\(isForwardMode \? \[\] : \[`内容模式:/)
 
 })
 

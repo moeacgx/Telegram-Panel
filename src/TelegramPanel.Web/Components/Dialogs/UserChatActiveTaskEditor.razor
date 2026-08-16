@@ -55,17 +55,10 @@
 
         @if (IsGeneratedMessageMode)
         {
-            <MudGrid>
-                <MudItem xs="12" md="8">
-                    <MudTextField @bind-Value="replyToMessageUrl" @bind-Value:after="OnInputsChanged"
-                                  Label="回复消息链接" Variant="Variant.Outlined" Immediate="true"
-                                  HelperText="可选，例如 https://t.me/channel/123；用于提取回复消息 ID。" />
-                </MudItem>
-                <MudItem xs="12" md="4">
-                    <MudNumericField T="int" @bind-Value="replyToMessageId" @bind-Value:after="OnInputsChanged"
-                                     Label="回复消息 ID" Variant="Variant.Outlined" Min="0" Max="2147483647" />
-                </MudItem>
-            </MudGrid>
+            <MudTextField @bind-Value="replyToMessageUrl" @bind-Value:after="OnInputsChanged"
+                          Label="回复消息链接" Variant="Variant.Outlined" Immediate="true"
+                          HelperText="可选，例如 https://t.me/channel/123；新消息会回复这条链接对应的消息。" />
+
 
             <MudPaper Outlined="true" Class="pa-3">
                 <MudStack Spacing="2">
@@ -154,27 +147,30 @@
         </MudGrid>
 
         <MudGrid>
-            <MudItem xs="12" md="4">
+            <MudItem xs="12" md="@(IsGeneratedMessageMode ? 4 : 6)">
                 <MudSelect T="string" @bind-Value="accountMode" @bind-Value:after="OnInputsChanged"
                            Label="账号选择模式" Variant="Variant.Outlined" Dense="true">
                     <MudSelectItem Value="@UserChatActiveTaskModes.Random">随机</MudSelectItem>
                     <MudSelectItem Value="@UserChatActiveTaskModes.Queue">队列循环</MudSelectItem>
                 </MudSelect>
             </MudItem>
-            <MudItem xs="12" md="4">
+            <MudItem xs="12" md="@(IsGeneratedMessageMode ? 4 : 6)">
                 <MudSelect T="string" @bind-Value="targetMode" @bind-Value:after="OnInputsChanged"
                            Label="目标选择模式" Variant="Variant.Outlined" Dense="true">
                     <MudSelectItem Value="@UserChatActiveTaskModes.Random">随机</MudSelectItem>
                     <MudSelectItem Value="@UserChatActiveTaskModes.Queue">队列循环</MudSelectItem>
                 </MudSelect>
             </MudItem>
-            <MudItem xs="12" md="4">
-                <MudSelect T="string" @bind-Value="messageMode" @bind-Value:after="OnInputsChanged"
-                           Label="内容模式" Variant="Variant.Outlined" Dense="true">
-                    <MudSelectItem Value="@UserChatActiveTaskModes.Random">随机</MudSelectItem>
-                    <MudSelectItem Value="@UserChatActiveTaskModes.Queue">队列循环</MudSelectItem>
-                </MudSelect>
-            </MudItem>
+            @if (IsGeneratedMessageMode)
+            {
+                <MudItem xs="12" md="4">
+                    <MudSelect T="string" @bind-Value="messageMode" @bind-Value:after="OnInputsChanged"
+                               Label="内容模式" Variant="Variant.Outlined" Dense="true">
+                        <MudSelectItem Value="@UserChatActiveTaskModes.Random">随机</MudSelectItem>
+                        <MudSelectItem Value="@UserChatActiveTaskModes.Queue">队列循环</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+            }
         </MudGrid>
 
         <MudDivider Class="my-2" />
@@ -302,7 +298,6 @@
     private string bulkRulesText = string.Empty;
     private string messageActionMode = UserChatActiveMessageActionModes.SendGeneratedText;
     private string replyToMessageUrl = string.Empty;
-    private int replyToMessageId;
     private string forwardSourceUrlsText = string.Empty;
     private string forwardMode = UserChatActiveForwardModes.WithAttribution;
     private bool skipIfLastMessageFromSelf;
@@ -388,7 +383,6 @@
             targetsText = string.Join(Environment.NewLine, cfg.Targets ?? new List<string>());
             messageActionMode = UserChatActiveMessageActionModes.Normalize(cfg.MessageActionMode);
             replyToMessageUrl = cfg.ReplyToMessageUrl ?? string.Empty;
-            replyToMessageId = cfg.ReplyToMessageId is > 0 ? cfg.ReplyToMessageId.Value : 0;
             forwardSourceUrlsText = string.Join(Environment.NewLine, cfg.ForwardSourceUrls ?? new List<string>());
             forwardMode = UserChatActiveForwardModes.Normalize(cfg.ForwardMode);
             skipIfLastMessageFromSelf = cfg.SkipIfLastMessageFromSelf;
@@ -591,7 +585,9 @@
             return;
         }
 
-        if (!IsValidMode(accountMode) || !IsValidMode(targetMode) || !IsValidMode(messageMode) || !IsValidMessageActionMode(normalizedActionMode) || !IsValidForwardMode(normalizedForwardMode))
+        var effectiveMessageMode = isGeneratedMode ? messageMode : UserChatActiveTaskModes.Random;
+
+        if (!IsValidMode(accountMode) || !IsValidMode(targetMode) || !IsValidMode(effectiveMessageMode) || !IsValidMessageActionMode(normalizedActionMode) || !IsValidForwardMode(normalizedForwardMode))
         {
             await DraftChanged.InvokeAsync(new ModuleTaskDraft(0, null, false, "模式参数无效"));
             return;
@@ -659,7 +655,7 @@
             Targets = targets,
             MessageActionMode = normalizedActionMode,
             ReplyToMessageUrl = isGeneratedMode && !string.IsNullOrWhiteSpace(replyToMessageUrl) ? replyToMessageUrl.Trim() : null,
-            ReplyToMessageId = isGeneratedMode && replyToMessageId > 0 ? replyToMessageId : null,
+            ReplyToMessageId = null,
             ForwardSourceUrls = forwardSourceUrls,
             ForwardMode = normalizedForwardMode,
             SkipIfLastMessageFromSelf = skipIfLastMessageFromSelf,
@@ -671,7 +667,7 @@
             MaxMessages = maxMessages,
             AccountMode = accountMode,
             TargetMode = targetMode,
-            MessageMode = messageMode,
+            MessageMode = effectiveMessageMode,
             EnableAiVerification = isGeneratedMode && enableAiVerification,
             AiModel = isGeneratedMode && enableAiVerification ? resolvedAiModel : null,
             VerificationTimeoutSeconds = isGeneratedMode && enableAiVerification ? verificationTimeoutSeconds : 15,

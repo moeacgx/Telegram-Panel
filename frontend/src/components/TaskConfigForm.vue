@@ -28,20 +28,9 @@
         <el-switch v-model="forms.userChatActive.skipIfLastMessageFromSelf" active-text="启用" inactive-text="关闭" />
         <div class="form-hint no-offset">启用后，发送前读取目标最新消息；如果上一条普通消息仍是当前执行账号发出的，本轮跳过不发送。</div>
       </el-form-item>
-      <template v-if="forms.userChatActive.messageActionMode === 'send_generated_text'">
-        <el-row :gutter="12">
-          <el-col :span="16">
-            <el-form-item label="回复消息链接">
-              <el-input v-model="forms.userChatActive.replyToMessageUrl" placeholder="可选，例如 https://t.me/channel/123；用于提取回复消息 ID" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="回复消息 ID">
-              <el-input-number v-model="forms.userChatActive.replyToMessageId" :min="0" :max="2147483647" class="full" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-      </template>
+      <el-form-item v-if="forms.userChatActive.messageActionMode === 'send_generated_text'" label="回复消息链接">
+        <el-input v-model="forms.userChatActive.replyToMessageUrl" placeholder="可选，例如 https://t.me/channel/123；新消息会回复这条链接对应的消息" />
+      </el-form-item>
       <template v-else>
         <el-form-item label="转发来源消息链接">
           <el-input v-model="forms.userChatActive.forwardSourceUrlsText" type="textarea" :rows="4" placeholder="每行一个 Telegram 消息链接，例如 https://t.me/channel/123 或 https://t.me/c/1234567890/123" />
@@ -107,7 +96,7 @@
       </el-row>
 
       <el-row :gutter="12">
-        <el-col :span="8">
+        <el-col :span="forms.userChatActive.messageActionMode === 'send_generated_text' ? 8 : 12">
           <el-form-item label="账号模式">
             <el-select v-model="forms.userChatActive.accountMode" class="full">
               <el-option label="随机" value="random" />
@@ -115,7 +104,7 @@
             </el-select>
           </el-form-item>
         </el-col>
-        <el-col :span="8">
+        <el-col :span="forms.userChatActive.messageActionMode === 'send_generated_text' ? 8 : 12">
           <el-form-item label="目标模式">
             <el-select v-model="forms.userChatActive.targetMode" class="full">
               <el-option label="随机" value="random" />
@@ -123,7 +112,7 @@
             </el-select>
           </el-form-item>
         </el-col>
-        <el-col :span="8">
+        <el-col v-if="forms.userChatActive.messageActionMode === 'send_generated_text'" :span="8">
           <el-form-item label="内容模式">
             <el-select v-model="forms.userChatActive.messageMode" class="full">
               <el-option label="随机" value="random" />
@@ -554,7 +543,6 @@ function applyInitialConfig() {
     form.targetsText = readStringArray(cfg.targets).join('\n')
     form.messageActionMode = normalizeMessageActionMode(readString(cfg.message_action_mode, 'send_generated_text'))
     form.replyToMessageUrl = readString(cfg.reply_to_message_url)
-    form.replyToMessageId = readOptionalPositiveNumber(cfg.reply_to_message_id)
     form.forwardSourceUrlsText = readStringArray(cfg.forward_source_urls).join('\n')
     form.forwardMode = normalizeForwardMode(readString(cfg.forward_mode, 'with_attribution'))
     form.skipIfLastMessageFromSelf = readBoolean(cfg.skip_if_last_message_from_self)
@@ -674,6 +662,7 @@ function buildUserChatActiveDraft(): TaskConfigDraft {
   const dictionary = messageRules.map((x) => x.text).filter(Boolean)
   const sharedImageDictionaryName = sharedRuleImageDictionaryName(messageRules)
   const forwardSourceUrls = form.messageActionMode === 'forward_url' ? uniqueLines(form.forwardSourceUrlsText) : []
+  const effectiveMessageMode = form.messageActionMode === 'send_generated_text' ? form.messageMode : 'random'
   if (categoryIds.length === 0 || selectedCategories.length === 0) throw new Error('请至少选择一个执行账号分类')
   if (targets.length === 0) throw new Error('请至少填写一个目标群组/频道/Bot')
   if (form.messageActionMode === 'forward_url') {
@@ -685,7 +674,7 @@ function buildUserChatActiveDraft(): TaskConfigDraft {
     }
   }
   if (form.delayMaxSeconds < form.delayMinSeconds) throw new Error('最大间隔不能小于最小间隔')
-  if (!isValidMode(form.accountMode) || !isValidMode(form.targetMode) || !isValidMode(form.messageMode)) throw new Error('模式参数无效')
+  if (!isValidMode(form.accountMode) || !isValidMode(form.targetMode) || !isValidMode(effectiveMessageMode)) throw new Error('模式参数无效')
   if (!isValidMessageActionMode(form.messageActionMode) || !isValidForwardMode(form.forwardMode)) throw new Error('发送动作参数无效')
 
   const verificationKeywords = form.enableAiVerification ? uniqueLines(form.verificationKeywordsText) : []
@@ -717,7 +706,6 @@ function buildUserChatActiveDraft(): TaskConfigDraft {
     targets,
     message_action_mode: form.messageActionMode,
     reply_to_message_url: form.messageActionMode === 'send_generated_text' ? form.replyToMessageUrl.trim() || null : null,
-    reply_to_message_id: form.messageActionMode === 'send_generated_text' && form.replyToMessageId && form.replyToMessageId > 0 ? Math.trunc(form.replyToMessageId) : null,
     forward_source_urls: forwardSourceUrls,
     forward_mode: form.forwardMode,
     skip_if_last_message_from_self: form.skipIfLastMessageFromSelf,
@@ -730,7 +718,7 @@ function buildUserChatActiveDraft(): TaskConfigDraft {
     delay_min_ms: secondsToMilliseconds(form.delayMinSeconds),
     delay_max_ms: secondsToMilliseconds(form.delayMaxSeconds),
     account_mode: form.accountMode,
-    message_mode: form.messageMode,
+    message_mode: effectiveMessageMode,
     target_mode: form.targetMode,
     max_messages: Math.max(0, form.maxMessages),
     enable_ai_verification: form.messageActionMode === 'send_generated_text' && form.enableAiVerification,
@@ -941,7 +929,6 @@ function defaultUserChatActiveForm() {
     bulkRulesText: '',
     messageActionMode: 'send_generated_text' as UserChatActiveMessageActionMode,
     replyToMessageUrl: '',
-    replyToMessageId: null as number | null,
     forwardSourceUrlsText: '',
     forwardMode: 'with_attribution' as UserChatActiveForwardMode,
     skipIfLastMessageFromSelf: false,

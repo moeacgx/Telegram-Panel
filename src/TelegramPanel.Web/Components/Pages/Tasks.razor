@@ -940,7 +940,6 @@
             "targets" => "目标",
             "message_action_mode" => "发送动作",
             "reply_to_message_url" => "回复消息链接",
-            "reply_to_message_id" => "回复消息 ID",
             "forward_source_urls" => "转发来源消息",
             "forward_mode" => "转发方式",
             "skip_if_last_message_from_self" => "去重发送",
@@ -1131,9 +1130,7 @@
             var forwardSourceCount = root.TryGetProperty("forward_source_urls", out var forwardEl) && forwardEl.ValueKind == JsonValueKind.Array
                 ? forwardEl.GetArrayLength()
                 : 0;
-            var replyToMessage = root.TryGetProperty("reply_to_message_id", out var replyIdEl) && replyIdEl.TryGetInt32(out var replyId) && replyId > 0
-                ? replyId.ToString()
-                : root.TryGetProperty("reply_to_message_url", out var replyUrlEl) ? (replyUrlEl.GetString() ?? "").Trim() : "";
+            var replyToMessage = root.TryGetProperty("reply_to_message_url", out var replyUrlEl) ? (replyUrlEl.GetString() ?? "").Trim() : "";
             var forwardMode = root.TryGetProperty("forward_mode", out var forwardModeEl) ? (forwardModeEl.GetString() ?? "").Trim() : "";
             var skipIfLastMessageFromSelf = root.TryGetProperty("skip_if_last_message_from_self", out var skipEl) && skipEl.ValueKind == JsonValueKind.True;
 
@@ -1167,7 +1164,8 @@
             details += $"去重发送: {(skipIfLastMessageFromSelf ? "启用（上一条仍是当前账号则跳过）" : "关闭")}\n";
             details += $"账号模式: {NormalizeTaskModeDisplay(accountMode)}\n";
             details += $"目标模式: {NormalizeTaskModeDisplay(targetMode)}\n";
-            details += $"内容模式: {NormalizeTaskModeDisplay(messageMode)}\n";
+            if (!isForwardMode)
+                details += $"内容模式: {NormalizeTaskModeDisplay(messageMode)}\n";
             details += $"间隔: {FormatDelaySeconds(delayMin)} ~ {FormatDelaySeconds(delayMax)} 秒\n";
             details += $"最多发送: {(maxMessages <= 0 ? "持续运行（直到取消）" : maxMessages.ToString())}\n";
 
