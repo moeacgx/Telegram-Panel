@@ -205,6 +205,8 @@ proxyText: http://user-a:password-a@proxy-a.example.com:8080
 
 自 v1.31.58 起，任务中心操作列提供“复制”入口。复制普通批量任务会读取 `GET /api/panel/tasks/{id}` 的完整配置，清理运行态字段后打开“新建任务”弹窗，并默认以一次性任务提交；复制计划任务会读取 `GET /api/panel/scheduled-tasks/{id}` 的配置和 Cron，打开“新建任务”弹窗并默认选择 Cron 计划。复制不会修改原任务，也不会立即创建新任务，用户必须在弹窗中确认提交；真正落库仍复用既有 `POST /api/panel/tasks` 或 `POST /api/panel/scheduled-tasks`。成功判据是操作列出现“复制”，点击后弹窗显示“已复制任务 #ID 的配置”，专用表单字段按原配置回填，旧配置中的 `items`、`failures`、`recent_failures` 不会带入新任务。
 
+自 v1.31.59 起，任务中心的“编辑计划任务”弹窗在窄屏设备上使用 `min(760px, calc(100vw - 24px))` 宽度，并将表单标签切换为顶部布局；Cron、状态、专用任务配置和保存按钮不会依赖横向滚动。成功判据是在手机宽度打开计划任务编辑时，弹窗不超出视口、字段按单列排列且“保存计划任务”可见；回滚到旧版只会恢复固定 760px 弹窗，不涉及接口或数据库迁移。
+
 自 v1.31.44 起，`channel_group_private_create` 任务会在 `config.recent_failures`
 返回最近 20 条失败明细。字段包括 `time_utc`、`account_id`、`target_type`、
 `target` 和 `reason`。自 v1.31.48 起，`user_chat_active` 会在

@@ -70,11 +70,18 @@ test('账号持续活跃支持回复消息与转发来源配置', () => {
 
 })
 
-test('新建任务弹窗在手机端收窄并纵向排版', () => {
+test('任务弹窗在手机端收窄并纵向排版', () => {
   assert.match(tasksSource, /width="min\(760px, calc\(100vw - 24px\)\)"/)
   assert.match(tasksSource, /width="min\(720px, calc\(100vw - 24px\)\)"/)
   assert.match(tasksSource, /:label-position="isTaskDialogCompact \? 'top' : 'right'"/)
   assert.match(tasksSource, /:label-width="isTaskDialogCompact \? 'auto' : '96px'"/)
+  assert.match(tasksSource, /v-model="editScheduledDialog\.visible"[\s\S]*?width="min\(760px, calc\(100vw - 24px\)\)"/)
+  assert.match(tasksSource, /v-model="editScheduledDialog\.visible"[\s\S]*?:label-position="isTaskDialogCompact \? 'top' : 'right'"/)
+  assert.match(tasksSource, /class="task-dialog"/)
+  assert.match(tasksSource, /:global\(\.task-dialog\)/)
+  assert.match(tasksSource, /max-height: calc\(100vh - 24px\);/)
+  assert.match(tasksSource, /overflow-y: auto;/)
+  assert.match(tasksSource, /:global\(\.task-dialog \.el-dialog__footer\)/)
   assert.match(tasksSource, /:xs="24" :sm="12"/)
   assert.match(taskConfigFormSource, /@media \(max-width: 640px\)/)
   assert.match(taskConfigFormSource, /grid-template-columns: 1fr;/)

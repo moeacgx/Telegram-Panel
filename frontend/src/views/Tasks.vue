@@ -200,7 +200,7 @@
       </div>
     </el-card>
 
-    <el-dialog v-model="createDialog.visible" title="新建任务" width="min(760px, calc(100vw - 24px))" destroy-on-close>
+    <el-dialog v-model="createDialog.visible" title="新建任务" width="min(760px, calc(100vw - 24px))" destroy-on-close class="task-dialog">
       <el-alert
         title="立即执行会创建一条后台执行记录；Cron 计划会在任务中心的计划任务区域持续调度。"
         type="info"
@@ -330,7 +330,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="editTaskDialog.visible" :title="`编辑任务 #${editTaskDialog.id}`" width="min(760px, calc(100vw - 24px))" destroy-on-close>
+    <el-dialog v-model="editTaskDialog.visible" :title="`编辑任务 #${editTaskDialog.id}`" width="min(760px, calc(100vw - 24px))" destroy-on-close class="task-dialog">
       <el-alert
         title="编辑会更新当前任务配置；若任务已完成或失败，可保存后使用重跑创建新任务。"
         type="info"
@@ -374,11 +374,12 @@
     <el-dialog
       v-model="editScheduledDialog.visible"
       :title="'编辑计划任务：' + (editScheduledDialog.form.name || '#' + editScheduledDialog.id)"
-      width="760px"
+      width="min(760px, calc(100vw - 24px))"
       destroy-on-close
+      class="task-dialog"
     >
       <el-alert :title="`Cron 按面板时区解析：${timeZoneId || 'UTC'}。保存后会重新计算下次运行时间。`" type="info" :closable="false" class="mb-3" />
-      <el-form label-width="96px">
+      <el-form :label-position="isTaskDialogCompact ? 'top' : 'right'" :label-width="isTaskDialogCompact ? 'auto' : '96px'">
         <el-form-item label="任务名称">
           <el-input v-model="editScheduledDialog.form.name" maxlength="100" show-word-limit />
         </el-form-item>
@@ -1767,5 +1768,35 @@ onUnmounted(() => {
   word-break: break-word;
   font-family: Consolas, "Microsoft YaHei", monospace;
   line-height: 1.55;
+}
+
+:global(.task-dialog) {
+  max-height: calc(100vh - 24px);
+  display: flex;
+  flex-direction: column;
+}
+
+:global(.task-dialog .el-dialog__body) {
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+:global(.task-dialog .el-dialog__footer) {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 640px) {
+  :global(.task-dialog) {
+    margin-top: 12px;
+    margin-bottom: 12px;
+  }
+
+  :global(.task-dialog .el-dialog__body) {
+    padding: 12px 16px;
+  }
+
+  :global(.task-dialog .el-dialog__footer) {
+    padding: 12px 16px 16px;
+  }
 }
 </style>
