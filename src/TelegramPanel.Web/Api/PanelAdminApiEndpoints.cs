@@ -2397,6 +2397,7 @@ public static class PanelAdminApiEndpoints
                 ReadConfiguredTelegramApiId(configuration),
                 ReadConfiguredTelegramApiHash(configuration),
                 ReadTelegramApiProfiles(configuration),
+                TelegramApiProfilePool.IsOfficialApiEnabled(configuration),
                 TelegramDeviceProfileCatalog.ReadProfiles(configuration).Select(ToDto).ToList(),
                 TelegramDeviceProfileCatalog.ResolveDefaultKey(configuration),
                 telegramApiStatus.EffectiveApiId,
@@ -2492,9 +2493,9 @@ public static class PanelAdminApiEndpoints
         if (hasDefaultApi)
         {
             if (!int.TryParse(defaultApiIdText, out var apiId) || apiId <= 0)
-                return Results.BadRequest(new OperationResultDto(false, "默认 API ID 格式错误"));
+                return Results.BadRequest(new OperationResultDto(false, "旧版单 API ID 格式错误"));
             if (!TelegramApiConfigValidator.TryNormalizeApiHash(defaultApiHashText, out var apiHash, out var reason))
-                return Results.BadRequest(new OperationResultDto(false, $"默认 API Hash 无效：{reason}"));
+                return Results.BadRequest(new OperationResultDto(false, $"旧版单 API Hash 无效：{reason}"));
             request = request with { ApiId = apiId.ToString(CultureInfo.InvariantCulture), ApiHash = apiHash };
         }
         var root = await LoadLocalConfigRootAsync(LocalConfigFile.ResolvePath(configuration, environment));
@@ -2513,6 +2514,7 @@ public static class PanelAdminApiEndpoints
         if (!string.IsNullOrWhiteSpace(request.DefaultDeviceProfileKey) && selectedDeviceProfile == null)
             return Results.BadRequest(new OperationResultDto(false, "默认设备指纹不存在或已停用"));
         telegram["DefaultDeviceProfileKey"] = selectedDeviceProfile?.Key ?? TelegramDeviceProfileCatalog.DefaultProfileKey;
+        telegram["OfficialApiEnabled"] = request.OfficialApiEnabled;
         var normalizedProfiles = new JsonArray();
         foreach (var profile in profiles)
         {
@@ -2561,13 +2563,15 @@ public static class PanelAdminApiEndpoints
 
     internal static TelegramApiRuntimeStatus ReadTelegramApiRuntimeStatus(IConfiguration configuration)
     {
-        var profiles = TelegramApiProfilePool.GetEnabledProfiles(configuration);
+        var profiles = TelegramApiProfilePool.GetEnabledPoolProfiles(configuration);
         if (profiles.Count > 0)
         {
             var profile = profiles[0];
+            var isOfficialAndroid = profile.ApiId == TelegramApiProfilePool.OfficialAndroidApiId
+                && string.Equals(profile.ApiHash, TelegramApiProfilePool.OfficialAndroidApiHash, StringComparison.OrdinalIgnoreCase);
             return new TelegramApiRuntimeStatus(
                 profile.ApiId.ToString(CultureInfo.InvariantCulture),
-                "api_profile",
+                isOfficialAndroid ? "built_in_official" : "api_profile",
                 profile.Name,
                 true);
         }
@@ -2579,7 +2583,7 @@ public static class PanelAdminApiEndpoints
             return new TelegramApiRuntimeStatus(
                 credentials.ApiId.ToString(CultureInfo.InvariantCulture),
                 isOfficialAndroid ? "built_in_official" : "custom_default",
-                credentials.ProfileName ?? (isOfficialAndroid ? TelegramApiProfilePool.OfficialAndroidApiName : "默认 API"),
+                credentials.ProfileName ?? (isOfficialAndroid ? TelegramApiProfilePool.OfficialAndroidApiName : "旧版单 API"),
                 true);
         }
 
@@ -8314,6 +8318,7 @@ public sealed record TelegramApiSettingsDto(
     string ApiId,
     string ApiHash,
     IReadOnlyList<TelegramApiProfileDto>? Profiles = null,
+    bool OfficialApiEnabled = true,
     IReadOnlyList<TelegramDeviceProfileDto>? DeviceProfiles = null,
     string? DefaultDeviceProfileKey = null,
     string? EffectiveApiId = null,

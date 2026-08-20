@@ -62,9 +62,10 @@ Cloudflare R2 预签名 `PUT` URL 若返回 `Missing x-amz-content-sha256`，升
 
 包含设备指纹功能的版本会执行 `20260818090000_AddAccountDeviceProfileKey`，只向 `Accounts` 增加可空的 `DeviceProfileKey` 文本列，不改写现有 Session。升级前备份 `docker-data/telegram-panel.db` 和 `docker-data/appsettings.local.json`。
 
-启动后验收：容器状态为 running；`/api/panel/auth/me` 返回 200；侧栏直接出现“Telegram API”和“设备指纹”两个独立入口；设备指纹页能保存默认画像；手动登录页在发送验证码/生成二维码前可选择“本次登录设备指纹”；Telegram API 页在未配置自定义 API 时显示“内置官方 Android API：ApiId 6（当前生效）”，`GET /api/panel/settings` 返回 `telegram.effectiveApiSource=built_in_official`；账号详情能保存和清空单账号画像；导入页能提交所选画像。若迁移失败，保留容器日志和数据库备份，不要手工删列或删除 `__EFMigrationsHistory`；先停止容器并恢复升级前快照，再回滚到旧镜像。
+启动后验收：容器状态为 running；`/api/panel/auth/me` 返回 200；侧栏保留“设备指纹”入口，Telegram API 回到“系统设置”页；系统设置里的 Telegram API 池第一项是可启停的内置官方 API；新登录/导入会在启用项中按权重轮询；设备指纹页能保存默认画像；手动登录页在发送验证码/生成二维码前可选择“本次登录设备指纹”；`GET /api/panel/settings` 返回 `telegram.officialApiEnabled=true` 与 `telegram.effectiveApiSource=built_in_official`；账号详情能保存和清空单账号画像；导入页能提交所选画像。若迁移失败，保留容器日志和数据库备份，不要手工删列或删除 `__EFMigrationsHistory`；先停止容器并恢复升级前快照，再回滚到旧镜像。
 
-官方 API 回退只在自定义默认 API 和 API 配置池都未配置或均未启用时生效；自建 API、API 配置池和已有账号保存的 ApiId/ApiHash 优先级更高。
+官方 API 作为 API 池顶层项参与轮询；自定义 API 池按权重排在其后，已有账号保存的 ApiId/ApiHash 会优先用于该账号后续操作。关闭内置官方 API 且没有启用自定义项时，新账号登录和不带 API 的导入会提示 Telegram API 不可用。
+
 ## 更新策略
 
 Docker 部署支持通过项目根目录 `.env` 的 `TP_UPDATE_MODE` 切换更新方式：

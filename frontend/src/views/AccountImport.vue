@@ -10,7 +10,7 @@
       <template #title>Telegram API 当前不可用，Session 文件和 StringSession 暂不能导入。</template>
       <div class="import-api-warning">
         <span>当前生效 ApiId：{{ effectiveApiId || '未配置' }}</span>
-        <el-button size="small" type="primary" @click="router.push('/telegram-api')">去 Telegram API 配置</el-button>
+        <el-button size="small" type="primary" @click="router.push('/settings')">去系统设置</el-button>
       </div>
     </el-alert>
 
@@ -122,7 +122,7 @@
             <li>tdata 协议包：支持 Zip 内包含 tdata 目录（含 key_datas / D877F783D5D3EF8C*）</li>
             <li>二级密码：自动解析账号目录下的 2fa.txt 文件作为二级密码保存到数据库</li>
           </ul>
-          <div class="mt-2">提示：导入 tdata 需要先在系统设置配置全局 Telegram API（ApiId/ApiHash）。</div>
+          <div class="mt-2">提示：导入 tdata 会使用系统设置里的 Telegram API 池；未关闭内置官方 API 时可直接回退使用。</div>
         </template>
       </el-alert>
       <pre class="tree-example">xx.zip

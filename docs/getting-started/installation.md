@@ -48,9 +48,9 @@ docker compose up -d
 
 ### 可选配置：自定义 Telegram API 凭据
 
-面板内置 Telegram 官方 Android API（ApiId `6`），未填写自定义 `api_id` / `api_hash` 且未启用 API 配置池时可以直接作为运行时默认。
+面板内置 Telegram 官方 Android API（ApiId `6`），系统设置里的 Telegram API 池默认把它放在最顶上并启用；不需要手工填写官方 API Hash。
 
-如果需要自建 API、隔离额度或分散新账号，可到 https://my.telegram.org/apps 用任意一个 Telegram 账号申请 `api_id` / `api_hash`，然后在面板侧栏「Telegram API」保存。`api_hash` 是 **32 位十六进制字符串（0-9a-f）**，请不要填 Token/用户名/URL 等其它值。
+如果需要自建 API、隔离额度或分散新账号，可到 https://my.telegram.org/apps 用任意一个 Telegram 账号申请 `api_id` / `api_hash`，然后在面板「系统设置」的 Telegram API 区块添加到 API 池。`api_hash` 是 **32 位十六进制字符串（0-9a-f）**，请不要填 Token/用户名/URL 等其它值。
 
 ### 导入或登录前先选择账号出口
 

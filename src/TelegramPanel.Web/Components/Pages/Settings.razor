@@ -30,10 +30,10 @@
                 <MudText Typo="Typo.h6">Telegram API 配置</MudText>
             </MudCardHeader>
             <MudCardContent>
-                <MudTextField @bind-Value="apiId" Label="默认 API ID" Variant="Variant.Outlined"
-                              HelperText="从 https://my.telegram.org 获取" />
-                <MudTextField @bind-Value="apiHash" Label="默认 API Hash" Variant="Variant.Outlined" Class="mt-3"
-                              HelperText="用于新账号登录和导入（32 位十六进制字符串）" />
+                <MudTextField @bind-Value="apiId" Label="旧版单 API ID" Variant="Variant.Outlined"
+                              HelperText="兼容旧配置；Vue 系统设置会把它带入 API 池" />
+                <MudTextField @bind-Value="apiHash" Label="旧版单 API Hash" Variant="Variant.Outlined" Class="mt-3"
+                              HelperText="32 位十六进制字符串；新界面建议使用系统设置里的 API 池" />
                 <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mt-3">
                     <MudText Typo="Typo.body2"><strong>写入位置：</strong>@LocalConfigPath</MudText>
                     <MudText Typo="Typo.body2" Class="mt-1"><strong>文件存在：</strong>@(LocalConfigExists ? "是" : "否")</MudText>
@@ -395,19 +395,19 @@
     {
         if (!int.TryParse(apiId, out int parsedApiId) || parsedApiId <= 0)
         {
-            Snackbar.Add("默认 API ID 格式错误", Severity.Error);
+            Snackbar.Add("旧版单 API ID 格式错误", Severity.Error);
             return;
         }
 
         if (string.IsNullOrWhiteSpace(apiHash))
         {
-            Snackbar.Add("默认 API Hash 不能为空", Severity.Error);
+            Snackbar.Add("旧版单 API Hash 不能为空", Severity.Error);
             return;
         }
 
         if (!TelegramApiConfigValidator.TryNormalizeApiHash(apiHash, out var normalizedApiHash, out var apiHashReason))
         {
-            Snackbar.Add($"默认 API Hash 无效：{apiHashReason}", Severity.Error);
+            Snackbar.Add($"旧版单 API Hash 无效：{apiHashReason}", Severity.Error);
             return;
         }
 

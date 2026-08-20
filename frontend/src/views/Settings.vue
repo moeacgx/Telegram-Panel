@@ -7,17 +7,88 @@
       show-icon
       :title="`写入位置：${settings?.localConfigPath || '-'}`"
     />
-    <el-alert
-      class="mb-4"
-      type="info"
-      :closable="false"
-      show-icon
-      title="Telegram API 配置和设备指纹已拆到侧栏的 Telegram 设置 / 设备指纹 页面。"
-    />
 
 
     <div class="settings-columns">
       <div class="settings-column">
+
+        <el-card shadow="never" class="page-card">
+          <template #header>Telegram API</template>
+          <el-alert type="info" :closable="false" show-icon class="mb-3">
+            <template #title>启用中的 API 池会按顺序轮询；内置官方 API 固定在最顶上。</template>
+            <div>不再单独设置默认 API。旧版单 API 会自动带入下方配置池，保存后统一按池子轮询。</div>
+          </el-alert>
+          <el-form label-position="top">
+            <div class="api-profile-row built-in-api-profile">
+              <div class="api-profile-title">
+                <span>内置官方 API</span>
+                <el-switch v-model="telegram.officialApiEnabled" active-text="启用" inactive-text="停用" />
+              </div>
+              <el-row :gutter="8">
+                <el-col :xs="24" :sm="8">
+                  <el-form-item label="名称">
+                    <el-input :model-value="officialApiName" disabled />
+                  </el-form-item>
+                </el-col>
+                <el-col :xs="24" :sm="5">
+                  <el-form-item label="ApiId">
+                    <el-input :model-value="officialApiId" disabled />
+                  </el-form-item>
+                </el-col>
+                <el-col :xs="24" :sm="6">
+                  <el-form-item label="ApiHash">
+                    <el-input model-value="已内置" disabled />
+                  </el-form-item>
+                </el-col>
+                <el-col :xs="24" :sm="5">
+                  <el-form-item label="权重">
+                    <el-input-number :model-value="1" disabled :controls="false" class="full" />
+                  </el-form-item>
+                </el-col>
+              </el-row>
+            </div>
+            <div v-for="(profile, index) in telegram.profiles" :key="index" class="api-profile-row">
+              <el-row :gutter="8">
+                <el-col :xs="24" :sm="6">
+                  <el-form-item label="名称">
+                    <el-input v-model="profile.name" placeholder="备用 API" />
+                  </el-form-item>
+                </el-col>
+                <el-col :xs="24" :sm="5">
+                  <el-form-item label="ApiId">
+                    <el-input v-model="profile.apiId" />
+                  </el-form-item>
+                </el-col>
+                <el-col :xs="24" :sm="6">
+                  <el-form-item label="ApiHash">
+                    <el-input v-model="profile.apiHash" />
+                  </el-form-item>
+                </el-col>
+                <el-col :xs="12" :sm="4">
+                  <el-form-item label="权重">
+                    <el-input-number v-model="profile.weight" :min="1" :max="1000" :controls="false" class="full" />
+                  </el-form-item>
+                </el-col>
+                <el-col :xs="12" :sm="3">
+                  <el-form-item label="启用">
+                    <el-switch v-model="profile.enabled" />
+                  </el-form-item>
+                </el-col>
+              </el-row>
+              <el-form-item label="备注">
+                <el-input v-model="profile.notes" placeholder="可选" />
+              </el-form-item>
+              <el-button text type="danger" @click="removeApiProfile(index)">删除此配置</el-button>
+            </div>
+            <el-button plain @click="addApiProfile">添加 API 配置</el-button>
+          </el-form>
+          <el-alert :type="settings?.telegram.hasUsableApi === false ? 'warning' : 'info'" :closable="false" show-icon class="mt-3 mb-3">
+            <template #title>当前生效 ApiId：{{ effectiveApiId || '（不可用）' }}</template>
+            <div>当前来源：{{ effectiveApiSourceLabel }}</div>
+            <div>写入位置：{{ settings?.localConfigPath || '-' }}</div>
+          </el-alert>
+          <el-button type="primary" :loading="saving.telegram" @click="saveTelegram">保存 Telegram API</el-button>
+        </el-card>
 
         <el-card shadow="never" class="page-card">
           <template #header>
@@ -270,12 +341,13 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { panelApi } from '@/api/panel'
-import type { SettingsPayload } from '@/api/types'
+import type { SettingsPayload, TelegramApiSettings, TelegramApiProfile } from '@/api/types'
 
 const router = useRouter()
 const settings = ref<SettingsPayload | null>(null)
 const cloudMail = reactive({ baseUrl: '', domain: '', token: '' })
 const cloudToken = reactive({ adminEmail: '', adminPassword: '' })
+const telegram = reactive({ officialApiEnabled: true, profiles: [] as TelegramApiProfile[] })
 const ai = reactive({ endpoint: '', apiKey: '', defaultModel: '', presetModels: [] as string[], retryCount: 2 })
 const batch = reactive({ defaultDelayMs: 2000, maxConcurrent: 1, historyRetentionLimit: 0, autoRetry: false, maxRetries: 3 })
 const sync = reactive({ autoSyncEnabled: false, intervalHours: 6 })
@@ -293,6 +365,7 @@ const presetModelsText = computed({
 const saving = reactive({
   cloudMail: false,
   cloudToken: false,
+  telegram: false,
   ai: false,
   aiTest: false,
   batch: false,
@@ -312,9 +385,76 @@ function assign<T extends object>(target: T, source: Partial<T>) {
 }
 
 
+const fallbackOfficialApiId = '6'
+const fallbackOfficialApiName = 'Telegram 官方 Android API'
+const officialApiId = computed(() => settings.value?.telegram.officialApiId || fallbackOfficialApiId)
+const officialApiName = computed(() => settings.value?.telegram.officialApiName || fallbackOfficialApiName)
+const effectiveApiId = computed(() => settings.value?.telegram.effectiveApiId || settings.value?.system.effectiveApiId || '')
+const effectiveApiSourceLabel = computed(() => {
+  const source = settings.value?.telegram.effectiveApiSource
+  if (source === 'built_in_official') return '内置官方 API'
+  if (source === 'api_profile') return settings.value?.telegram.effectiveApiName || 'API 池'
+  if (source === 'custom_default') return '旧版单 API'
+  if (source === 'invalid') return '配置不可用'
+  return settings.value ? '未配置' : '加载中'
+})
+
+function normalizeTelegramSettings(source: TelegramApiSettings) {
+  telegram.officialApiEnabled = source.officialApiEnabled !== false
+  const profiles = (source.profiles || []).map((profile) => ({
+    name: profile.name || '',
+    apiId: profile.apiId || '',
+    apiHash: profile.apiHash || '',
+    enabled: profile.enabled !== false,
+    weight: profile.weight || 1,
+    notes: profile.notes || '',
+  }))
+  const legacyApiId = !source.apiId || source.apiId === '0' ? '' : source.apiId.trim()
+  const legacyApiHash = source.apiHash?.trim() || ''
+  if (legacyApiId && legacyApiHash && !profiles.some((profile) => sameApi(profile, legacyApiId, legacyApiHash))) {
+    profiles.unshift({
+      name: '旧版单 API',
+      apiId: legacyApiId,
+      apiHash: legacyApiHash,
+      enabled: true,
+      weight: 1,
+      notes: '从旧版单 API 自动带入，保存后参与 API 池轮询。',
+    })
+  }
+  telegram.profiles = profiles
+}
+
+function sameApi(profile: TelegramApiProfile, apiId: string, apiHash: string) {
+  return (profile.apiId || '').trim() === apiId
+    && (profile.apiHash || '').trim().toLowerCase() === apiHash.toLowerCase()
+}
+
+function addApiProfile() {
+  telegram.profiles.push({ name: '', apiId: '', apiHash: '', enabled: true, weight: 1, notes: '' })
+}
+
+function removeApiProfile(index: number) {
+  telegram.profiles.splice(index, 1)
+}
+
+function saveTelegram() {
+  return run('telegram', async () => {
+    const current = settings.value ?? await panelApi.settings()
+    return panelApi.saveTelegramApiSettings({
+      apiId: '',
+      apiHash: '',
+      officialApiEnabled: telegram.officialApiEnabled,
+      profiles: telegram.profiles,
+      deviceProfiles: current.telegram.deviceProfiles || [],
+      defaultDeviceProfileKey: current.telegram.defaultDeviceProfileKey || null,
+    })
+  })
+}
+
 async function load() {
   const data = await panelApi.settings()
   settings.value = data
+  normalizeTelegramSettings(data.telegram)
   assign(cloudMail, data.cloudMail)
   assign(ai, data.ai)
   assign(batch, data.batch)
@@ -476,6 +616,20 @@ onMounted(load)
   border-radius: 8px;
   padding: 12px;
   margin-bottom: 12px;
+}
+
+.api-profile-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.built-in-api-profile {
+  border-color: var(--el-color-primary-light-7);
+  background: var(--el-color-primary-light-9);
 }
 
 @media (max-width: 960px) {

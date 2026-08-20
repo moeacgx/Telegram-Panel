@@ -94,7 +94,7 @@
             <template #title>Telegram API 当前不可用，无法登录。</template>
             <div class="login-api-warning">
               <span>当前生效 ApiId：{{ effectiveApiId || '未配置' }}</span>
-              <el-button size="small" type="primary" @click="router.push('/telegram-api')">去 Telegram API 配置</el-button>
+              <el-button size="small" type="primary" @click="router.push('/settings')">去系统设置</el-button>
             </div>
           </el-alert>
 
@@ -212,11 +212,11 @@
             <template #title>Telegram API 当前不可用，无法登录。</template>
             <div class="login-api-warning">
               <span>当前生效 ApiId：{{ effectiveApiId || '未配置' }}</span>
-              <el-button size="small" type="primary" @click="router.push('/telegram-api')">去 Telegram API 配置</el-button>
+              <el-button size="small" type="primary" @click="router.push('/settings')">去系统设置</el-button>
             </div>
           </el-alert>
           <el-alert
-            title="手机号需包含国家代码，例如 +8613800138000。系统会使用全局 Telegram API 配置发送验证码。"
+            title="手机号需包含国家代码，例如 +8613800138000。系统会使用系统设置里的 Telegram API 池发送验证码。"
             type="info"
             :closable="false"
             show-icon

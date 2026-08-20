@@ -1,3 +1,4 @@
+using System.Threading;
 using Microsoft.Extensions.Configuration;
 using TelegramPanel.Core.Services;
 using TelegramPanel.Core.Utils;
@@ -23,6 +24,8 @@ public sealed class TelegramApiProfilePool
 
     private const int MaxWeight = 1000;
     private readonly IConfiguration _configuration;
+    private int _roundRobinCursor = -1;
+
 
     public TelegramApiProfilePool(IConfiguration configuration)
     {
@@ -31,64 +34,38 @@ public sealed class TelegramApiProfilePool
 
     public IReadOnlyList<TelegramApiProfile> GetConfiguredProfiles() => ReadConfiguredProfiles(_configuration);
 
-    public IReadOnlyList<TelegramApiProfile> GetEnabledProfiles() => GetEnabledProfiles(_configuration);
+    public IReadOnlyList<TelegramApiProfile> GetEnabledProfiles() => GetEnabledPoolProfiles(_configuration);
 
-    public bool HasUsableApi() => GetEnabledProfiles().Count > 0 || TryGetGlobalFallback(_configuration, out _);
+    public bool HasUsableApi() => GetEnabledPoolProfiles(_configuration).Count > 0;
 
-    public async Task<TelegramApiCredentials> SelectForAccountAsync(
+    public Task<TelegramApiCredentials> SelectForAccountAsync(
         Account? existingAccount,
         AccountManagementService accountManagement)
     {
-        if (TryGetAccountCredentials(existingAccount, out var existingCredentials))
-            return existingCredentials;
-
-        var accounts = (await accountManagement.GetAllAccountsAsync()).ToList();
-        return SelectForNewAccount(accounts);
+        return Task.FromResult(TryGetAccountCredentials(existingAccount, out var existingCredentials)
+            ? existingCredentials
+            : SelectForNewAccount(Array.Empty<Account>()));
     }
 
-    public async Task<TelegramApiCredentials> SelectForNewAccountAsync(AccountManagementService accountManagement)
+    public Task<TelegramApiCredentials> SelectForNewAccountAsync(AccountManagementService accountManagement)
     {
-        var accounts = (await accountManagement.GetAllAccountsAsync()).ToList();
-        return SelectForNewAccount(accounts);
+        return Task.FromResult(SelectForNewAccount(Array.Empty<Account>()));
     }
 
     public TelegramApiCredentials SelectForNewAccount(IReadOnlyList<Account> existingAccounts)
     {
-        var profiles = GetEnabledProfiles();
+        var profiles = GetEnabledPoolProfiles(_configuration);
         if (profiles.Count == 0)
-        {
-            if (TryGetGlobalFallback(_configuration, out var fallback))
-                return fallback;
+            throw new InvalidOperationException("请先在【系统设置】中启用内置官方 API 或至少一个 API 池配置");
 
-            throw new InvalidOperationException("请先在【Telegram 设置 → Telegram API】中配置全局 Telegram API（ApiId/ApiHash）或至少一个启用的 API 配置");
+        var weightedProfiles = new List<TelegramApiProfile>();
+        foreach (var profile in profiles)
+        {
+            for (var i = 0; i < profile.Weight; i++)
+                weightedProfiles.Add(profile);
         }
 
-        var usage = new int[profiles.Count];
-        foreach (var account in existingAccounts)
-        {
-            if (!TryGetAccountCredentials(account, out var credentials))
-                continue;
-
-            for (var i = 0; i < profiles.Count; i++)
-            {
-                if (SameCredentials(profiles[i], credentials))
-                {
-                    usage[i]++;
-                    break;
-                }
-            }
-        }
-
-        var selectedIndex = 0;
-        for (var i = 1; i < profiles.Count; i++)
-        {
-            var left = (long)usage[i] * profiles[selectedIndex].Weight;
-            var right = (long)usage[selectedIndex] * profiles[i].Weight;
-            if (left < right)
-                selectedIndex = i;
-        }
-
-        var selected = profiles[selectedIndex];
+        var selected = weightedProfiles[GetNextRoundRobinIndex(weightedProfiles.Count)];
         return new TelegramApiCredentials(selected.ApiId, selected.ApiHash, selected.Name);
     }
 
@@ -132,6 +109,47 @@ public sealed class TelegramApiProfilePool
             .ToList();
     }
 
+    public static IReadOnlyList<TelegramApiProfile> GetEnabledPoolProfiles(IConfiguration configuration)
+    {
+        var profiles = new List<TelegramApiProfile>();
+        if (IsOfficialApiEnabled(configuration))
+        {
+            profiles.Add(new TelegramApiProfile(
+                OfficialAndroidApiName,
+                OfficialAndroidApiId,
+                OfficialAndroidApiHash,
+                Enabled: true,
+                Weight: 1));
+        }
+
+        if (TryGetCustomDefault(configuration, out var customDefault)
+            && !profiles.Any(profile => SameCredentials(profile, customDefault)))
+        {
+            profiles.Add(new TelegramApiProfile(
+                customDefault.ProfileName ?? "旧版单 API",
+                customDefault.ApiId,
+                customDefault.ApiHash,
+                Enabled: true,
+                Weight: 1));
+        }
+
+        foreach (var profile in GetEnabledProfiles(configuration))
+        {
+            var credentials = new TelegramApiCredentials(profile.ApiId, profile.ApiHash, profile.Name);
+            if (!profiles.Any(existing => SameCredentials(existing, credentials)))
+                profiles.Add(profile);
+        }
+
+        return profiles;
+    }
+
+    public static bool IsOfficialApiEnabled(IConfiguration configuration)
+    {
+        var text = (configuration["Telegram:OfficialApiEnabled"] ?? string.Empty).Trim();
+        return !bool.TryParse(text, out var enabled) || enabled;
+    }
+
+
     public static bool TryGetAccountCredentials(Account? account, out TelegramApiCredentials credentials)
     {
         credentials = default!;
@@ -147,26 +165,38 @@ public sealed class TelegramApiProfilePool
 
     public static bool TryGetGlobalFallback(IConfiguration configuration, out TelegramApiCredentials credentials)
     {
-        credentials = default!;
-        var apiIdText = (configuration["Telegram:ApiId"] ?? string.Empty).Trim();
-        var apiHashText = (configuration["Telegram:ApiHash"] ?? string.Empty).Trim();
-        if ((string.IsNullOrWhiteSpace(apiIdText) || apiIdText == "0") && string.IsNullOrWhiteSpace(apiHashText))
+        if (TryGetCustomDefault(configuration, out credentials))
+            return true;
+
+        if (IsOfficialApiEnabled(configuration))
         {
             credentials = new TelegramApiCredentials(OfficialAndroidApiId, OfficialAndroidApiHash, OfficialAndroidApiName);
             return true;
         }
 
+        credentials = default!;
+        return false;
+    }
+
+    private static bool TryGetCustomDefault(IConfiguration configuration, out TelegramApiCredentials credentials)
+    {
+        credentials = default!;
+        var apiIdText = (configuration["Telegram:ApiId"] ?? string.Empty).Trim();
+        var apiHashText = (configuration["Telegram:ApiHash"] ?? string.Empty).Trim();
+        if ((string.IsNullOrWhiteSpace(apiIdText) || apiIdText == "0") && string.IsNullOrWhiteSpace(apiHashText))
+            return false;
+
         if (!int.TryParse(apiIdText, out var apiId)
             || !TryNormalizeCredentials(apiId, apiHashText, out var apiHash, out _))
             return false;
 
-        credentials = new TelegramApiCredentials(apiId, apiHash, "默认 API");
+        credentials = new TelegramApiCredentials(apiId, apiHash, "旧版单 API");
         return true;
     }
 
     public static bool TrySelectDefault(IConfiguration configuration, out TelegramApiCredentials credentials, out string error)
     {
-        var profiles = GetEnabledProfiles(configuration);
+        var profiles = GetEnabledPoolProfiles(configuration);
         if (profiles.Count > 0)
         {
             var profile = profiles[0];
@@ -175,13 +205,8 @@ public sealed class TelegramApiProfilePool
             return true;
         }
 
-        if (TryGetGlobalFallback(configuration, out credentials))
-        {
-            error = string.Empty;
-            return true;
-        }
-
-        error = "请先在【Telegram 设置 → Telegram API】中配置全局 Telegram API（ApiId/ApiHash）或至少一个启用的 API 配置";
+        credentials = default!;
+        error = "请先在【系统设置】中启用内置官方 API 或至少一个 API 池配置";
         return false;
     }
 
@@ -217,7 +242,17 @@ public sealed class TelegramApiProfilePool
         return true;
     }
 
+    private int GetNextRoundRobinIndex(int count)
+    {
+        var next = Interlocked.Increment(ref _roundRobinCursor);
+        return (int)((uint)next % (uint)count);
+    }
+
     private static bool SameCredentials(TelegramApiProfile profile, TelegramApiCredentials credentials) =>
         profile.ApiId == credentials.ApiId
         && string.Equals(profile.ApiHash, credentials.ApiHash, StringComparison.OrdinalIgnoreCase);
+
+    private static bool SameCredentials(TelegramApiProfile profile, TelegramApiProfile other) =>
+        profile.ApiId == other.ApiId
+        && string.Equals(profile.ApiHash, other.ApiHash, StringComparison.OrdinalIgnoreCase);
 }

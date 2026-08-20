@@ -43,23 +43,25 @@ Vue 后台使用 `/api/panel` 下的管理接口。开启后台登录时，除�
 
 ### Telegram API 配置池设置
 
-`GET /api/panel/settings` 的 `telegram` 字段包含兼容旧版的已写入自定义 `apiId`、`apiHash`，以及可选 `profiles` 数组；还会返回运行态字段 `effectiveApiId`、`effectiveApiSource`、`effectiveApiName`、`officialApiId`、`officialApiName` 和 `hasUsableApi`，用于前端区分“内置官方 API 回退”和“写入到本地配置的自定义 API”。`POST /api/panel/settings/telegram-api` 接收相同结构并写入 `appsettings.local.json`：
+`GET /api/panel/settings` 的 `telegram` 字段包含兼容旧版的已写入 `apiId`、`apiHash`，以及 `officialApiEnabled` 和可选 `profiles` 数组；还会返回运行态字段 `effectiveApiId`、`effectiveApiSource`、`effectiveApiName`、`officialApiId`、`officialApiName` 和 `hasUsableApi`。`POST /api/panel/settings/telegram-api` 由系统设置页调用，并写入 `appsettings.local.json`：
 
 ```json
 {
-  "apiId": "123456",
-  "apiHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "apiId": "",
+  "apiHash": "",
+  "officialApiEnabled": true,
   "profiles": [
-    { "name": "api-a", "apiId": "123456", "apiHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "enabled": true, "weight": 1, "notes": "主配置" },
+    { "name": "api-a", "apiId": "123456", "apiHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "enabled": true, "weight": 1, "notes": "备用配置" },
     { "name": "api-b", "apiId": "234567", "apiHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "enabled": true, "weight": 1 }
   ]
 }
 ```
 
-`profiles` 省略时保留当前 API 配置池；传空数组表示清空配置池。默认 `apiId/apiHash` 可留空，此时没有启用 API 配置池则使用内置 Telegram 官方 Android API（ApiId `6`，`effectiveApiSource=built_in_official`）；有 API 配置池时按启用项分配。服务端会校验每个 ApiHash 为 32 位十六进制字符串，名称不可重复，`weight` 规范到 `1-1000`。新账号登录和不自带 API 的导入入口使用启用 profile 做最少使用量分配；已有账号继续使用数据库中保存的 `ApiId/ApiHash`。
+`profiles` 省略时保留当前 API 配置池；传空数组表示清空配置池。系统设置不再提供单独“默认 API”选择，启用中的内置官方 API 固定排在池子最顶上，保存时旧版 `apiId/apiHash` 会被前端带入配置池并清空旧字段。服务端会校验每个 ApiHash 为 32 位十六进制字符串，名称不可重复，`weight` 规范到 `1-1000`。新账号登录和不自带 API 的导入入口按启用池子顺序轮询；权重大于 1 时该配置会在轮询序列中出现对应次数。已有账号继续使用数据库中保存的 `ApiId/ApiHash`。
+
 ### Telegram API 与设备画像
 
-侧栏 `/telegram-api` 对应默认 Telegram API 和 API 配置池；侧栏 `/device-profiles` 对应内置/自定义设备画像和默认画像。这两个入口作为独立侧栏菜单展示，不再藏在系统设置页。两页最终都通过 `POST /api/panel/settings/telegram-api` 保存，设备画像请求沿用现有 `deviceProfiles` 与 `defaultDeviceProfileKey` 字段。
+系统设置页管理 Telegram API 池；侧栏 `/device-profiles` 管理内置/自定义设备画像和默认画像。两者最终都通过 `POST /api/panel/settings/telegram-api` 保存，设备画像请求沿用现有 `deviceProfiles` 与 `defaultDeviceProfileKey` 字段。
 
 `GET /api/panel/settings` 返回有效 Telegram API、API 池、启用画像和默认画像 key；`GET /api/panel/settings/device-profiles` 返回同一画像目录的 `{ items, defaultKey }`。
 

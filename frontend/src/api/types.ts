@@ -417,6 +417,7 @@ export interface TelegramApiSettings {
   apiId: string
   apiHash: string
   profiles?: TelegramApiProfile[] | null
+  officialApiEnabled?: boolean | null
   deviceProfiles?: TelegramDeviceProfile[] | null
   defaultDeviceProfileKey?: string | null
   effectiveApiId?: string | null

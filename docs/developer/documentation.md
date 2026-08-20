@@ -67,13 +67,13 @@ uv run mkdocs build
 
 适用版本：包含 `Account.DeviceProfileKey` 与迁移 `20260818090000_AddAccountDeviceProfileKey` 的版本。
 
-- `TelegramDeviceProfileCatalog` 是唯一画像解析入口；未知、停用或空 key 必须回退系统默认画像，不得在各服务中复制默认值。侧栏 `/device-profiles` 是设备画像独立入口，侧栏 `/telegram-api` 是默认 API 和 API 配置池独立入口，不得只藏在系统设置页。
-- 未配置自定义 `Telegram:ApiId`/`Telegram:ApiHash` 且没有启用 API 配置池时，`TelegramApiProfilePool` 使用内置 Telegram 官方 Android API（ApiId `6`）作为运行时默认；设置接口必须通过 `telegram.effectiveApiId`、`telegram.effectiveApiSource`、`telegram.officialApiId` 和 `telegram.hasUsableApi` 暴露有效状态，前端不得再只用已写入的 `telegram.apiId/apiHash` 判断可用性。自定义 API 或 API 池仍优先于内置回退。
+- `TelegramDeviceProfileCatalog` 是唯一画像解析入口；未知、停用或空 key 必须回退系统默认画像，不得在各服务中复制默认值。侧栏 `/device-profiles` 是设备画像独立入口；Telegram API 池必须保留在系统设置页，不再新增独立侧栏页。
+- `TelegramApiProfilePool` 把启用中的内置官方 API 与自定义 API 配置合并成一个池子，并按权重轮询分配给新账号登录和不自带 API 的导入。`Telegram:ApiId`/`Telegram:ApiHash` 仅作旧版单 API 兼容；新版系统设置保存时应把它带入 `ApiProfiles` 并清空旧字段。设置接口必须通过 `telegram.officialApiEnabled`、`telegram.effectiveApiId`、`telegram.effectiveApiSource`、`telegram.officialApiId` 和 `telegram.hasUsableApi` 暴露有效状态，前端不得只用已写入的 `telegram.apiId/apiHash` 判断可用性。
 - `TelegramClientPool`、Session 导入验证、账号导出和账号登录必须在创建 `WTelegram.Client` 前解析画像；手动登录页必须在发送验证码/生成二维码前提交 `deviceProfileKey`，后端需在临时登录状态中冻结该 key，登录成功后保存到账号。代理解析与画像解析相互独立，画像不得改变连接出口。
 - 新登录/导入成功入库时保存画像 key；账号详情更新允许清空 key，表示跟随系统默认。更新画像不改写现有 Session，客户端缓存清理后在下一次创建客户端时生效。
-- API 端点：`GET /api/panel/settings` 返回有效 Telegram API、来源字段与 `telegram.deviceProfiles`；`GET /api/panel/settings/device-profiles` 返回画像目录；`POST /api/panel/settings/telegram-api` 保存自定义默认 API、API 池和默认画像，空默认 API 且无启用 profile 必须保留内置官方回退；账号 `PUT /api/panel/accounts/{id}` 和登录/导入请求接受 `deviceProfileKey`。
+- API 端点：`GET /api/panel/settings` 返回有效 Telegram API、来源字段、`officialApiEnabled` 与 `telegram.deviceProfiles`；`GET /api/panel/settings/device-profiles` 返回画像目录；`POST /api/panel/settings/telegram-api` 保存 API 池、内置官方 API 启用状态和默认画像；账号 `PUT /api/panel/accounts/{id}` 和登录/导入请求接受 `deviceProfileKey`。
 
-验证：运行 .NET Release 构建和完整 Web 测试；运行前端 `vue-tsc`/build 与前端测试；手工检查侧栏独立的 Telegram API 与设备指纹页面、官方 API 回退、手动登录设备指纹选择、系统设置和账号详情清空/保存及新客户端创建。失败排查先检查迁移、画像 key、API 配置和本地配置文件权限。回滚需先备份数据库和 `appsettings.local.json`，再恢复旧程序；旧程序不会使用画像字段，但不应删除迁移历史。
+验证：运行 .NET Release 构建和完整 Web 测试；运行前端 `vue-tsc`/build 与前端测试；手工检查系统设置中的 Telegram API 池、内置官方 API 顶部项、API 池轮询、设备指纹页面、手动登录设备指纹选择、账号详情清空/保存及新客户端创建。失败排查先检查迁移、画像 key、API 配置和本地配置文件权限。回滚需先备份数据库和 `appsettings.local.json`，再恢复旧程序；旧程序不会使用画像字段，但不应删除迁移历史。
 
 ## GitHub Pages 发布
 

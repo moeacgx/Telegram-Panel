@@ -13,21 +13,17 @@ public sealed class TelegramApiProfilePoolTests
     private const string HashC = "cccccccccccccccccccccccccccccccc";
 
     [Fact]
-    public void SelectForNewAccount_BalancesAcrossEnabledProfilesByUsage()
+    public void SelectForNewAccount_RoundRobinsAcrossEnabledPool()
     {
-        var pool = CreatePool(("primary", 1001, HashA, true, 1), ("secondary", 1002, HashB, true, 1));
-        var accounts = new List<Account>
-        {
-            new() { ApiId = 1001, ApiHash = HashA },
-            new() { ApiId = 1001, ApiHash = HashA },
-            new() { ApiId = 1002, ApiHash = HashB }
-        };
+        var pool = CreatePool(true, ("primary", 1001, HashA, true, 1), ("secondary", 1002, HashB, true, 1));
 
-        var selected = pool.SelectForNewAccount(accounts);
+        var first = pool.SelectForNewAccount(Array.Empty<Account>());
+        var second = pool.SelectForNewAccount(Array.Empty<Account>());
+        var third = pool.SelectForNewAccount(Array.Empty<Account>());
 
-        Assert.Equal(1002, selected.ApiId);
-        Assert.Equal(HashB, selected.ApiHash);
-        Assert.Equal("secondary", selected.ProfileName);
+        Assert.Equal(TelegramApiProfilePool.OfficialAndroidApiId, first.ApiId);
+        Assert.Equal(1001, second.ApiId);
+        Assert.Equal(1002, third.ApiId);
     }
 
     [Fact]
@@ -54,11 +50,12 @@ public sealed class TelegramApiProfilePoolTests
     }
 
     [Fact]
-    public void SelectForNewAccount_FallsBackToSingleGlobalApi()
+    public void SelectForNewAccount_IncludesLegacySingleApiInPool()
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
+                ["Telegram:OfficialApiEnabled"] = "false",
                 ["Telegram:ApiId"] = "3001",
                 ["Telegram:ApiHash"] = HashA
             })
@@ -69,7 +66,7 @@ public sealed class TelegramApiProfilePoolTests
 
         Assert.Equal(3001, selected.ApiId);
         Assert.Equal(HashA, selected.ApiHash);
-        Assert.Equal("默认 API", selected.ProfileName);
+        Assert.Equal("旧版单 API", selected.ProfileName);
     }
 
     [Fact]
@@ -86,6 +83,22 @@ public sealed class TelegramApiProfilePoolTests
     }
 
     [Fact]
+    public void SelectForNewAccount_ThrowsWhenOfficialAndProfilesDisabled()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Telegram:OfficialApiEnabled"] = "false"
+            })
+            .Build();
+        var pool = new TelegramApiProfilePool(configuration);
+
+        var error = Assert.Throws<InvalidOperationException>(() => pool.SelectForNewAccount(Array.Empty<Account>()));
+
+        Assert.Contains("启用内置官方 API", error.Message);
+    }
+
+    [Fact]
     public void ReadTelegramApiRuntimeStatus_ExposesBuiltInOfficialFallback()
     {
         var configuration = new ConfigurationBuilder().Build();
@@ -99,11 +112,12 @@ public sealed class TelegramApiProfilePoolTests
     }
 
     [Fact]
-    public void ReadTelegramApiRuntimeStatus_PrefersEnabledProfileOverBuiltInFallback()
+    public void ReadTelegramApiRuntimeStatus_UsesEnabledPoolTopItem()
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
+                ["Telegram:OfficialApiEnabled"] = "false",
                 ["Telegram:ApiProfiles:0:Name"] = "pool-a",
                 ["Telegram:ApiProfiles:0:ApiId"] = "4001",
                 ["Telegram:ApiProfiles:0:ApiHash"] = HashA,
@@ -132,7 +146,15 @@ public sealed class TelegramApiProfilePoolTests
 
     private static TelegramApiProfilePool CreatePool(params (string Name, int ApiId, string ApiHash, bool Enabled, int Weight)[] profiles)
     {
-        var values = new Dictionary<string, string?>();
+        return CreatePool(false, profiles);
+    }
+
+    private static TelegramApiProfilePool CreatePool(bool officialApiEnabled, params (string Name, int ApiId, string ApiHash, bool Enabled, int Weight)[] profiles)
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["Telegram:OfficialApiEnabled"] = officialApiEnabled.ToString()
+        };
         for (var i = 0; i < profiles.Length; i++)
         {
             var profile = profiles[i];

@@ -63,21 +63,21 @@
 
       <div class="settings-column">
         <el-card shadow="never" class="page-card">
-          <template #header>Telegram API 入口</template>
+          <template #header>Telegram API 状态</template>
           <el-alert type="info" :closable="false" show-icon class="mb-3">
-            <template #title>默认官方 API 和 API 配置池在独立的 Telegram API 页面管理。</template>
-            <div>这里读取当前生效 ApiId、API 来源、已启用 API 配置池数量和默认设备指纹，便于你确认这两块是否已经生效。</div>
+            <template #title>Telegram API 池在系统设置中管理。</template>
+            <div>这里仅显示当前生效 ApiId、API 来源、启用的自定义 API 数量和默认设备指纹。</div>
           </el-alert>
           <el-descriptions :column="1" border size="small">
             <el-descriptions-item label="当前生效 ApiId">{{ effectiveApiId || '（不可用）' }}</el-descriptions-item>
             <el-descriptions-item label="当前 API 来源">{{ effectiveApiSourceLabel }}</el-descriptions-item>
-            <el-descriptions-item label="启用中的 API 配置">{{ enabledApiProfiles.length }}</el-descriptions-item>
+            <el-descriptions-item label="启用中的自定义 API">{{ enabledApiProfiles.length }}</el-descriptions-item>
             <el-descriptions-item label="当前默认设备指纹">
               {{ selectedDeviceProfile ? `${selectedDeviceProfile.name} · ${selectedDeviceProfile.family}` : '（未配置）' }}
             </el-descriptions-item>
           </el-descriptions>
           <div class="button-row mt-3">
-            <el-button type="primary" plain @click="router.push('/telegram-api')">去 Telegram API 页面</el-button>
+            <el-button type="primary" plain @click="router.push('/settings')">去系统设置</el-button>
           </div>
         </el-card>
       </div>
@@ -106,7 +106,7 @@ const effectiveApiSourceLabel = computed(() => {
   const source = settings.value?.telegram.effectiveApiSource
   if (source === 'built_in_official') return '内置官方 Android API'
   if (source === 'api_profile') return settings.value?.telegram.effectiveApiName || 'API 配置池'
-  if (source === 'custom_default') return '自定义默认 API'
+  if (source === 'custom_default') return '旧版单 API'
   if (source === 'invalid') return '配置不可用'
   return settings.value ? '未配置' : '加载中'
 })
@@ -135,6 +135,7 @@ async function saveDefaultDeviceProfile() {
       apiId: current.telegram.apiId,
       apiHash: current.telegram.apiHash,
       profiles: current.telegram.profiles,
+      officialApiEnabled: current.telegram.officialApiEnabled !== false,
       deviceProfiles: current.telegram.deviceProfiles || [],
       defaultDeviceProfileKey: defaultDeviceProfileKey.value,
     })

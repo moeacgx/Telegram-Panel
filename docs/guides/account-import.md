@@ -143,7 +143,7 @@ accounts.zip
 
 ## 导入 Session 文件或 StringSession
 
-`.session` 文件支持一次选择多个；StringSession 通过页面文本框导入。这两种方式使用 `GET /api/panel/settings` 返回的有效 Telegram API：未配置自定义 API 且未启用配置池时会回退到内置官方 Android API（ApiId `6`）；如需自建 API 或多 API 分配，可在侧栏「Telegram API」配置。导入成功后，账号会保存本次分配到的 `ApiId/ApiHash`，后续不会被全局默认值覆盖。
+`.session` 文件支持一次选择多个；StringSession 通过页面文本框导入。这两种方式使用 `GET /api/panel/settings` 返回的有效 Telegram API 池：内置官方 API 默认排在最顶上，也可以在「系统设置」添加自建 API；导入成功后，账号会保存本次分配到的 `ApiId/ApiHash`，后续不会被全局池子覆盖。
 
 只提供 `.session` 时，系统会尝试从会话读取账号身份；如果 Session 已失效或格式不兼容，
 该条目会导入失败，不会写入一个看似成功但无法连接的账号。
@@ -178,7 +178,7 @@ tdata-accounts.zip
 
 注意：
 
-- 导入 TData 前，系统会使用当前有效 Telegram API；未配置自定义 API 且未启用配置池时回退内置官方 Android API，批量 TData 会按启用的 API 配置池均衡分配
+- 导入 TData 前，系统会使用当前有效 Telegram API 池；未关闭内置官方 API 时可直接回退使用，批量 TData 会按启用的 API 池轮询分配
 - 首次导入 TData 时会自动准备解析依赖，耗时会比普通导入长一点
 
 ## 查看导入结果

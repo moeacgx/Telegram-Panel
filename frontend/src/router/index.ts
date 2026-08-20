@@ -33,7 +33,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'data-dictionaries', component: () => import('@/views/DataDictionaries.vue'), meta: { title: '数据字典' } },
       { path: 'modules', component: () => import('@/views/Modules.vue'), meta: { title: '模块管理' } },
       { path: 'apis', component: () => import('@/views/ApiCenter.vue'), meta: { title: 'API 管理' } },
-      { path: 'telegram-api', component: () => import('@/views/TelegramApiSettings.vue'), meta: { title: 'Telegram API' } },
+      { path: 'telegram-api', redirect: '/settings' },
       { path: 'device-profiles', component: () => import('@/views/TelegramDeviceProfiles.vue'), meta: { title: '设备指纹' } },
 
       { path: 'settings', component: () => import('@/views/Settings.vue'), meta: { title: '系统设置' } },
