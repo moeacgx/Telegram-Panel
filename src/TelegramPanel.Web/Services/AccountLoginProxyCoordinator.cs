@@ -554,10 +554,9 @@ public sealed class AccountLoginProxyCoordinator
         ResinLeaseControlSnapshot? resinLease = null;
         string? temporaryResinKey = null;
         int? ownedWarpProxyId = null;
-        var selectedDeviceProfile = TelegramDeviceProfileCatalog.Find(_configuration, deviceProfileKey);
-        if (!string.IsNullOrWhiteSpace(deviceProfileKey) && selectedDeviceProfile == null)
+        if (!TelegramDeviceProfileCatalog.TryNormalizeSelectableKey(_configuration, deviceProfileKey, out var selectedDeviceProfileKey))
             throw new ArgumentException("登录设备指纹不存在或已停用");
-        var normalizedDeviceProfileKey = selectedDeviceProfile?.Key ?? TelegramDeviceProfileCatalog.ResolveDefaultKey(_configuration);
+        var normalizedDeviceProfileKey = selectedDeviceProfileKey ?? TelegramDeviceProfileCatalog.ResolveDefaultKey(_configuration);
 
         IDisposable? warpRequestClaim = null;
 

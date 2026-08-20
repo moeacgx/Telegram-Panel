@@ -98,6 +98,7 @@
         </div>
       </div>
       <el-select v-model="deviceProfileKey" class="category-select" filterable :disabled="busy">
+        <el-option label="随机设备指纹" value="random" />
         <el-option
           v-for="profile in deviceProfiles"
           :key="profile.key"

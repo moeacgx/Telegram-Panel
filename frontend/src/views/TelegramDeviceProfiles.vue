@@ -13,6 +13,7 @@
       <el-form label-position="top">
         <el-form-item label="默认设备指纹">
           <el-select v-model="defaultDeviceProfileKey" class="full" filterable>
+            <el-option label="随机设备指纹" value="random" />
             <el-option
               v-for="profile in deviceProfiles"
               :key="profile.key"
@@ -20,7 +21,10 @@
               :value="profile.key"
             />
           </el-select>
-          <div v-if="selectedDeviceProfile" class="muted mt-2">
+          <div v-if="randomDeviceProfileSelected" class="muted mt-2">
+            按账号/会话稳定随机选择适合当前 API 的内置画像，避免所有新账号共用同一设备参数。
+          </div>
+          <div v-else-if="selectedDeviceProfile" class="muted mt-2">
             {{ selectedDeviceProfile.deviceModel }} · {{ selectedDeviceProfile.systemVersion }} · App {{ selectedDeviceProfile.appVersion }}
           </div>
           <div class="muted mt-2">这里管理 Telegram 客户端的设备画像目录和新账号/导入/连接使用的默认项；单个账号仍可在账号详情里单独覆盖。</div>
@@ -72,6 +76,7 @@ const deviceProfiles = ref<TelegramDeviceProfile[]>([])
 const defaultDeviceProfileKey = ref('')
 const saving = ref(false)
 
+const randomDeviceProfileSelected = computed(() => defaultDeviceProfileKey.value === 'random')
 const selectedDeviceProfile = computed(() => deviceProfiles.value.find((profile) => profile.key === defaultDeviceProfileKey.value))
 
 
@@ -94,6 +99,7 @@ async function load() {
 async function saveDefaultDeviceProfile() {
   saving.value = true
   try {
+    const requestedDefaultKey = defaultDeviceProfileKey.value
     const current = await panelApi.settings()
     const result = await panelApi.saveTelegramApiSettings({
       apiId: current.telegram.apiId,
@@ -101,10 +107,11 @@ async function saveDefaultDeviceProfile() {
       profiles: current.telegram.profiles,
       officialApiEnabled: current.telegram.officialApiEnabled !== false,
       deviceProfiles: current.telegram.deviceProfiles || [],
-      defaultDeviceProfileKey: defaultDeviceProfileKey.value,
+      defaultDeviceProfileKey: requestedDefaultKey,
     })
     if (result.message) ElMessage.success(result.message)
     await load()
+    defaultDeviceProfileKey.value = requestedDefaultKey
   } finally {
     saving.value = false
   }

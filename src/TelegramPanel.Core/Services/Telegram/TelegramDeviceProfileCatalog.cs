@@ -26,6 +26,7 @@ public sealed record TelegramDeviceProfileDefinition(
 public static class TelegramDeviceProfileCatalog
 {
     public const string DefaultProfileKey = "android-default";
+    public const string RandomProfileKey = "random";
 
     private static readonly TelegramDeviceProfileDefinition[] BuiltInProfiles =
     {
@@ -41,7 +42,7 @@ public static class TelegramDeviceProfileCatalog
         foreach (var child in configuration.GetSection("Telegram:DeviceProfiles").GetChildren())
         {
             var key = NormalizeKey(child["Key"]);
-            if (string.IsNullOrWhiteSpace(key))
+            if (string.IsNullOrWhiteSpace(key) || IsRandomProfileKey(key))
                 continue;
 
             var fallback = BuiltInProfiles.FirstOrDefault(x => string.Equals(x.Key, key, StringComparison.OrdinalIgnoreCase));
@@ -75,7 +76,9 @@ public static class TelegramDeviceProfileCatalog
     public static string ResolveDefaultKey(IConfiguration configuration)
     {
         var requested = NormalizeKey(configuration["Telegram:DefaultDeviceProfileKey"]);
-        return string.IsNullOrWhiteSpace(requested) ? DefaultProfileKey : requested;
+        if (string.IsNullOrWhiteSpace(requested))
+            return DefaultProfileKey;
+        return IsRandomProfileKey(requested) ? RandomProfileKey : requested;
     }
 
     public static TelegramDeviceProfileDefinition? Find(IConfiguration configuration, string? key)
@@ -83,6 +86,8 @@ public static class TelegramDeviceProfileCatalog
         var normalized = NormalizeKey(key);
         if (string.IsNullOrWhiteSpace(normalized))
             normalized = ResolveDefaultKey(configuration);
+        if (IsRandomProfileKey(normalized))
+            return null;
         return ReadProfiles(configuration).FirstOrDefault(x => string.Equals(x.Key, normalized, StringComparison.OrdinalIgnoreCase));
     }
 
@@ -98,6 +103,35 @@ public static class TelegramDeviceProfileCatalog
 
     public static string NormalizeKey(string? value) =>
         (value ?? string.Empty).Trim().ToLowerInvariant();
+
+    public static bool IsRandomProfileKey(string? value) =>
+        string.Equals(NormalizeKey(value), RandomProfileKey, StringComparison.Ordinal);
+
+    public static bool TryNormalizeSelectableKey(IConfiguration configuration, string? key, out string? normalizedKey)
+    {
+        var requested = NormalizeKey(key);
+        if (string.IsNullOrWhiteSpace(requested))
+        {
+            normalizedKey = null;
+            return true;
+        }
+
+        if (IsRandomProfileKey(requested))
+        {
+            normalizedKey = RandomProfileKey;
+            return true;
+        }
+
+        var profile = Find(configuration, requested);
+        if (profile == null)
+        {
+            normalizedKey = null;
+            return false;
+        }
+
+        normalizedKey = profile.Key;
+        return true;
+    }
 
     private static string NormalizeText(string? value, string fallback) =>
         string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();

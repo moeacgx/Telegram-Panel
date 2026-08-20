@@ -537,9 +537,7 @@ public static class PanelAdminApiEndpoints
             account.CategoryId = request.CategoryId.Value <= 0 ? null : request.CategoryId.Value;
         if (request.DeviceProfileKey != null)
         {
-            var profileKey = NormalizeNullable(request.DeviceProfileKey);
-            if (!string.IsNullOrWhiteSpace(profileKey)
-                && TelegramDeviceProfileCatalog.Find(configuration, profileKey) == null)
+            if (!TelegramDeviceProfileCatalog.TryNormalizeSelectableKey(configuration, request.DeviceProfileKey, out var profileKey))
                 return Results.BadRequest(new OperationResultDto(false, "设备指纹不存在或已停用"));
             account.DeviceProfileKey = profileKey;
         }
@@ -2510,10 +2508,9 @@ public static class PanelAdminApiEndpoints
             telegram["ApiId"] = 0;
             telegram["ApiHash"] = string.Empty;
         }
-        var selectedDeviceProfile = TelegramDeviceProfileCatalog.Find(configuration, request.DefaultDeviceProfileKey);
-        if (!string.IsNullOrWhiteSpace(request.DefaultDeviceProfileKey) && selectedDeviceProfile == null)
+        if (!TelegramDeviceProfileCatalog.TryNormalizeSelectableKey(configuration, request.DefaultDeviceProfileKey, out var selectedDeviceProfileKey))
             return Results.BadRequest(new OperationResultDto(false, "默认设备指纹不存在或已停用"));
-        telegram["DefaultDeviceProfileKey"] = selectedDeviceProfile?.Key ?? TelegramDeviceProfileCatalog.DefaultProfileKey;
+        telegram["DefaultDeviceProfileKey"] = selectedDeviceProfileKey ?? TelegramDeviceProfileCatalog.DefaultProfileKey;
         telegram["OfficialApiEnabled"] = request.OfficialApiEnabled;
         var normalizedProfiles = new JsonArray();
         foreach (var profile in profiles)
@@ -7038,10 +7035,9 @@ public static class PanelAdminApiEndpoints
         {
             throw new InvalidOperationException(apiError);
         }
-        var selectedDeviceProfile = TelegramDeviceProfileCatalog.Find(configuration, deviceProfileKey);
-        if (!string.IsNullOrWhiteSpace(deviceProfileKey) && selectedDeviceProfile == null)
+        if (!TelegramDeviceProfileCatalog.TryNormalizeSelectableKey(configuration, deviceProfileKey, out var selectedDeviceProfileKey))
             throw new InvalidOperationException("登录设备指纹不存在或已停用");
-        var savedDeviceProfileKey = selectedDeviceProfile?.Key ?? TelegramDeviceProfileCatalog.ResolveDefaultKey(configuration);
+        var savedDeviceProfileKey = selectedDeviceProfileKey ?? TelegramDeviceProfileCatalog.ResolveDefaultKey(configuration);
 
 
         var sessionsPath = configuration["Telegram:SessionsPath"] ?? "sessions";

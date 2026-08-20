@@ -738,6 +738,25 @@ public sealed class ManualLoginProxyRoutingTests
         Assert.False(fixture.Coordinator.HasState(1801));
     }
 
+    [Fact]
+    public async Task 手动登录首次连接允许随机设备指纹Key()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+
+        var state = await fixture.Coordinator.PrepareAsync(
+            1802,
+            "direct",
+            null,
+            CancellationToken.None,
+            TelegramDeviceProfileCatalog.RandomProfileKey);
+
+        Assert.Equal(TelegramDeviceProfileCatalog.RandomProfileKey, state.DeviceProfileKey);
+        Assert.Equal(TelegramDeviceProfileCatalog.RandomProfileKey, fixture.Coordinator.GetDeviceProfileKey(1802));
+
+        await fixture.Coordinator.AbandonAsync(1802);
+        Assert.False(fixture.Coordinator.HasState(1802));
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         private readonly SqliteConnection _connection;

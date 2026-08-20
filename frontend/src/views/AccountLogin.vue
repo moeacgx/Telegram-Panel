@@ -69,6 +69,7 @@
           </div>
         </div>
         <el-select v-model="deviceProfileKey" class="login-device-select" filterable :disabled="proxyRouteLocked">
+          <el-option label="随机设备指纹" value="random" />
           <el-option
             v-for="profile in deviceProfiles"
             :key="profile.key"
@@ -76,7 +77,11 @@
             :label="`${profile.name} · ${profile.family}`"
           />
         </el-select>
-        <div v-if="selectedDeviceProfile" class="login-device-summary">
+        <div v-if="randomDeviceProfileSelected" class="login-device-summary">
+          <span class="material-icons">casino</span>
+          <span>按账号/会话稳定随机选择适合当前 API 的内置画像</span>
+        </div>
+        <div v-else-if="selectedDeviceProfile" class="login-device-summary">
           <span class="material-icons">devices</span>
           <span>{{ selectedDeviceProfile.deviceModel }} · {{ selectedDeviceProfile.systemVersion }} · App {{ selectedDeviceProfile.appVersion }}</span>
         </div>
@@ -407,6 +412,7 @@ const proxySelectionInvalid = computed(() =>
   || (proxyStrategy.value === 'warp_pool' && availableWarpPoolCount.value === 0),
 )
 const proxyRouteLocked = computed(() => logging.value || hasActiveLoginSession.value)
+const randomDeviceProfileSelected = computed(() => deviceProfileKey.value === 'random')
 const selectedDeviceProfile = computed(() => deviceProfiles.value.find((profile) => profile.key === deviceProfileKey.value))
 
 const stepIndex = computed(() => {

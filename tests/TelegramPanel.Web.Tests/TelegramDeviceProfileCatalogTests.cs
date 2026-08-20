@@ -20,6 +20,45 @@ public sealed class TelegramDeviceProfileCatalogTests
     }
 
     [Fact]
+    public void RandomDefaultKeyUsesStableGeneratedProfile()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Telegram:DefaultDeviceProfileKey"] = "random"
+            })
+            .Build();
+
+        var profile = TelegramDeviceProfileCatalog.ResolveClientProfile(
+            configuration,
+            6,
+            null,
+            "stable-key");
+
+        Assert.Equal(TelegramDeviceProfileCatalog.RandomProfileKey, TelegramDeviceProfileCatalog.ResolveDefaultKey(configuration));
+        Assert.Equal(TelegramClientDeviceProfile.ForStableKey(6, "stable-key"), profile);
+    }
+
+    [Fact]
+    public void RandomKeyIsSelectableButReservedFromConfiguredCatalog()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Telegram:DeviceProfiles:0:Key"] = "random",
+                ["Telegram:DeviceProfiles:0:Name"] = "Should Not Appear",
+                ["Telegram:DeviceProfiles:0:Enabled"] = "true"
+            })
+            .Build();
+
+        var profiles = TelegramDeviceProfileCatalog.ReadProfiles(configuration);
+
+        Assert.True(TelegramDeviceProfileCatalog.TryNormalizeSelectableKey(configuration, "random", out var normalizedKey));
+        Assert.Equal(TelegramDeviceProfileCatalog.RandomProfileKey, normalizedKey);
+        Assert.DoesNotContain(profiles, profile => profile.Key == TelegramDeviceProfileCatalog.RandomProfileKey);
+    }
+
+    [Fact]
     public void ConfiguredProfileOverridesBuiltInValues()
     {
         var configuration = new ConfigurationBuilder()

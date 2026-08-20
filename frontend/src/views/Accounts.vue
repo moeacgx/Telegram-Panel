@@ -256,6 +256,7 @@
           <el-form-item label="设备指纹">
             <el-select v-model="details.form.deviceProfileKey" class="full" filterable>
               <el-option label="跟随系统默认" value="" />
+              <el-option label="随机设备指纹" value="random" />
               <el-option
                 v-for="profileOption in deviceProfiles"
                 :key="profileOption.key"
@@ -263,7 +264,7 @@
                 :value="profileOption.key"
               />
             </el-select>
-            <div class="form-hint no-offset">仅影响该账号后续 Telegram 客户端连接；留空时使用系统默认设备画像。</div>
+            <div class="form-hint no-offset">仅影响该账号后续 Telegram 客户端连接；留空时使用系统默认，选择随机时会按账号稳定选取画像。</div>
           </el-form-item>
         </el-form>
       </template>

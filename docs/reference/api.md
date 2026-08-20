@@ -63,9 +63,9 @@ Vue 后台使用 `/api/panel` 下的管理接口。开启后台登录时，除�
 
 系统设置页管理 Telegram API 池；侧栏 `/device-profiles` 只管理内置/自定义设备画像和默认画像，不展示 Telegram API 状态。两者最终都通过 `POST /api/panel/settings/telegram-api` 保存，设备画像请求沿用现有 `deviceProfiles` 与 `defaultDeviceProfileKey` 字段。
 
-`GET /api/panel/settings` 返回有效 Telegram API、API 池、启用画像和默认画像 key；`GET /api/panel/settings/device-profiles` 返回同一画像目录的 `{ items, defaultKey }`。
+`GET /api/panel/settings` 返回有效 Telegram API、API 池、启用画像和默认画像 key；`GET /api/panel/settings/device-profiles` 返回同一画像目录的 `{ items, defaultKey }`。`defaultDeviceProfileKey`/`defaultKey` 可以是保留值 `random`，表示按账号或会话稳定随机选取适合当前 API 的内置画像；`random` 不属于 `items` 画像目录，前端必须作为下拉首项单独展示。
 
-`PUT /api/panel/accounts/{id}` 的请求可携带 `deviceProfileKey`：传画像 key 表示绑定该账号，传空字符串表示清除绑定并跟随系统默认。`GET /api/panel/accounts/{id}` 返回 `deviceProfileKey`。`POST /api/panel/accounts/import/zip`、`POST /api/panel/accounts/import/session-files` 的 multipart 字段名为 `deviceProfileKey`；StringSession JSON 请求同名字段。`POST /api/panel/accounts/login/start` 与 `POST /api/panel/accounts/login/qr/start` 也接受 `deviceProfileKey`，在发送验证码或生成二维码前应用该画像，并在登录成功后保存到账号。未知或停用 key 返回 `400` 或业务失败响应，不会修改账号。
+`PUT /api/panel/accounts/{id}` 的请求可携带 `deviceProfileKey`：传画像 key 表示绑定该账号，传 `random` 表示该账号后续按稳定随机画像连接，传空字符串表示清除绑定并跟随系统默认。`GET /api/panel/accounts/{id}` 返回 `deviceProfileKey`。`POST /api/panel/accounts/import/zip`、`POST /api/panel/accounts/import/session-files` 的 multipart 字段名为 `deviceProfileKey`；StringSession JSON 请求同名字段。`POST /api/panel/accounts/login/start` 与 `POST /api/panel/accounts/login/qr/start` 也接受 `deviceProfileKey`，在发送验证码或生成二维码前应用该画像，并在登录成功后保存到账号。未知或停用 key 返回 `400` 或业务失败响应，不会修改账号。
 
 成功判据是保存后重新读取账号详情仍返回该 key，清空后返回 `null`；画像只影响客户端设备字段，不改变 API 凭据、代理策略或 Session 文件格式。数据库列由 `20260818090000_AddAccountDeviceProfileKey` 迁移创建。
 
