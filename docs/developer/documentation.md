@@ -67,7 +67,7 @@ uv run mkdocs build
 
 适用版本：包含 `Account.DeviceProfileKey` 与迁移 `20260818090000_AddAccountDeviceProfileKey` 的版本。
 
-- `TelegramDeviceProfileCatalog` 是唯一画像解析入口；未知、停用或空 key 必须回退系统默认画像，不得在各服务中复制默认值。侧栏 `/device-profiles` 是设备画像独立入口；Telegram API 池必须保留在系统设置页，不再新增独立侧栏页。
+- `TelegramDeviceProfileCatalog` 是唯一画像解析入口；未知、停用或空 key 必须回退系统默认画像，不得在各服务中复制默认值。侧栏 `/device-profiles` 是设备画像独立入口，只展示画像目录和默认画像保存，不展示 Telegram API 状态；Telegram API 池必须保留在系统设置页，不再新增独立侧栏页。
 - `TelegramApiProfilePool` 把启用中的内置官方 API 与自定义 API 配置合并成一个池子，并按权重轮询分配给新账号登录和不自带 API 的导入。`Telegram:ApiId`/`Telegram:ApiHash` 仅作旧版单 API 兼容；新版系统设置保存时应把它带入 `ApiProfiles` 并清空旧字段。设置接口必须通过 `telegram.officialApiEnabled`、`telegram.effectiveApiId`、`telegram.effectiveApiSource`、`telegram.officialApiId` 和 `telegram.hasUsableApi` 暴露有效状态，前端不得只用已写入的 `telegram.apiId/apiHash` 判断可用性。
 - `TelegramClientPool`、Session 导入验证、账号导出和账号登录必须在创建 `WTelegram.Client` 前解析画像；手动登录页必须在发送验证码/生成二维码前提交 `deviceProfileKey`，后端需在临时登录状态中冻结该 key，登录成功后保存到账号。代理解析与画像解析相互独立，画像不得改变连接出口。
 - 新登录/导入成功入库时保存画像 key；账号详情更新允许清空 key，表示跟随系统默认。更新画像不改写现有 Session，客户端缓存清理后在下一次创建客户端时生效。

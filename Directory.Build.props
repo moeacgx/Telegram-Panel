@@ -9,10 +9,10 @@
     <!-- 主版本: 重大变更/不兼容更新 -->
     <!-- 次版本: 新功能/兼容性更新 -->
     <!-- 修订号: Bug修复/小改进 -->
-    <Version>1.31.71</Version>
-    <AssemblyVersion>1.31.71.0</AssemblyVersion>
-    <FileVersion>1.31.71.0</FileVersion>
-    <InformationalVersion>1.31.71</InformationalVersion>
+    <Version>1.31.72</Version>
+    <AssemblyVersion>1.31.72.0</AssemblyVersion>
+    <FileVersion>1.31.72.0</FileVersion>
+    <InformationalVersion>1.31.72</InformationalVersion>
     <!-- Release 包、version.txt 与 tag 必须完全一致，禁止 SDK 自动追加 +GitSha。 -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
 

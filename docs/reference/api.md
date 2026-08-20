@@ -61,7 +61,7 @@ Vue 后台使用 `/api/panel` 下的管理接口。开启后台登录时，除�
 
 ### Telegram API 与设备画像
 
-系统设置页管理 Telegram API 池；侧栏 `/device-profiles` 管理内置/自定义设备画像和默认画像。两者最终都通过 `POST /api/panel/settings/telegram-api` 保存，设备画像请求沿用现有 `deviceProfiles` 与 `defaultDeviceProfileKey` 字段。
+系统设置页管理 Telegram API 池；侧栏 `/device-profiles` 只管理内置/自定义设备画像和默认画像，不展示 Telegram API 状态。两者最终都通过 `POST /api/panel/settings/telegram-api` 保存，设备画像请求沿用现有 `deviceProfiles` 与 `defaultDeviceProfileKey` 字段。
 
 `GET /api/panel/settings` 返回有效 Telegram API、API 池、启用画像和默认画像 key；`GET /api/panel/settings/device-profiles` 返回同一画像目录的 `{ items, defaultKey }`。
 
