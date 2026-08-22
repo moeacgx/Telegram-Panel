@@ -2,6 +2,8 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
+<img src="./docs/images/telegram-panel-banner.jpg" alt="Telegram Panel multi-account operations" width="100%" />
+
 A multi-account Telegram management panel built with **WTelegramClient**, a **.NET 8**
 backend, and a **Vue 3** management UI.
 
