@@ -198,10 +198,26 @@ proxyText: http://user-a:password-a@proxy-a.example.com:8080
 - `GET /api/panel/channels` / `GET /api/panel/groups`：列表和筛选
 - `GET /api/panel/channels/{id}` / `GET /api/panel/groups/{id}`：详情
 - `POST /api/panel/channels` / `POST /api/panel/groups`：创建
+- `POST /api/panel/groups/{id}/admins/{userId}/kick`：从群组详情移除非创建者管理员并踢出成员
 - `GET /api/panel/bots`：Bot 列表
 - `GET /api/panel/bot-channels`：Bot 频道列表
 
 批量邀请、管理员变更、退出和解散等端点可在对应 Vue API 调用或 Endpoint 文件中查看。
+
+自当前开发版起，群组详情的管理员表可对非创建者执行
+`POST /api/panel/groups/{id}/admins/{userId}/kick`。端点不接受用户名、访问哈希或永久封禁
+参数；服务端会重新读取 Telegram 的实时管理员列表并自动选择群组创建者或本系统管理员执行，
+因此不会把管理员的 `access_hash` 返回给浏览器。目标是创建者、执行账号本人、已不再是管理员，
+或执行账号缺少“添加管理员”和“封禁用户”权限时，接口返回 `400` 和可展示的中文 `message`。
+
+成功时返回 `200`、`success=true`，操作固定为先撤销管理员权限、再施加短时限制以完成非永久
+踢出。若 Telegram 在撤销后拒绝踢出，接口返回 `409`、`success=false`，`message` 会明确说明
+“已撤销管理员权限，但尚未踢出成员”；调用方必须刷新管理员列表，不能把该结果重试为完整操作。
+前置条件是群组和执行账号已同步且 Session 有效。排障依次检查管理员权限、目标是否已变化、
+Telegram 限流和 Session/代理状态。该功能不引入数据库迁移，但会同步匹配到的本系统账号群组关联：
+目标已离群时删除关联，仅完成降权时保留成员关联并清除创建者、管理员标记；不会为外部管理员新建
+账号记录。回滚到旧版本只会移除行内入口和专用端点，不会恢复已撤销的管理员权限、已踢出的成员或
+已同步的关联状态。
 
 `POST /api/panel/accounts/batch/profile` 的 `mode=bio` 支持与昵称/用户名相同的文本模板：`{time}` 和已启用文本字典变量会在每个账号执行前解析。模板和字典文本中的字面 `\\n` 或 `/n` 会转为真实换行；留空仍表示清空 Bio。成功判据是 Bio 在 Telegram 资料中按换行展示，模板变量解析失败时单项返回失败原因；回滚到旧版前应把 Bio 改回固定文本或提前写入真实换行。
 
@@ -228,6 +244,7 @@ proxyText: http://user-a:password-a@proxy-a.example.com:8080
 
 自 v1.31.59 起，任务中心的“编辑计划任务”弹窗在窄屏设备上使用 `min(760px, calc(100vw - 24px))` 宽度，并将表单标签切换为顶部布局；Cron、状态、专用任务配置和保存按钮不会依赖横向滚动。成功判据是在手机宽度打开计划任务编辑时，弹窗不超出视口、字段按单列排列且“保存计划任务”可见；回滚到旧版只会恢复固定 760px 弹窗，不涉及接口或数据库迁移。
 自 v1.31.70 起，计划任务保存、恢复、后台补算和每次自动触发后会对 `NextRunAtUtc` 加入 `ScheduledTasks:RandomDelaySeconds` 范围内的随机延迟，默认 300 秒，且不会越过下一次 Cron 窗口。`GET /api/panel/scheduled-tasks` 和 `GET /api/panel/scheduled-tasks/{id}` 返回的是已经持久化的错峰后时间；`POST /api/panel/scheduled-tasks/{id}/run-now` 只立即创建本次执行记录，后续计划仍按 Cron 加随机延迟重算。
+自当前开发版起，后台 `account_auto_sync` 任务在 `config.failures` 返回最多 50 条同步失败项，字段为 `accountId`、`phone` 和 `error`。任务详情前端也兼容早期 `AccountId`、`Phone`、`Error` 命名，调用方读取历史任务时应同样兼容两种形式。前置条件是某个账号实际同步失败；成功判据是 `GET /api/panel/tasks/{id}` 的原始 `config` 和任务中心都能显示同一账号编号、手机号及原因。若内容回退为占位值，检查持久化 JSON 的命名策略及前端字段读取；本变更无需迁移，回滚仅会让旧前端失去 PascalCase 历史项的显示兼容。
 自 v1.31.44 起，`channel_group_private_create` 任务会在 `config.recent_failures`
 返回最近 20 条失败明细。字段包括 `time_utc`、`account_id`、`target_type`、
 `target` 和 `reason`。自 v1.31.48 起，`user_chat_active` 会在

@@ -108,6 +108,7 @@ test('账号持续活跃支持回复消息与转发来源配置', () => {
   assert.match(taskConfigFormSource, /skipIfLastMessageFromSelf:\s*false/)
   assert.match(taskConfigFormSource, /去重发送/)
   assert.match(taskConfigFormSource, /转发来源消息链接/)
+  assert.match(taskConfigFormSource, /<el-form-item label="转发来源消息链接" label-width="128px">/)
   assert.match(tasksSource, /发送动作: \$\{isForwardMode \? '转发消息链接' : '发送消息规则'\}/)
   assert.match(tasksSource, /去重发送: \$\{skipIfLastMessageFromSelf \? '启用/)
   assert.match(taskConfigFormSource, /v-if="forms\.userChatActive\.messageActionMode === 'send_generated_text'" :span="8"/)

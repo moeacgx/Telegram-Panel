@@ -791,6 +791,281 @@ public class GroupService : IGroupService
         throw new InvalidOperationException("群组类型无效");
     }
 
+    public async Task<GroupAdminRemovalResult> RemoveAdminAndKickAsync(
+        int accountId,
+        long groupId,
+        long targetUserId,
+        CancellationToken cancellationToken = default)
+    {
+        if (targetUserId <= 0)
+            throw new ArgumentException("管理员用户 ID 无效", nameof(targetUserId));
+
+        try
+        {
+            var client = await GetOrCreateConnectedClientAsync(accountId, cancellationToken);
+            var executorUserId = client.User?.id
+                ?? throw new InvalidOperationException("执行账号未登录或 Session 已失效，请重新登录后再试");
+            if (executorUserId == targetUserId)
+                throw new InvalidOperationException("不能使用管理员本人将自己踢出群组");
+
+            var chat = await GetGroupChatAsync(accountId, client, groupId, cancellationToken);
+            return chat switch
+            {
+                Chat basicGroup => await RemoveBasicGroupAdminAndKickAsync(
+                    accountId,
+                    client,
+                    basicGroup,
+                    executorUserId,
+                    targetUserId,
+                    cancellationToken),
+                Channel megaGroup => await RemoveMegaGroupAdminAndKickAsync(
+                    accountId,
+                    client,
+                    megaGroup,
+                    executorUserId,
+                    targetUserId,
+                    cancellationToken),
+                _ => throw new InvalidOperationException("群组类型无效")
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (RpcException ex)
+        {
+            throw new InvalidOperationException(TranslateGroupAdminRemovalError(ex.Message), ex);
+        }
+    }
+
+    private async Task<GroupAdminRemovalResult> RemoveBasicGroupAdminAndKickAsync(
+        int accountId,
+        Client client,
+        Chat basicGroup,
+        long executorUserId,
+        long targetUserId,
+        CancellationToken cancellationToken)
+    {
+        var fullChat = await ExecuteTelegramRequestAsync(
+            accountId,
+            $"读取基础群管理员({basicGroup.id})",
+            () => client.Messages_GetFullChat(basicGroup.id),
+            cancellationToken,
+            resetClientOnTimeout: true);
+        if (fullChat.full_chat is not ChatFull chatFull || chatFull.participants is not ChatParticipants participants)
+            throw new InvalidOperationException("无法读取基础群管理员列表，请刷新后重试");
+
+        var target = participants.participants.FirstOrDefault(item => GetChatParticipantUserId(item) == targetUserId);
+        if (target is ChatParticipantCreator)
+            throw new InvalidOperationException("目标是群组创建者，不能移除或踢出");
+        if (target is not ChatParticipantAdmin)
+            throw new InvalidOperationException("目标已不是群组管理员，请刷新列表后重试");
+
+        var executor = participants.participants.FirstOrDefault(item => GetChatParticipantUserId(item) == executorUserId);
+        if (executor is not ChatParticipantCreator && executor is not ChatParticipantAdmin)
+            throw new InvalidOperationException("执行账号不是该群组管理员，无法移除管理员");
+
+        if (!fullChat.users.TryGetValue(targetUserId, out var targetUser) || targetUser.access_hash == 0)
+            throw new InvalidOperationException("无法取得目标管理员的 Telegram 访问凭据，请刷新管理员列表后重试");
+
+        var inputUser = new InputUser(targetUser.id, targetUser.access_hash);
+        try
+        {
+            await ExecuteTelegramRequestAsync(
+                accountId,
+                $"撤销基础群管理员({basicGroup.id}/{targetUserId})",
+                () => client.Messages_EditChatAdmin(basicGroup.id, inputUser, is_admin: false),
+                cancellationToken,
+                resetClientOnTimeout: true);
+        }
+        catch (RpcException ex)
+        {
+            throw new InvalidOperationException(TranslateGroupAdminRemovalError(ex.Message), ex);
+        }
+
+        return await KickDemotedBasicGroupMemberAsync(
+            accountId,
+            client,
+            basicGroup,
+            inputUser,
+            targetUserId,
+            cancellationToken);
+    }
+
+    private async Task<GroupAdminRemovalResult> RemoveMegaGroupAdminAndKickAsync(
+        int accountId,
+        Client client,
+        Channel megaGroup,
+        long executorUserId,
+        long targetUserId,
+        CancellationToken cancellationToken)
+    {
+        var participants = await ExecuteTelegramRequestAsync(
+            accountId,
+            $"读取超级群管理员({megaGroup.id})",
+            () => client.Channels_GetParticipants(megaGroup, new ChannelParticipantsAdmins()),
+            cancellationToken,
+            resetClientOnTimeout: true);
+
+        var target = participants.participants.FirstOrDefault(item => item switch
+        {
+            ChannelParticipantAdmin admin => admin.user_id == targetUserId,
+            ChannelParticipantCreator creator => creator.user_id == targetUserId,
+            _ => false
+        });
+        if (target is ChannelParticipantCreator)
+            throw new InvalidOperationException("目标是群组创建者，不能移除或踢出");
+        if (target is not ChannelParticipantAdmin)
+            throw new InvalidOperationException("目标已不是群组管理员，请刷新列表后重试");
+
+        var executor = participants.participants.FirstOrDefault(item => item switch
+        {
+            ChannelParticipantAdmin admin => admin.user_id == executorUserId,
+            ChannelParticipantCreator creator => creator.user_id == executorUserId,
+            _ => false
+        });
+        if (executor is not ChannelParticipantCreator
+            && (executor is not ChannelParticipantAdmin executorAdmin
+                || executorAdmin.admin_rights == null
+                || !executorAdmin.admin_rights.flags.HasFlag(ChatAdminRights.Flags.add_admins)
+                || !executorAdmin.admin_rights.flags.HasFlag(ChatAdminRights.Flags.ban_users)))
+        {
+            throw new InvalidOperationException("执行账号需要同时拥有“添加管理员”和“封禁用户”权限，才能移除管理员并踢人");
+        }
+
+        if (!participants.users.TryGetValue(targetUserId, out var targetUser) || targetUser.access_hash == 0)
+            throw new InvalidOperationException("无法取得目标管理员的 Telegram 访问凭据，请刷新管理员列表后重试");
+
+        var inputUser = new InputUser(targetUser.id, targetUser.access_hash);
+        var inputPeer = new InputPeerUser(targetUser.id, targetUser.access_hash);
+        try
+        {
+            await ExecuteTelegramRequestAsync(
+                accountId,
+                $"撤销超级群管理员({megaGroup.id}/{targetUserId})",
+                () => client.Channels_EditAdmin(
+                    megaGroup,
+                    inputUser,
+                    new ChatAdminRights { flags = 0 },
+                    string.Empty),
+                cancellationToken,
+                resetClientOnTimeout: true);
+        }
+        catch (RpcException ex)
+        {
+            throw new InvalidOperationException(TranslateGroupAdminRemovalError(ex.Message), ex);
+        }
+
+        return await KickDemotedMegaGroupMemberAsync(
+            accountId,
+            client,
+            megaGroup,
+            inputPeer,
+            targetUserId,
+            cancellationToken);
+    }
+
+    private async Task<GroupAdminRemovalResult> KickDemotedBasicGroupMemberAsync(
+        int accountId,
+        Client client,
+        Chat basicGroup,
+        InputUser inputUser,
+        long targetUserId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await ExecuteTelegramRequestAsync(
+                accountId,
+                $"踢出基础群成员({basicGroup.id}/{targetUserId})",
+                () => client.Messages_DeleteChatUser(basicGroup.id, inputUser, revoke_history: false),
+                cancellationToken,
+                resetClientOnTimeout: true);
+            return new GroupAdminRemovalResult(true, true, true, false, "已撤销管理员权限并踢出成员");
+        }
+        catch (RpcException ex) when (IsTargetAlreadyAbsent(ex.Message))
+        {
+            return new GroupAdminRemovalResult(true, true, false, true, "已撤销管理员权限；目标已不在群组中");
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return new GroupAdminRemovalResult(
+                false,
+                true,
+                false,
+                false,
+                $"已撤销管理员权限，但尚未踢出成员：{TranslateGroupAdminRemovalError(ex.Message)}");
+        }
+    }
+
+    private async Task<GroupAdminRemovalResult> KickDemotedMegaGroupMemberAsync(
+        int accountId,
+        Client client,
+        Channel megaGroup,
+        InputPeerUser inputPeer,
+        long targetUserId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await ExecuteTelegramRequestAsync(
+                accountId,
+                $"踢出超级群成员({megaGroup.id}/{targetUserId})",
+                () => client.Channels_EditBanned(megaGroup, inputPeer, BuildKickRights(permanentBan: false)),
+                cancellationToken,
+                resetClientOnTimeout: true);
+            return new GroupAdminRemovalResult(true, true, true, false, "已撤销管理员权限并踢出成员");
+        }
+        catch (RpcException ex) when (IsTargetAlreadyAbsent(ex.Message))
+        {
+            return new GroupAdminRemovalResult(true, true, false, true, "已撤销管理员权限；目标已不在群组中");
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return new GroupAdminRemovalResult(
+                false,
+                true,
+                false,
+                false,
+                $"已撤销管理员权限，但尚未踢出成员：{TranslateGroupAdminRemovalError(ex.Message)}");
+        }
+    }
+
+    private static bool IsTargetAlreadyAbsent(string? error) =>
+        !string.IsNullOrWhiteSpace(error)
+        && error.Contains("USER_NOT_PARTICIPANT", StringComparison.OrdinalIgnoreCase);
+
+    internal static string TranslateGroupAdminRemovalError(string? error)
+    {
+        var text = error?.Trim() ?? string.Empty;
+        if (text.Contains("USER_CREATOR", StringComparison.OrdinalIgnoreCase))
+            return "目标是群组创建者，不能移除或踢出";
+        if (text.Contains("USER_ADMIN_INVALID", StringComparison.OrdinalIgnoreCase))
+            return "目标管理员状态已变化，请刷新列表后重试";
+        if (text.Contains("USER_NOT_PARTICIPANT", StringComparison.OrdinalIgnoreCase))
+            return "目标已不在群组中";
+        if (text.Contains("CHAT_ADMIN_REQUIRED", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("RIGHT_FORBIDDEN", StringComparison.OrdinalIgnoreCase))
+            return "执行账号缺少取消管理员或封禁成员权限，请更换具备完整权限的群组管理员";
+        if (text.Contains("USER_ID_INVALID", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("PEER_ID_INVALID", StringComparison.OrdinalIgnoreCase))
+            return "无法解析目标管理员，请刷新管理员列表后重试";
+        if (TelegramRpcErrorTranslator.TryGetRpcWaitSeconds(text, "FLOOD_WAIT_", out var seconds))
+            return $"Telegram 风控限流，请等待约 {seconds} 秒后再试";
+        if (text.Contains("FLOOD_WAIT", StringComparison.OrdinalIgnoreCase))
+            return "Telegram 风控限流，请稍后再试";
+
+        return string.IsNullOrWhiteSpace(text) ? "Telegram 未返回具体失败原因" : text;
+    }
+
     public async Task<bool> LeaveGroupAsync(int accountId, long groupId)
     {
         try

@@ -50,7 +50,7 @@
         <el-input v-model="forms.userChatActive.replyToMessageUrl" placeholder="可选，例如 https://t.me/channel/123；新消息会回复这条链接对应的消息" />
       </el-form-item>
       <template v-else>
-        <el-form-item label="转发来源消息链接">
+        <el-form-item label="转发来源消息链接" label-width="128px">
           <el-input v-model="forms.userChatActive.forwardSourceUrlsText" type="textarea" :rows="4" placeholder="每行一个 Telegram 消息链接，例如 https://t.me/channel/123 或 https://t.me/c/1234567890/123" />
           <div class="form-hint no-offset">也可单独填写一个文本字典变量，例如 {forward_sources}；字典内容可放多条 Telegram 消息链接。</div>
         </el-form-item>

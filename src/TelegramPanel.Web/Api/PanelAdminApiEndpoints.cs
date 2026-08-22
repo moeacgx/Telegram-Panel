@@ -185,6 +185,7 @@ public static class PanelAdminApiEndpoints
         secured.MapGet("/groups", GetGroupsPageAsync);
         secured.MapGet("/groups/{id:int}", GetGroupDetailAsync);
         secured.MapGet("/groups/{id:int}/admins", GetGroupAdminsAsync);
+        MapGroupAdminKickEndpoint(secured);
         secured.MapPost("/groups", CreateGroupAsync);
         secured.MapPut("/groups/{id:int}", UpdateGroupAsync).DisableAntiforgery();
         secured.MapPatch("/groups/{id:int}/category", SetGroupCategoryAsync);
@@ -303,6 +304,15 @@ public static class PanelAdminApiEndpoints
         secured.MapGet("/external-apis/bots/{botId:int}/chats", GetExternalApiBotChatsAsync);
 
         secured.MapGet("/module-nav", GetModuleNavAsync);
+    }
+
+    internal static RouteHandlerBuilder MapGroupAdminKickEndpoint(
+        RouteGroupBuilder group)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+        return group.MapPost(
+            "/groups/{id:int}/admins/{userId:long}/kick",
+            KickGroupAdminAsync);
     }
 
     internal static RouteHandlerBuilder ConfigureAccountImportZipLimits(
@@ -3290,6 +3300,109 @@ public static class PanelAdminApiEndpoints
 
         var admins = await groupService.GetAdminsAsync(accountId.Value, group.TelegramId);
         return Results.Ok(admins.Select(ToDto).ToList());
+    }
+
+    internal static async Task<IResult> KickGroupAdminAsync(
+        int id,
+        long userId,
+        GroupManagementService groupManagement,
+        IGroupService groupService,
+        CancellationToken cancellationToken)
+    {
+        if (userId <= 0)
+            return Results.BadRequest(new OperationResultDto(false, "管理员用户 ID 无效"));
+
+        var group = await groupManagement.GetGroupAsync(id);
+        if (group == null)
+            return Results.NotFound(new OperationResultDto(false, "群组不存在"));
+
+        var accountId = await groupManagement.ResolveExecuteAccountIdAsync(group);
+        if (accountId is not > 0)
+            return Results.BadRequest(new OperationResultDto(false, "该群组暂无可用执行账号（请先同步群组关联账号，或确保至少有一个账号是管理员）"));
+
+        try
+        {
+            var result = await groupService.RemoveAdminAndKickAsync(
+                accountId.Value,
+                group.TelegramId,
+                userId,
+                cancellationToken);
+
+            try
+            {
+                await SynchronizeGroupAccountMembershipAfterAdminRemovalAsync(
+                    id,
+                    userId,
+                    result,
+                    groupManagement);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                return Results.Conflict(new OperationResultDto(
+                    false,
+                    $"{result.Message}；Telegram 管理员操作已执行，但本系统账号群组关联同步失败，请刷新后执行群组同步。"));
+            }
+
+            return result.Succeeded
+                ? Results.Ok(new OperationResultDto(true, result.Message))
+                : Results.Conflict(new OperationResultDto(false, result.Message));
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new OperationResultDto(false, ex.Message));
+        }
+        catch (Exception ex)
+        {
+            return Results.BadRequest(new OperationResultDto(false, $"踢出管理员失败：{ex.Message}"));
+        }
+    }
+
+    private static async Task SynchronizeGroupAccountMembershipAfterAdminRemovalAsync(
+        int groupId,
+        long targetUserId,
+        GroupAdminRemovalResult result,
+        GroupManagementService groupManagement)
+    {
+        if (!result.AdminRightsRemoved && !result.MemberRemoved && !result.TargetAlreadyAbsent)
+            return;
+
+        var matches = (await groupManagement.GetGroupAccountMembershipsAsync(
+                groupId,
+                CancellationToken.None))
+            .Where(membership => membership.Account?.UserId == targetUserId)
+            .ToArray();
+        if (matches.Length == 0)
+            return;
+
+        if (result.MemberRemoved || result.TargetAlreadyAbsent)
+        {
+            foreach (var membership in matches)
+                await groupManagement.RemoveAccountGroupAsync(groupId, membership.AccountId);
+
+            return;
+        }
+
+        if (!result.AdminRightsRemoved)
+            return;
+
+        var syncedAtUtc = DateTime.UtcNow;
+        foreach (var membership in matches)
+        {
+            await groupManagement.UpsertAccountGroupAsync(
+                membership.AccountId,
+                groupId,
+                isCreator: false,
+                isAdmin: false,
+                syncedAtUtc);
+        }
     }
 
     private static async Task<IResult> CreateChannelAsync(
