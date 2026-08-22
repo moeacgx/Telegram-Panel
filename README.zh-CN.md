@@ -2,6 +2,8 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
+<img src="./docs/images/telegram-panel-banner.jpg" alt="Telegram Panel 多账号统一运营" width="100%" />
+
 基于 **WTelegramClient** 的 Telegram 多账户管理面板，使用 **.NET 8 后端** 与 **Vue 3 管理后台** 构建。
 
 <p align="center">
