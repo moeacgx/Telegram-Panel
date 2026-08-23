@@ -203,6 +203,20 @@ await taskManagement.UpdateTaskConfigAsync(
 回滚到旧版本不需要数据库迁移；旧处理器会忽略未知的 `recent_failures` JSON 字段。
 回滚后新发生的失败将不再追加说明，已有记录仍保留在任务配置中。
 
+#### 账号数据同步失败明细字段
+
+适用版本：当前开发版。
+
+宿主的 `account_auto_sync` 任务把账号级失败写入 `config.failures`。新记录必须使用
+`accountId`、`phone`、`error` 三个 camelCase 字段；任务详情读取器还必须兼容早期
+`AccountId`、`Phone`、`Error` 记录，不能因字段命名差异把真实失败展示为占位值。
+
+验收前提是构造一条可稳定失败的账号同步任务。成功判据是
+`GET /api/panel/tasks/{id}` 返回的失败项包含上述字段，任务中心显示相同账号编号、手机号和
+原因。若失败项显示为空，先检查序列化选项是否使用 Web/camelCase 命名策略，再检查前端是否
+同时读取历史 PascalCase 名称。该兼容变更没有数据库迁移；回滚后保留的任务配置仍可读取，
+但旧前端可能无法完整展示 PascalCase 历史项。
+
 ### 4）宿主现在会自动恢复“中断中的 running 任务”
 
 当前宿主实现中，`BatchTaskBackgroundService` 启动时会把数据库里残留的 `running` 批量任务重新置回 `pending`，然后由后台执行器重新拉起。

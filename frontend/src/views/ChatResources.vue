@@ -160,7 +160,7 @@
 
       <el-divider content-position="left">管理员</el-divider>
       <div class="toolbar compact mb-3">
-        <el-button :icon="Refresh" :loading="detail.adminsLoading" @click="loadDetailAdmins">刷新</el-button>
+        <el-button :icon="Refresh" :loading="detail.adminsLoading" :disabled="detail.adminKickLoadingGroupId !== null" @click="loadDetailAdmins">刷新</el-button>
         <span class="muted">{{ detail.admins.length ? `共 ${detail.admins.length} 个管理员` : '暂无管理员数据（或无权限获取）' }}</span>
       </div>
       <el-table v-if="detail.admins.length" :data="detail.admins" stripe max-height="240">
@@ -175,6 +175,21 @@
         </el-table-column>
         <el-table-column label="头衔" min-width="120">
           <template #default="{ row }">{{ row.rank || '-' }}</template>
+        </el-table-column>
+        <el-table-column v-if="kind === 'group'" label="操作" width="72" align="center">
+          <template #default="{ row }">
+            <el-tooltip v-if="!row.isCreator" content="踢出管理员" placement="top">
+              <el-button
+                link
+                type="danger"
+                :icon="Delete"
+                :disabled="detail.adminKickLoadingGroupId !== null"
+                :loading="detail.adminKickLoadingGroupId === detail.row.id && detail.adminKickLoadingUserId === row.userId"
+                @click="kickAdminFromDetail(row)"
+              />
+            </el-tooltip>
+            <span v-else>-</span>
+          </template>
         </el-table-column>
       </el-table>
 
@@ -504,7 +519,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type TableInstance, type UploadUserFile } from 'element-plus'
-import { ArrowDown, Edit, Folder, MoreFilled, Plus, Refresh, Select, View } from '@element-plus/icons-vue'
+import { ArrowDown, Delete, Edit, Folder, MoreFilled, Plus, Refresh, Select, View } from '@element-plus/icons-vue'
 import { panelApi } from '@/api/panel'
 import ColumnVisibilityMenu from '@/components/ColumnVisibilityMenu.vue'
 import type { ChannelListItem, ChatAdmin, ChatMembershipAccount, GroupListItem, OperationAccount, SimpleCategory, TextPreset } from '@/api/types'
@@ -573,6 +588,8 @@ const detail = reactive({
   kickTarget: '',
   kickPermanent: false,
   kickLoading: false,
+  adminKickLoadingGroupId: null as number | null,
+  adminKickLoadingUserId: null as number | null,
 })
 const systemAccounts = reactive({
   visible: false,
@@ -856,9 +873,12 @@ async function batchExportInvites() {
 }
 
 async function showDetails(row: Row) {
+  const resourceId = row.id
   detail.row = row
   detail.admins = []
   detail.accounts = row.accounts.slice()
+  detail.adminsLoading = false
+  detail.accountsLoading = false
   detail.kickAccountId = filters.accountId > 0 ? filters.accountId : 0
   detail.kickTarget = ''
   detail.kickPermanent = false
@@ -866,18 +886,20 @@ async function showDetails(row: Row) {
   detail.loading = true
   try {
     if (props.kind === 'channel') {
-      const payload = await panelApi.channelDetail(row.id)
+      const payload = await panelApi.channelDetail(resourceId)
+      if (detail.row?.id !== resourceId) return
       detail.row = payload.channel
       detail.accounts = payload.accounts
     } else {
-      const payload = await panelApi.groupDetail(row.id)
+      const payload = await panelApi.groupDetail(resourceId)
+      if (detail.row?.id !== resourceId) return
       detail.row = payload.group
       detail.accounts = payload.accounts
     }
   } finally {
-    detail.loading = false
+    if (detail.row?.id === resourceId) detail.loading = false
   }
-  await loadDetailAdmins()
+  await loadDetailAdmins(resourceId)
 }
 
 function setSystemAccounts(items: ChatMembershipAccount[]) {
@@ -896,33 +918,38 @@ function showDetailSystemAccounts() {
   systemAccounts.visible = true
 }
 
-async function loadDetailAdmins() {
-  if (!detail.row) return
+async function loadDetailAdmins(expectedResourceId?: number) {
+  const resourceId = expectedResourceId ?? detail.row?.id
+  if (!resourceId) return
   detail.adminsLoading = true
   try {
-    detail.admins = props.kind === 'channel'
-      ? await panelApi.channelAdmins(detail.row.id)
-      : await panelApi.groupAdmins(detail.row.id)
+    const admins = props.kind === 'channel'
+      ? await panelApi.channelAdmins(resourceId)
+      : await panelApi.groupAdmins(resourceId)
+    if (detail.row?.id === resourceId) detail.admins = admins
   } finally {
-    detail.adminsLoading = false
+    if (detail.row?.id === resourceId) detail.adminsLoading = false
   }
 }
 
-async function loadDetailAccounts() {
-  if (!detail.row) return
+async function loadDetailAccounts(expectedResourceId?: number) {
+  const resourceId = expectedResourceId ?? detail.row?.id
+  if (!resourceId) return
   detail.accountsLoading = true
   try {
     if (props.kind === 'channel') {
-      const payload = await panelApi.channelDetail(detail.row.id)
+      const payload = await panelApi.channelDetail(resourceId)
+      if (detail.row?.id !== resourceId) return
       detail.row = payload.channel
       detail.accounts = payload.accounts
     } else {
-      const payload = await panelApi.groupDetail(detail.row.id)
+      const payload = await panelApi.groupDetail(resourceId)
+      if (detail.row?.id !== resourceId) return
       detail.row = payload.group
       detail.accounts = payload.accounts
     }
   } finally {
-    detail.accountsLoading = false
+    if (detail.row?.id === resourceId) detail.accountsLoading = false
   }
 }
 
@@ -952,6 +979,39 @@ async function kickFromDetail() {
     showBatchResult(detail.kickPermanent ? '封禁完成' : '踢出完成', result)
   } finally {
     detail.kickLoading = false
+  }
+}
+
+async function kickAdminFromDetail(admin: ChatAdmin) {
+  const groupId = detail.row?.id
+  if (!groupId || props.kind !== 'group' || admin.isCreator || detail.adminKickLoadingGroupId !== null) return
+
+  try {
+    await ElMessageBox.confirm(
+      `确定踢出管理员「${admin.displayName}」吗？系统会先撤销管理员权限，再将其移出群组。`,
+      '确认踢出管理员',
+      { type: 'warning', confirmButtonText: '踢出', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+
+  if (detail.row?.id !== groupId || detail.adminKickLoadingGroupId !== null) return
+
+  detail.adminKickLoadingGroupId = groupId
+  detail.adminKickLoadingUserId = admin.userId
+  try {
+    const result = await panelApi.kickGroupAdmin(groupId, admin.userId)
+    ElMessage.success(result.message || '已踢出管理员')
+  } finally {
+    if (detail.adminKickLoadingGroupId === groupId && detail.adminKickLoadingUserId === admin.userId) {
+      detail.adminKickLoadingGroupId = null
+      detail.adminKickLoadingUserId = null
+    }
+    await Promise.allSettled([
+      loadDetailAdmins(groupId),
+      loadDetailAccounts(groupId),
+    ])
   }
 }
 

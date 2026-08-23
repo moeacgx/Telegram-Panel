@@ -493,6 +493,8 @@ export const panelApi = {
   groupDetail: (id: number) => api.get<GroupDetail>(`/groups/${id}`).then((r) => r.data),
   groupAdmins: (id: number) =>
     api.get<ChatAdmin[]>(`/groups/${id}/admins`, { timeout: 120_000 }).then((r) => r.data),
+  kickGroupAdmin: (id: number, userId: number) =>
+    api.post<OperationResult>(`/groups/${id}/admins/${userId}/kick`, {}, { timeout: 120_000 }).then((r) => r.data),
   createGroup: (payload: {
     accountId: number
     categoryId?: number | null

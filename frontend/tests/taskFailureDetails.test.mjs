@@ -22,9 +22,9 @@ test('批量加群订阅任务展示失败账号目标和原因', () => {
 test('账号数据同步任务展示失败账号和具体原因', () => {
   assert.match(tasksSource, /function buildAccountSyncDetails\(obj: Record<string, any>\)/)
   assert.match(tasksSource, /lines\.push\(`失败记录: \$\{obj\.failures\.length\} 条`, '失败账号:'\)/)
-  assert.match(tasksSource, /item\?\.accountId \|\| item\?\.account_id/)
-  assert.match(tasksSource, /String\(item\?\.phone \|\| ''\)/)
-  assert.match(tasksSource, /String\(item\?\.error \|\| ''\)/)
+  assert.match(tasksSource, /item\?\.accountId \?\? item\?\.account_id \?\? item\?\.AccountId/)
+  assert.match(tasksSource, /String\(item\?\.phone \?\? item\?\.Phone \?\? ''\)/)
+  assert.match(tasksSource, /String\(item\?\.error \?\? item\?\.Error \?\? ''\)/)
 })
 
 test('历史任务优先展示批量任务名称并保留类型说明', () => {

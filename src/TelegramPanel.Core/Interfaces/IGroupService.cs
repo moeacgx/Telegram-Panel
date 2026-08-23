@@ -63,6 +63,15 @@ public interface IGroupService
     Task<bool> KickUserByUserIdAsync(int accountId, long groupId, long userId, bool permanentBan = false);
 
     /// <summary>
+    /// 移除非创建者管理员，并以非永久限制的方式将其踢出群组。
+    /// </summary>
+    Task<GroupAdminRemovalResult> RemoveAdminAndKickAsync(
+        int accountId,
+        long groupId,
+        long targetUserId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// 退出群组。
     /// </summary>
     Task<bool> LeaveGroupAsync(int accountId, long groupId);
