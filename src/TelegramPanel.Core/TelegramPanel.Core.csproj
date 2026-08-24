@@ -24,6 +24,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="TelegramPanel.Web" />
+    <InternalsVisibleTo Include="TelegramPanel.Web.Tests" />
   </ItemGroup>
 
 </Project>

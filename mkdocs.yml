@@ -45,5 +45,6 @@ nav:
       - API: reference/api.md
   - 开发:
       - 模块开发: developer/modules.md
+      - 群组管理员移除: developer/group-admin-removal.md
       - 文档维护: developer/documentation.md
       - 开发发布流程: developer/release-process.md

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -17,6 +18,10 @@ public class DataSyncService
 {
     private static readonly SemaphoreSlim SyncGate = new(1, 1);
     private static readonly SemaphoreSlim SyncTaskCreationGate = new(1, 1);
+    private static readonly JsonSerializerOptions SyncTaskConfigJsonOptions = new()
+    {
+        WriteIndented = true
+    };
 
     private readonly AccountManagementService _accountManagement;
     private readonly ChannelManagementService _channelManagement;
@@ -542,7 +547,7 @@ public class DataSyncService
                && exception is OperationCanceledException;
     }
 
-    private static string BuildSyncTaskConfig(
+    internal static string BuildSyncTaskConfig(
         string trigger,
         int totalAccounts,
         int processedAccounts,
@@ -585,7 +590,7 @@ public class DataSyncService
             error
         };
 
-        return JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
+        return JsonSerializer.Serialize(payload, SyncTaskConfigJsonOptions);
     }
 
     private async Task MarkAccountSyncSucceededAsync(Account account)
@@ -619,8 +624,11 @@ public class DataSyncService
                || summary.Contains("刷新失败", StringComparison.OrdinalIgnoreCase);
     }
 
-    private sealed record SyncFailureItem(int AccountId, string Phone, string Error);
-    private sealed record SyncSkippedItem(int AccountId, string Phone, string Reason);
+    internal sealed record SyncFailureItem(
+        [property: JsonPropertyName("accountId")] int AccountId,
+        [property: JsonPropertyName("phone")] string Phone,
+        [property: JsonPropertyName("error")] string Error);
+    internal sealed record SyncSkippedItem(int AccountId, string Phone, string Reason);
 
     public sealed class SyncSummary
     {
