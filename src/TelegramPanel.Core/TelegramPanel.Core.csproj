@@ -9,7 +9,7 @@
 
   <ItemGroup>
     <PackageReference Include="libphonenumber-csharp" Version="9.0.21" />
-    <PackageReference Include="WTelegramClient" Version="4.*" />
+    <PackageReference Include="WTelegramClient" Version="4.4.8" />
     <PackageReference Include="SixLabors.ImageSharp" Version="3.*" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.*" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="8.*" />
