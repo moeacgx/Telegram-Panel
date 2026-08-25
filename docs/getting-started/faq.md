@@ -42,6 +42,18 @@ tokens-pro 的周期刷新时，可设置 `TP_WARP_SCHEDULED_REFRESH_ENABLED=tru
 
 先在任务中心查看失败详情并重新运行同步任务；如果仍持续失败，再对该账号执行状态刷新，检查代理出口和 Session 错误。只有出现 `AUTH_KEY_UNREGISTERED`、`SESSION_REVOKED` 等明确错误时，才需要重新登录账号。
 
+## 数据同步提示 “Cannot find type for ctor” 怎么办
+
+适用于使用 `WTelegramClient 4.4.8`（Telegram Layer 228）的版本。该错误表示 Telegram 向该
+会话返回了相邻旧 Layer 的对象构造器，不是 `Desktop / Windows 10` 等设备画像直接造成的网络故障。
+包含此修复的版本会兼容 `user#31774388` 和 `channel#1c32b11c`，无需修改设备画像、降级依赖或删除
+Session 文件。
+
+升级并重启后重新运行同步任务；成功判据是频道/群组同步完成，任务详情不再显示上述构造器错误。
+若错误中的构造器编号不同，请保留完整编号、发生时间和任务日志反馈。若同时提示
+`AUTH_KEY_UNREGISTERED` 或 `SESSION_REVOKED`，那是独立的 Session 问题，应按账号重新登录流程处理。
+回滚应用版本不会修改数据库或已有 Session。
+
 ## 账号列表为什么显示“连接异常”，定时任务还能自动恢复吗
 
 适用于 v1.31.46 及以上版本。“连接异常”表示最近一次检测遇到代理断开、请求超时或临时 IO
