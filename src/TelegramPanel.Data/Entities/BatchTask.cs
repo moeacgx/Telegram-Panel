@@ -10,7 +10,7 @@ public class BatchTask
     public string TaskType { get; set; } = null!; // invite/set_admin/create_channel等
     public string OwnerModuleId { get; set; } = "host.legacy";
     public string ExecutionKind { get; set; } = "batch";
-    public string Status { get; set; } = "pending"; // pending/running/pausing/paused/completed/failed/canceled
+    public string Status { get; set; } = "pending"; // initializing/updating/pending/running/pausing/paused/completed/failed/canceled
     public int Total { get; set; }
     public int Completed { get; set; }
     public int Failed { get; set; }
@@ -19,6 +19,7 @@ public class BatchTask
     public string? RuntimeMessage { get; set; }
     public DateTime? HeartbeatAtUtc { get; set; }
     public bool RequiresAttention { get; set; }
+    public DateTime? NextEligibleAtUtc { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? StartedAt { get; set; }
     public DateTime? CompletedAt { get; set; }

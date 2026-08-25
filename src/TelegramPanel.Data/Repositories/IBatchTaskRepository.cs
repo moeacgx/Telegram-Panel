@@ -18,7 +18,45 @@ public interface IBatchTaskRepository : IRepository<BatchTask>
     Task<bool> TryResumeAsync(int id, CancellationToken cancellationToken = default);
     Task<bool> TryCancelAsync(int id, DateTime completedAt, CancellationToken cancellationToken = default);
     Task<bool> TryCompleteAsync(int id, bool success, DateTime completedAt, CancellationToken cancellationToken = default);
+    Task<bool> TryCompletePersistentAsync(
+        int id,
+        int completed,
+        int failed,
+        string? runtimeMessage,
+        DateTime completedAtUtc,
+        CancellationToken cancellationToken = default) => Task.FromResult(false);
     Task<bool> TryRequeueAsync(int id, CancellationToken cancellationToken = default);
+    Task<bool> TryDeferAsync(
+        int id,
+        DateTime nextEligibleAtUtc,
+        string? runtimeMessage,
+        DateTime heartbeatAtUtc,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(false);
+    Task<bool> TryActivateInitializedAsync(int id, CancellationToken cancellationToken = default) =>
+        Task.FromResult(false);
+    Task<bool> TryBeginEditableUpdateAsync(
+        int id,
+        int total,
+        string? config,
+        string? name,
+        CancellationToken cancellationToken = default) => Task.FromResult(false);
+    Task<bool> TryFinishEditableUpdateAsync(int id, CancellationToken cancellationToken = default) =>
+        Task.FromResult(false);
+    Task<bool> TryRollbackEditableUpdateAsync(
+        int id,
+        int total,
+        string? config,
+        string? name,
+        string? runtimeMessage,
+        DateTime heartbeatAtUtc,
+        CancellationToken cancellationToken = default) => Task.FromResult(false);
+    Task<bool> TryFailTransitionAsync(
+        int id,
+        string expectedStatus,
+        string? runtimeMessage,
+        DateTime failedAtUtc,
+        CancellationToken cancellationToken = default) => Task.FromResult(false);
     Task UpdateProgressColumnsAsync(int id, int completed, int failed, CancellationToken cancellationToken = default);
     Task UpdateRuntimeStateColumnsAsync(
         int id,
@@ -32,6 +70,9 @@ public interface IBatchTaskRepository : IRepository<BatchTask>
     Task<bool> TryUpdateEditableDraftAsync(int id, int total, string? config, CancellationToken cancellationToken = default);
     Task<bool> TryUpdateEditableDraftAsync(int id, int total, string? config, string? name, CancellationToken cancellationToken = default);
     Task<IEnumerable<BatchTask>> GetByStatusAsync(string status);
+    Task<IReadOnlyList<BatchTask>> GetEligiblePersistentTasksAsync(
+        DateTime eligibleAtUtc,
+        CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<BatchTask>>(Array.Empty<BatchTask>());
     Task<IEnumerable<BatchTask>> GetRunningTasksAsync();
     Task<IReadOnlyList<BatchTask>> GetActiveTasksAsync(CancellationToken cancellationToken = default);
     Task<IEnumerable<BatchTask>> GetRecentTasksAsync(int count = 20);

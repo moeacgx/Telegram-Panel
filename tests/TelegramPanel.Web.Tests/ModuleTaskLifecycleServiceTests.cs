@@ -89,6 +89,80 @@ public sealed class ModuleTaskLifecycleServiceTests
     }
 
     [Fact]
+    public async Task Create_keeps_task_unclaimable_until_module_state_is_committed()
+    {
+        await using var harness = await CreateHarnessAsync(throwOnDelete: false);
+        var initializing = await harness.Tasks.CreateInitializingTaskAsync(new BatchTask
+        {
+            TaskType = "module.task",
+            OwnerModuleId = "test.module",
+            ExecutionKind = ModuleTaskExecutionKinds.Persistent,
+            Total = 2,
+            Config = "{\"version\":2}"
+        });
+
+        Assert.Equal("initializing", initializing.Status);
+        Assert.False(await harness.Tasks.TryStartTaskAsync(initializing.Id));
+
+        var activated = await harness.Lifecycle.CommitCreatedTaskAsync(initializing, "create-safe");
+
+        Assert.Equal("pending", activated.Status);
+        Assert.Equal(new[] { "upsert:create-safe" }, harness.Handler.Calls);
+    }
+
+    [Fact]
+    public async Task Create_commit_failure_marks_task_failed_instead_of_leaving_it_claimable()
+    {
+        await using var harness = await CreateHarnessAsync(throwOnDelete: false);
+        harness.Handler.CommitFailuresRemaining = 1;
+        var initializing = await harness.Tasks.CreateInitializingTaskAsync(new BatchTask
+        {
+            TaskType = "module.task",
+            OwnerModuleId = "test.module",
+            ExecutionKind = ModuleTaskExecutionKinds.Persistent,
+            Total = 1
+        });
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => harness.Lifecycle.CommitCreatedTaskAsync(initializing, "create-failed"));
+
+        var failed = await harness.Tasks.GetTaskAsync(initializing.Id);
+        Assert.Equal("failed", failed!.Status);
+        Assert.Equal("initializing_failed", failed.RuntimePhase);
+        Assert.True(failed.RequiresAttention);
+        Assert.False(await harness.Tasks.TryStartTaskAsync(initializing.Id));
+    }
+
+    [Fact]
+    public async Task Edit_commit_failure_restores_previous_host_and_module_snapshot()
+    {
+        await using var harness = await CreateHarnessAsync(throwOnDelete: false);
+        var previous = await harness.Tasks.GetTaskAsync(harness.TaskId);
+        harness.Handler.CommitFailuresRemaining = 1;
+
+        Assert.True(await harness.Tasks.TryBeginEditableTaskUpdateAsync(
+            harness.TaskId,
+            9,
+            "{\"version\":9}",
+            "新配置"));
+        var updated = await harness.Tasks.GetTaskAsync(harness.TaskId);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => harness.Lifecycle.CommitEditedTaskAsync(updated!, previous!, "edit-failed"));
+
+        var restored = await harness.Tasks.GetTaskAsync(harness.TaskId);
+        Assert.Equal("paused", restored!.Status);
+        Assert.Equal(previous!.Total, restored.Total);
+        Assert.Equal(previous.Config, restored.Config);
+        Assert.Equal(previous.Name, restored.Name);
+        Assert.Equal("update_rolled_back", restored.RuntimePhase);
+        Assert.True(restored.RequiresAttention);
+        Assert.Equal(
+            new[] { "upsert:edit-failed", "upsert:update:rollback:edit-failed" },
+            harness.Handler.Calls);
+    }
+
+    [Fact]
     public async Task Runtime_attention_is_persisted_on_host_task()
     {
         await using var harness = await CreateHarnessAsync(throwOnDelete: false);
@@ -130,6 +204,29 @@ public sealed class ModuleTaskLifecycleServiceTests
 
         Assert.Equal("paused", (await harness.Tasks.GetTaskAsync(harness.TaskId))!.Status);
         Assert.Equal(1, harness.Handler.ReconcileCallCount);
+    }
+
+    [Fact]
+    public async Task Startup_recovery_reconciles_then_activates_interrupted_initialization()
+    {
+        await using var harness = await CreateHarnessAsync(throwOnDelete: false, initialStatus: "initializing");
+
+        await harness.StartupRecovery.EnsureRecoveredAsync(CancellationToken.None);
+
+        Assert.Equal("pending", (await harness.Tasks.GetTaskAsync(harness.TaskId))!.Status);
+        Assert.Equal(1, harness.Handler.ReconcileCallCount);
+        Assert.Contains($"upsert:recovery:create:{harness.TaskId}", harness.Handler.Calls);
+    }
+
+    [Fact]
+    public async Task Startup_recovery_commits_interrupted_edit_before_returning_to_paused()
+    {
+        await using var harness = await CreateHarnessAsync(throwOnDelete: false, initialStatus: "updating");
+
+        await harness.StartupRecovery.EnsureRecoveredAsync(CancellationToken.None);
+
+        Assert.Equal("paused", (await harness.Tasks.GetTaskAsync(harness.TaskId))!.Status);
+        Assert.Contains($"upsert:update:recovery:{harness.TaskId}", harness.Handler.Calls);
     }
 
     private static async Task<TestHarness> CreateHarnessAsync(
@@ -242,10 +339,22 @@ public sealed class ModuleTaskLifecycleServiceTests
         public List<string> Calls { get; } = new();
         public IReadOnlyCollection<int> ReconciledTaskIds { get; private set; } = Array.Empty<int>();
         public int ReconcileCallCount { get; private set; }
+        public int CommitFailuresRemaining { get; set; }
 
         public Task ValidateAsync(ModuleTaskLifecycleContext context, CancellationToken cancellationToken = default)
         {
             Calls.Add($"validate:{context.OperationId}");
+            return Task.CompletedTask;
+        }
+
+        public Task CommitUpsertAsync(ModuleTaskLifecycleContext context, CancellationToken cancellationToken = default)
+        {
+            Calls.Add($"upsert:{context.OperationId}");
+            if (CommitFailuresRemaining > 0)
+            {
+                CommitFailuresRemaining--;
+                throw new InvalidOperationException("模拟模块状态提交失败");
+            }
             return Task.CompletedTask;
         }
 

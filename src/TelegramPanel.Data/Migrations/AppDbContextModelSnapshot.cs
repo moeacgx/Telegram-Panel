@@ -255,6 +255,9 @@ namespace TelegramPanel.Data.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTime?>("NextEligibleAtUtc")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("OwnerModuleId")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -294,7 +297,7 @@ namespace TelegramPanel.Data.Migrations
 
                     b.HasIndex("CreatedAt");
 
-                    b.HasIndex("ExecutionKind", "Status");
+                    b.HasIndex("ExecutionKind", "Status", "NextEligibleAtUtc");
 
                     b.HasIndex("Status");
 

@@ -703,6 +703,7 @@ export interface BatchTask {
   runtimeMessage?: string | null
   heartbeatAtUtc?: string | null
   requiresAttention: boolean
+  nextEligibleAtUtc?: string | null
 }
 
 export interface ScheduledTask {

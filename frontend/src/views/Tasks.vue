@@ -1207,6 +1207,7 @@ async function showTaskDetails(task: BatchTask) {
   if (task.runtimePhase) lines.push(`运行阶段: ${task.runtimePhase}`)
   if (task.runtimeMessage) lines.push(`运行消息: ${task.runtimeMessage}`)
   if (task.heartbeatAtUtc) lines.push(`最近心跳: ${formatTime(task.heartbeatAtUtc)}`)
+  if (task.nextEligibleAtUtc) lines.push(`下次领取时间: ${formatTime(task.nextEligibleAtUtc)}`)
   if (task.requiresAttention) lines.push('提醒: 需要人工处理')
   if (extraDetails.length > 0) lines.push(...extraDetails)
   detailDialog.value = {
@@ -1798,6 +1799,8 @@ async function showScheduledDetails(task: ScheduledTask) {
 }
 
 function statusName(status: string) {
+  if (status === 'initializing') return '正在初始化'
+  if (status === 'updating') return '正在提交配置'
   if (status === 'pending') return '待执行'
   if (status === 'running') return '执行中'
   if (status === 'pausing') return '停止中'

@@ -300,7 +300,7 @@ public class AppDbContext : DbContext
 
             entity.HasIndex(e => e.Status);
             entity.HasIndex(e => e.CreatedAt);
-            entity.HasIndex(e => new { e.ExecutionKind, e.Status });
+            entity.HasIndex(e => new { e.ExecutionKind, e.Status, e.NextEligibleAtUtc });
         });
 
         // ScheduledTask配置

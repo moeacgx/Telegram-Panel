@@ -268,6 +268,23 @@ public interface IModulePersistentTaskExecutionHost : IModuleTaskExecutionHost
         string reason,
         bool requiresAttention,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 延后当前任务并释放持久任务执行槽。到达指定 UTC 时间后宿主会重新领取任务。
+    /// </summary>
+    Task DeferAsync(
+        DateTimeOffset nextEligibleAtUtc,
+        string reason,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 一次性工作在持久任务通道中完成后显式结束任务。
+    /// </summary>
+    Task CompleteAsync(
+        int completed,
+        int failed,
+        string? message = null,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class ModuleTaskRuntimeState
@@ -310,6 +327,8 @@ public interface IModuleTaskLifecycleHandler
 {
     string TaskType { get; }
     Task ValidateAsync(ModuleTaskLifecycleContext context, CancellationToken cancellationToken = default);
+    Task CommitUpsertAsync(ModuleTaskLifecycleContext context, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
     Task PrepareDeleteAsync(ModuleTaskLifecycleContext context, CancellationToken cancellationToken = default);
     Task CommitDeleteAsync(ModuleTaskLifecycleContext context, CancellationToken cancellationToken = default);
     Task AbortDeleteAsync(ModuleTaskLifecycleContext context, CancellationToken cancellationToken = default);

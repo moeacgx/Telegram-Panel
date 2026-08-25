@@ -105,11 +105,10 @@ public sealed class PersistentModuleTaskBackgroundService : BackgroundService
             .Where(group => group.Count() == 1)
             .ToDictionary(group => group.Key, group => group.Single(), StringComparer.OrdinalIgnoreCase);
 
-        var pending = (await taskManagement.GetTasksByStatusAsync("pending"))
+        var pending = (await taskManagement.GetEligiblePersistentTasksAsync(DateTime.UtcNow, cancellationToken))
             .Where(IsOwnedPersistentTask)
             .Where(task => handlers.ContainsKey(task.TaskType))
             .Where(task => !_runningTasks.ContainsKey(task.Id))
-            .OrderBy(task => task.CreatedAt)
             .FirstOrDefault();
         if (pending == null)
             return false;
@@ -321,6 +320,49 @@ public sealed class PersistentModuleTaskBackgroundService : BackgroundService
                 requiresAttention,
                 cancellationToken);
             await _executionControl.RequestPauseFromExecutionAsync(_execution, cancellationToken);
+        }
+
+        public async Task DeferAsync(
+            DateTimeOffset nextEligibleAtUtc,
+            string reason,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var deferredAtUtc = DateTime.UtcNow;
+            var nextUtc = nextEligibleAtUtc.UtcDateTime;
+            if (nextUtc <= deferredAtUtc)
+                nextUtc = deferredAtUtc;
+
+            if (!await _tasks.TryDeferTaskAsync(
+                    _task.Id,
+                    nextUtc,
+                    reason,
+                    deferredAtUtc,
+                    cancellationToken))
+                throw new InvalidOperationException("任务状态已变化，无法延后执行");
+
+            _logger.LogInformation(
+                "Persistent task deferred: taskId={TaskId}, nextEligibleAtUtc={NextEligibleAtUtc}, reason={Reason}",
+                _task.Id,
+                nextUtc,
+                reason);
+        }
+
+        public async Task CompleteAsync(
+            int completed,
+            int failed,
+            string? message = null,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!await _tasks.TryCompletePersistentTaskAsync(
+                    _task.Id,
+                    completed,
+                    failed,
+                    message,
+                    DateTime.UtcNow,
+                    cancellationToken))
+                throw new InvalidOperationException("任务状态已变化，无法确认完成");
         }
     }
 }

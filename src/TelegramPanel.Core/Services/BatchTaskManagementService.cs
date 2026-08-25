@@ -39,6 +39,11 @@ public class BatchTaskManagementService
         return await _batchTaskRepository.GetByStatusAsync(status);
     }
 
+    public Task<IReadOnlyList<BatchTask>> GetEligiblePersistentTasksAsync(
+        DateTime eligibleAtUtc,
+        CancellationToken cancellationToken = default) =>
+        _batchTaskRepository.GetEligiblePersistentTasksAsync(eligibleAtUtc, cancellationToken);
+
     public async Task<IEnumerable<BatchTask>> GetRunningTasksAsync()
     {
         return await _batchTaskRepository.GetRunningTasksAsync();
@@ -69,7 +74,13 @@ public class BatchTaskManagementService
         return await _batchTaskRepository.TrimHistoryTasksAsync(keepCount, cancellationToken);
     }
 
-    public async Task<BatchTask> CreateTaskAsync(BatchTask task)
+    public Task<BatchTask> CreateTaskAsync(BatchTask task) =>
+        CreateTaskAsync(task, "pending");
+
+    public Task<BatchTask> CreateInitializingTaskAsync(BatchTask task) =>
+        CreateTaskAsync(task, "initializing");
+
+    private async Task<BatchTask> CreateTaskAsync(BatchTask task, string initialStatus)
     {
         task.OwnerModuleId = string.IsNullOrWhiteSpace(task.OwnerModuleId)
             ? "host.legacy"
@@ -80,7 +91,7 @@ public class BatchTaskManagementService
         if (task.ExecutionKind is not ("batch" or "persistent"))
             throw new InvalidOperationException($"不支持的任务执行通道：{task.ExecutionKind}");
         task.CreatedAt = DateTime.UtcNow;
-        task.Status = "pending";
+        task.Status = initialStatus;
         return await _batchTaskRepository.AddAsync(task);
     }
 
@@ -180,6 +191,87 @@ public class BatchTaskManagementService
     {
         return await _batchTaskRepository.TryResumeAsync(taskId, cancellationToken);
     }
+
+    public Task<bool> TryDeferTaskAsync(
+        int taskId,
+        DateTime nextEligibleAtUtc,
+        string? reason,
+        DateTime heartbeatAtUtc,
+        CancellationToken cancellationToken = default) =>
+        _batchTaskRepository.TryDeferAsync(
+            taskId,
+            nextEligibleAtUtc,
+            NormalizeRuntimeValue(reason, 1000),
+            heartbeatAtUtc,
+            cancellationToken);
+
+    public Task<bool> TryActivateInitializedTaskAsync(
+        int taskId,
+        CancellationToken cancellationToken = default) =>
+        _batchTaskRepository.TryActivateInitializedAsync(taskId, cancellationToken);
+
+    public Task<bool> TryBeginEditableTaskUpdateAsync(
+        int taskId,
+        int total,
+        string? config,
+        string? name,
+        CancellationToken cancellationToken = default) =>
+        _batchTaskRepository.TryBeginEditableUpdateAsync(
+            taskId,
+            Math.Max(0, total),
+            config,
+            name,
+            cancellationToken);
+
+    public Task<bool> TryFinishEditableTaskUpdateAsync(
+        int taskId,
+        CancellationToken cancellationToken = default) =>
+        _batchTaskRepository.TryFinishEditableUpdateAsync(taskId, cancellationToken);
+
+    public Task<bool> TryRollbackEditableTaskUpdateAsync(
+        int taskId,
+        int total,
+        string? config,
+        string? name,
+        string? reason,
+        DateTime heartbeatAtUtc,
+        CancellationToken cancellationToken = default) =>
+        _batchTaskRepository.TryRollbackEditableUpdateAsync(
+            taskId,
+            Math.Max(0, total),
+            config,
+            name,
+            NormalizeRuntimeValue(reason, 1000),
+            heartbeatAtUtc,
+            cancellationToken);
+
+    public Task<bool> TryFailTaskTransitionAsync(
+        int taskId,
+        string expectedStatus,
+        string? reason,
+        DateTime failedAtUtc,
+        CancellationToken cancellationToken = default) =>
+        _batchTaskRepository.TryFailTransitionAsync(
+            taskId,
+            expectedStatus,
+            NormalizeRuntimeValue(reason, 1000),
+            failedAtUtc,
+            cancellationToken);
+
+    public Task<bool> TryCompletePersistentTaskAsync(
+        int taskId,
+        int completed,
+        int failed,
+        string? message,
+        DateTime completedAtUtc,
+        CancellationToken cancellationToken = default) =>
+        _batchTaskRepository.TryCompletePersistentAsync(
+            taskId,
+            Math.Max(0, completed),
+            Math.Max(0, failed),
+            NormalizeRuntimeValue(message, 1000),
+            completedAtUtc,
+            cancellationToken);
 
     public async Task<int> RequeueRunningTasksAsync(
         Func<BatchTask, bool>? predicate = null,

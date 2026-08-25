@@ -956,13 +956,15 @@ public IEnumerable<ModuleTaskDefinition> GetTasks(ModuleHostContext context)
 }
 ```
 
-模块还必须注册唯一的 `IModulePersistentTaskHandler` 和 `IModuleTaskLifecycleHandler`。常驻处理器因安全条件需要暂停时调用 `IModulePersistentTaskExecutionHost.RequestPauseAsync`，随后尽快返回；宿主会执行 `running -> pausing -> paused`，只有执行实例退出后的 `paused` 才允许编辑。常驻任务不能创建 Cron 计划。
+模块还必须注册唯一的 `IModulePersistentTaskHandler` 和 `IModuleTaskLifecycleHandler`。长期处理器因安全条件需要暂停时调用 `IModulePersistentTaskExecutionHost.RequestPauseAsync`，随后尽快返回；宿主会执行 `running -> pausing -> paused`，只有执行实例退出后的 `paused` 才允许编辑。需要在独立通道等待冷却、但最终会结束的一次性处理器，可调用 `DeferAsync` 原子写入下次可领取 UTC 时间并转回 `pending`，然后立即返回以释放执行槽；到期前宿主不会重新领取。工作结束时调用 `CompleteAsync`，宿主以单次 CAS 同时提交计数、运行态和 `completed` 状态；若任务已经暂停或取消，该调用会失败而不会覆盖终态。普通返回且未暂停、未延后、未完成的处理器仍会被重新排队。持久任务不能创建 Cron 计划。
+
+创建和重跑先写入不可领取的 `initializing`，宿主仅在 `CommitUpsertAsync` 成功后将其激活为 `pending`；编辑期间使用不可执行的 `updating`，提交失败时按旧快照调用一次幂等回滚并恢复为 `paused`。进程在初始化中断时，启动恢复会先调用 `ReconcileAsync` 再激活；编辑中断时会幂等重放新配置提交，重放失败或处理器不可用则进入 `failed` 并标记需处理，禁止带着不确定配置运行。这两个内部状态在任务中心保持可见，但不开放暂停、编辑或取消操作。模块应以 `OperationId` 幂等初始化、重置和回滚自有状态，校验阶段不得提前破坏旧运行态。该合同从宿主 `1.31.76` 起可用。
 
 `IModuleTaskLifecycleHandler` 的删除方法按 `PrepareDelete -> 删除宿主记录 -> CommitDelete` 调用，删除失败调用 `AbortDelete`；所有方法必须按 `OperationId` 幂等。宿主启动时调用 `ReconcileAsync`，模块应以传入的宿主任务 ID 清理孤儿状态或补做未完成提交。
 
 运行态不得写回任务配置。实现 `IModuleTaskStatusProvider` 批量返回心跳、阶段、消息和 `RequiresAttention`，任务中心会把这些字段合并到任务 DTO。处理器异常返回时常驻任务会暂停；正常意外返回会重新排队，不会标记完成。
 
-成功判据：常驻任务运行时普通批任务仍可获得 `BatchTasks:MaxConcurrent` 槽位；暂停接口返回后状态为 `paused` 且旧实例已退出；重启后 `running` 任务回到 `pending`、`pausing` 任务回到 `paused`。失败时检查 `Persistent module task runner` 日志、任务行的 `OwnerModuleId/ExecutionKind`、处理器唯一性诊断和模块 `ReconcileAsync`。回滚到旧宿主前必须先暂停并删除所有 `persistent` 任务，备份主库和模块库；旧宿主不会执行该通道。
+成功判据：常驻任务运行时普通批任务仍可获得 `BatchTasks:MaxConcurrent` 槽位；延后任务在 `NextEligibleAtUtc` 前保持 `pending` 且不占持久槽；暂停接口返回后状态为 `paused` 且旧实例已退出；重启后 `running` 任务回到 `pending`、`pausing` 任务回到 `paused`、`initializing` 在协调成功后进入 `pending`。失败时检查 `Persistent module task runner` 日志、任务行的 `OwnerModuleId/ExecutionKind/NextEligibleAtUtc`、处理器唯一性诊断和模块 `ReconcileAsync`。回滚到旧宿主前必须先暂停并删除所有 `persistent` 任务，备份主库和模块库；旧宿主不会执行该通道。
 
 ### 示例：批量订阅/加群/启用 Bot（用户任务）
 

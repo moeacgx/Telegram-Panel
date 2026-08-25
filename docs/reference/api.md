@@ -241,7 +241,7 @@ Telegram 限流和 Session/代理状态。该功能不引入数据库迁移，�
 
 `GET /api/panel/tasks` 和 `GET /api/panel/tasks/{id}` 的 `BatchTaskDto` 包含可空 `name`。普通一次性任务可为空，前端使用“任务类型 #ID”兜底；计划任务触发或手动“立即执行”创建的批量任务会复制计划任务名称，历史任务应优先展示 `name`，并保留任务类型作为辅助说明。自 v1.31.57 起，`POST /api/panel/tasks` 和 `PATCH /api/panel/tasks/{id}` 支持可选 `name`，服务端会去除首尾空白并限制最多 100 个字符；即时任务传空或省略时继续使用兜底显示，编辑任务时省略 `name` 会保留原名称，传空字符串会清空名称。该字段通过 `BatchTasks.Name` 持久化；回滚到旧版需先忽略或删除该列。
 
-当前开发版的任务 DTO 还包含 `ownerModuleId`、`executionKind`、`runtimePhase`、`runtimeMessage`、`heartbeatAtUtc` 和 `requiresAttention`。`POST /api/panel/tasks` 只接受任务目录中 `canCreate=true` 的类型，并由宿主写入所有者和执行通道；外部类型的模块页面不能伪造这些字段。`PATCH /api/panel/tasks/{id}` 仅允许状态为 `paused` 的任务，`pausing` 表示旧实例尚未退出。常驻任务会被拒绝创建或更新为 Cron 计划。成功判据是外部创建返回真实模块 ID，提醒状态出现在任务列表，服务端重跑获得新的任务 ID。失败时检查定义的安全 `CreateRoute`、执行器/生命周期处理器唯一性与模块校验错误；回滚前先删除常驻任务。
+自 `1.31.76` 起，任务 DTO 还包含 `ownerModuleId`、`executionKind`、`runtimePhase`、`runtimeMessage`、`heartbeatAtUtc`、`requiresAttention` 和可空的 `nextEligibleAtUtc`。后者仅表示持久任务被延后后的下次可领取 UTC 时间，到期领取、暂停、恢复或取消后恢复为空。`POST /api/panel/tasks` 只接受任务目录中 `canCreate=true` 的类型，并由宿主写入所有者和执行通道；外部类型的模块页面不能伪造这些字段。创建/重跑只在内部 `initializing` 提交成功后返回 `pending`，编辑只允许从 `paused` 进入内部 `updating`，因此调度器不会读取未提交的模块配置；提交失败会返回错误并保留不可执行的失败记录或恢复编辑前快照。`pausing` 表示旧实例尚未退出。常驻任务会被拒绝创建或更新为 Cron 计划。成功判据是外部创建返回真实模块 ID 和 `pending` 状态，延后任务返回未来的 `nextEligibleAtUtc`，提醒状态出现在任务列表，服务端重跑获得新的任务 ID。失败时检查定义的安全 `CreateRoute`、执行器/生命周期处理器唯一性与模块校验错误；回滚前先删除常驻任务。
 
 任务定义 DTO 的 `canSchedule` 只对宿主内置 `batch` 类型为 `true`。当前开发版不允许外部模块任务和 `persistent` 任务创建、更新或立即执行 Cron 计划，避免计划记录缺少模块所有权后被错误处理器领取；已有不合法计划会被后台自动暂停。
 

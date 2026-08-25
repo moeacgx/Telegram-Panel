@@ -99,9 +99,13 @@ test('待执行或执行中任务编辑前必须经过暂停屏障', () => {
 test('常驻任务使用后端执行通道、停止中状态和服务端重跑合同', () => {
   assert.match(typesSource, /executionKind:\s*'batch' \| 'persistent' \| string/)
   assert.match(typesSource, /requiresAttention:\s*boolean/)
+  assert.match(typesSource, /nextEligibleAtUtc\?:\s*string \| null/)
   assert.match(typesSource, /canSchedule:\s*boolean/)
   assert.match(tasksSource, /return task\.executionKind === 'persistent'/)
   assert.match(tasksSource, /status === 'pausing'/)
+  assert.match(tasksSource, /status === 'initializing'\) return '正在初始化'/)
+  assert.match(tasksSource, /status === 'updating'\) return '正在提交配置'/)
+  assert.match(tasksSource, /下次领取时间/)
   assert.match(tasksSource, /row\.requiresAttention/)
   assert.match(tasksSource, /row\.runtimeMessage/)
   assert.match(tasksSource, /await panelApi\.rerunTask\(task\.id\)/)

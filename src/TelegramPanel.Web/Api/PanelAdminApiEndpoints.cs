@@ -5489,16 +5489,18 @@ public static class PanelAdminApiEndpoints
             Config = NormalizeNullable(request.Config)
         };
 
+        var operationId = "create:" + Guid.NewGuid().ToString("N");
         try
         {
-            await lifecycle.ValidateAsync(draft, Guid.NewGuid().ToString("N"), cancellationToken);
+            await lifecycle.ValidateAsync(draft, operationId, cancellationToken);
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
         {
             return Results.BadRequest(new OperationResultDto(false, ex.Message));
         }
 
-        var task = await tasks.CreateTaskAsync(draft);
+        var task = await tasks.CreateInitializingTaskAsync(draft);
+        task = await lifecycle.CommitCreatedTaskAsync(task, operationId, cancellationToken);
 
         return Results.Ok(ToDto(task));
     }
@@ -5514,7 +5516,7 @@ public static class PanelAdminApiEndpoints
         var source = await tasks.GetTaskAsync(id);
         if (source == null)
             return Results.NotFound(new OperationResultDto(false, "任务不存在或已被删除"));
-        if (source.Status is "pending" or "running" or "pausing")
+        if (source.Status is "initializing" or "updating" or "pending" or "running" or "pausing")
             return Results.Conflict(new OperationResultDto(false, "任务仍在执行或停止中，无法重跑"));
         if (!contributions.TaskTypeToDefinition.TryGetValue(source.TaskType, out var registered))
             return Results.BadRequest(new OperationResultDto(false, "任务类型已不可用"));
@@ -5561,16 +5563,19 @@ public static class PanelAdminApiEndpoints
             Failed = 0,
             Config = NormalizeNullable(request.Config)
         };
+        var operationId = "rerun:" + Guid.NewGuid().ToString("N");
         try
         {
-            await lifecycle.ValidateAsync(rerun, Guid.NewGuid().ToString("N"), cancellationToken);
+            await lifecycle.ValidateAsync(rerun, operationId, cancellationToken);
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
         {
             return Results.BadRequest(new OperationResultDto(false, ex.Message));
         }
 
-        return Results.Ok(ToDto(await tasks.CreateTaskAsync(rerun)));
+        var created = await tasks.CreateInitializingTaskAsync(rerun);
+        created = await lifecycle.CommitCreatedTaskAsync(created, operationId, cancellationToken);
+        return Results.Ok(ToDto(created));
     }
 
     private static async Task<IResult> UpdateTaskAsync(
@@ -5620,16 +5625,17 @@ public static class PanelAdminApiEndpoints
             StartedAt = existing.StartedAt,
             CompletedAt = existing.CompletedAt
         };
+        var operationId = "update:" + Guid.NewGuid().ToString("N");
         try
         {
-            await lifecycle.ValidateAsync(candidate, Guid.NewGuid().ToString("N"), cancellationToken);
+            await lifecycle.ValidateAsync(candidate, operationId, cancellationToken);
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
         {
             return Results.BadRequest(new OperationResultDto(false, ex.Message));
         }
 
-        var updatedDraft = await tasks.TryUpdateEditableTaskDraftAsync(
+        var updatedDraft = await tasks.TryBeginEditableTaskUpdateAsync(
             id,
             candidate.Total,
             candidate.Config,
@@ -5639,9 +5645,11 @@ public static class PanelAdminApiEndpoints
             return Results.Conflict(new OperationResultDto(false, "任务状态已变化，请暂停任务后重新编辑"));
 
         var updated = await tasks.GetTaskAsync(id);
-        return updated == null
-            ? Results.NotFound(new OperationResultDto(false, "任务不存在或已被删除"))
-            : Results.Ok(ToDto(updated));
+        if (updated == null)
+            return Results.NotFound(new OperationResultDto(false, "任务不存在或已被删除"));
+
+        updated = await lifecycle.CommitEditedTaskAsync(updated, existing, operationId, cancellationToken);
+        return Results.Ok(ToDto(updated));
     }
 
     private static async Task<IResult> CreateScheduledTaskAsync(
@@ -6361,7 +6369,8 @@ public static class PanelAdminApiEndpoints
             runtime?.Phase ?? task.RuntimePhase,
             runtime?.Message ?? task.RuntimeMessage,
             runtime?.HeartbeatAtUtc ?? task.HeartbeatAtUtc,
-            task.RequiresAttention || (runtime?.RequiresAttention ?? false));
+            task.RequiresAttention || (runtime?.RequiresAttention ?? false),
+            task.NextEligibleAtUtc);
 
     private static BatchTaskDto ToTaskListDto(BatchTask task, ModuleTaskRuntimeState? runtime = null) =>
         new(
@@ -6381,7 +6390,8 @@ public static class PanelAdminApiEndpoints
             runtime?.Phase ?? task.RuntimePhase,
             runtime?.Message ?? task.RuntimeMessage,
             runtime?.HeartbeatAtUtc ?? task.HeartbeatAtUtc,
-            task.RequiresAttention || (runtime?.RequiresAttention ?? false));
+            task.RequiresAttention || (runtime?.RequiresAttention ?? false),
+            task.NextEligibleAtUtc);
 
     private static async Task<IReadOnlyDictionary<int, ModuleTaskRuntimeState>> LoadRuntimeStatesAsync(
         IReadOnlyCollection<BatchTask> tasks,
@@ -8506,7 +8516,8 @@ public sealed record BatchTaskDto(
     string? RuntimePhase,
     string? RuntimeMessage,
     DateTime? HeartbeatAtUtc,
-    bool RequiresAttention);
+    bool RequiresAttention,
+    DateTime? NextEligibleAtUtc);
 
 public sealed record ScheduledTaskDto(
     int Id,
