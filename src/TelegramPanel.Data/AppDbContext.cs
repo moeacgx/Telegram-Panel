@@ -291,10 +291,16 @@ public class AppDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Name).HasMaxLength(100);
             entity.Property(e => e.TaskType).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.OwnerModuleId).IsRequired().HasMaxLength(100).HasDefaultValue("host.legacy");
+            entity.Property(e => e.ExecutionKind).IsRequired().HasMaxLength(20).HasDefaultValue("batch");
             entity.Property(e => e.Status).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.RuntimePhase).HasMaxLength(100);
+            entity.Property(e => e.RuntimeMessage).HasMaxLength(1000);
+            entity.Property(e => e.RequiresAttention).HasDefaultValue(false);
 
             entity.HasIndex(e => e.Status);
             entity.HasIndex(e => e.CreatedAt);
+            entity.HasIndex(e => new { e.ExecutionKind, e.Status });
         });
 
         // ScheduledTask配置

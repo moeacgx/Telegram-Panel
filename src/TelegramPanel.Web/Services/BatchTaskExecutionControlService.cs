@@ -8,15 +8,20 @@ namespace TelegramPanel.Web.Services;
 public sealed class BatchTaskExecutionControlService
 {
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ModuleTaskLifecycleService? _lifecycle;
     private readonly TimeSpan _stopTimeout;
     private readonly ConcurrentDictionary<int, Gate> _gates = new();
     private readonly ConcurrentDictionary<int, BatchTaskExecutionLease> _executions = new();
     private readonly AsyncLocal<BatchTaskExecutionLease?> _current = new();
     private long _generation;
 
-    public BatchTaskExecutionControlService(IServiceScopeFactory scopeFactory, IConfiguration configuration)
+    public BatchTaskExecutionControlService(
+        IServiceScopeFactory scopeFactory,
+        IConfiguration configuration,
+        ModuleTaskLifecycleService? lifecycle = null)
     {
         _scopeFactory = scopeFactory;
+        _lifecycle = lifecycle;
         var seconds = configuration.GetValue("BatchTasks:ExecutionStopTimeoutSeconds", 15);
         _stopTimeout = TimeSpan.FromSeconds(Math.Clamp(seconds, 1, 120));
     }
@@ -79,15 +84,15 @@ public sealed class BatchTaskExecutionControlService
 
             if (current.Status is "pending" or "running")
             {
-                if (!await tasks.TryPauseTaskAsync(taskId, cancellationToken))
+                if (!await tasks.TryBeginPauseTaskAsync(taskId, cancellationToken))
                 {
                     current = await tasks.GetTaskAsync(taskId)
                         ?? throw new InvalidOperationException("任务不存在或已被删除");
-                    if (current.Status != "paused")
+                    if (current.Status is not ("pausing" or "paused"))
                         throw new InvalidOperationException($"任务状态已变更为 {current.Status}，无法暂停");
                 }
             }
-            else if (current.Status != "paused")
+            else if (current.Status is not ("pausing" or "paused"))
             {
                 throw new InvalidOperationException($"任务当前状态为 {current.Status}，无法暂停");
             }
@@ -97,6 +102,17 @@ public sealed class BatchTaskExecutionControlService
                 execution.RequestStop();
                 ThrowIfSelf(execution);
                 await WaitForExitAsync(execution, cancellationToken);
+            }
+
+            current = await tasks.GetTaskAsync(taskId)
+                ?? throw new InvalidOperationException("任务不存在或已被删除");
+            if (current.Status == "pausing"
+                && !await tasks.TryConfirmPausedTaskAsync(taskId, cancellationToken))
+            {
+                current = await tasks.GetTaskAsync(taskId)
+                    ?? throw new InvalidOperationException("任务不存在或已被删除");
+                if (current.Status != "paused")
+                    throw new InvalidOperationException($"任务状态已变更为 {current.Status}，无法确认暂停");
             }
         }
         finally
@@ -152,7 +168,7 @@ public sealed class BatchTaskExecutionControlService
             var current = await tasks.GetTaskAsync(taskId)
                 ?? throw new InvalidOperationException("任务不存在或已被删除");
 
-            if (current.Status is "pending" or "running" or "paused")
+            if (current.Status is "pending" or "running" or "pausing" or "paused")
             {
                 if (!await tasks.TryCancelTaskAsync(taskId, cancellationToken))
                 {
@@ -194,7 +210,7 @@ public sealed class BatchTaskExecutionControlService
             var current = await tasks.GetTaskAsync(taskId)
                 ?? throw new InvalidOperationException("任务不存在或已被删除");
 
-            if (current.Status is "pending" or "running" or "paused")
+            if (current.Status is "pending" or "running" or "pausing" or "paused")
             {
                 if (!await tasks.TryCancelTaskAsync(taskId, cancellationToken))
                 {
@@ -216,7 +232,17 @@ public sealed class BatchTaskExecutionControlService
                 await WaitForExitAsync(execution, cancellationToken);
             }
 
-            await tasks.DeleteTaskAsync(taskId);
+            if (_lifecycle != null)
+            {
+                await _lifecycle.DeleteAsync(
+                    current,
+                    Guid.NewGuid().ToString("N"),
+                    cancellationToken);
+            }
+            else
+            {
+                await tasks.DeleteTaskAsync(taskId);
+            }
         }
         finally
         {
@@ -231,6 +257,55 @@ public sealed class BatchTaskExecutionControlService
         execution.MarkCompleted();
     }
 
+    internal async Task CompleteExecutionAsync(
+        BatchTaskExecutionLease execution,
+        CancellationToken cancellationToken = default)
+    {
+        CompleteExecution(execution);
+        using var scope = _scopeFactory.CreateScope();
+        var tasks = scope.ServiceProvider.GetRequiredService<BatchTaskManagementService>();
+        var current = await tasks.GetTaskAsync(execution.TaskId);
+        if (current?.Status == "pausing")
+            await tasks.TryConfirmPausedTaskAsync(execution.TaskId, cancellationToken);
+    }
+
+    internal async Task RequestPauseFromExecutionAsync(
+        BatchTaskExecutionLease execution,
+        CancellationToken cancellationToken = default)
+    {
+        if (!ReferenceEquals(_current.Value, execution))
+            throw new InvalidOperationException("只有当前任务执行实例可以请求自暂停");
+
+        var gate = AcquireGate(execution.TaskId);
+        var entered = false;
+        try
+        {
+            await gate.Semaphore.WaitAsync(cancellationToken);
+            entered = true;
+            using var scope = _scopeFactory.CreateScope();
+            var tasks = scope.ServiceProvider.GetRequiredService<BatchTaskManagementService>();
+            var current = await tasks.GetTaskAsync(execution.TaskId)
+                ?? throw new InvalidOperationException("任务不存在或已被删除");
+
+            if (current.Status is "pending" or "running")
+            {
+                if (!await tasks.TryBeginPauseTaskAsync(execution.TaskId, cancellationToken))
+                    throw new InvalidOperationException("任务状态已变化，无法请求暂停");
+            }
+            else if (current.Status is not ("pausing" or "paused"))
+            {
+                throw new InvalidOperationException($"任务当前状态为 {current.Status}，无法请求暂停");
+            }
+
+            execution.RequestStop();
+        }
+        finally
+        {
+            if (entered) gate.Semaphore.Release();
+            ReleaseGate(execution.TaskId, gate);
+        }
+    }
+
     internal IDisposable EnterExecutionContext(BatchTaskExecutionLease execution)
     {
         var previous = _current.Value;
@@ -240,6 +315,34 @@ public sealed class BatchTaskExecutionControlService
 
     internal bool HasActiveExecution(int taskId) => TryGetActive(taskId, out _);
     internal int RetainedTaskGateCount => _gates.Count;
+
+    public async Task<int> TrimHistoryTasksAsync(
+        int keepCount,
+        CancellationToken cancellationToken = default)
+    {
+        if (keepCount <= 0)
+            return 0;
+
+        using var scope = _scopeFactory.CreateScope();
+        var tasks = scope.ServiceProvider.GetRequiredService<BatchTaskManagementService>();
+        var stale = (await tasks.GetAllTasksAsync())
+            .Where(task => task.Status is "completed" or "failed" or "canceled")
+            .OrderByDescending(task => task.CompletedAt ?? task.CreatedAt)
+            .ThenByDescending(task => task.Id)
+            .Skip(Math.Min(keepCount, 5000))
+            .Select(task => task.Id)
+            .ToList();
+
+        var deleted = 0;
+        foreach (var taskId in stale)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await DeleteTaskAsync(taskId, cancellationToken);
+            deleted++;
+        }
+
+        return deleted;
+    }
 
     private async Task WaitForExitAsync(BatchTaskExecutionLease execution, CancellationToken cancellationToken)
     {

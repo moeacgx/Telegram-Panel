@@ -34,8 +34,8 @@ test('历史任务优先展示批量任务名称并保留类型说明', () => {
 })
 
 
-test('重新运行任务会清除旧的运行态失败记录', () => {
-  assert.match(tasksSource, /config:\s*fullTask\.config\s*\?\s*stripRuntimeFields\(fullTask\.taskType, fullTask\.config\)\s*:\s*null/)
+test('复制任务会清除旧的运行态失败记录', () => {
+  assert.match(tasksSource, /config:\s*fullTask\.config\s*\?\s*stripRuntimeFields\(fullTask\.taskType, fullTask\.config\)\s*:\s*''/)
   assert.match(tasksSource, /delete obj\.recent_failures/)
   assert.match(tasksSource, /delete obj\.failures/)
   assert.match(tasksSource, /taskType === 'fragment_username_monitor'/)

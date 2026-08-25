@@ -322,12 +322,12 @@ if (availableChannels.Count == 0)
 
 如果你的模块需要配置界面，优先使用模块自带静态 Vue 页，或在宿主仓库中提供 Vue 原生页。模块在 `MapEndpoints` 中提供管理端 API，页面负责展示和保存配置。
 
-对还没有 Vue 原生页面的旧模块，可以继续用 **Razor 模块页面**（`IModuleUiProvider.GetPages`）作为兼容配置入口。模块可以通过导航项或自己的页面入口指向该路由；不要仅为了打开独立配置页而注册一个可创建任务定义：
+对还没有 Vue 原生页面的旧模块，可以继续用 **Razor 模块页面**（`IModuleUiProvider.GetPages`）作为兼容配置入口。模块可以通过导航项或自己的页面入口指向该路由：
 
 - 模块页面路由固定为：`/ext/{ModuleId}/{PageKey}`
-- `ModuleTaskDefinition.CreateRoute` 仅表示已有任务的独立编辑入口；仅有该字段的任务不会出现在“新建任务”弹窗。
+- `ModuleTaskDefinition.CreateRoute` 同时承担外部任务的创建与编辑入口，且必须位于模块自身的 `/ext/{moduleId}/...` 路径下。
 
-`CreateRoute` 用于已有任务的配置和编辑入口。任务中心编辑外部任务时会把 `taskId` 附加到该路由；页面必须按任务 ID 读取和保存配置。只有 `canCreate=true` 且有专用表单的任务类型才会显示在新建任务列表。
+外部任务只有在 `CreateRoute` 安全、执行器与生命周期处理器均唯一且类型匹配时才会得到 `canCreate=true` 并显示在新建任务列表。任务中心编辑外部任务时会附加 `taskId` 与 `mode=edit`；页面必须按任务 ID 读取和保存配置。
 
 `EditorComponentType` 是宿主内置任务创建/编辑器的合同；`TaskCenter.EditComponentType` 仍用于旧 Razor 编辑入口。外部模块不要仅依赖 .NET 组件类型向 Vue 浏览器扩展页面。
 
@@ -866,15 +866,15 @@ public IEnumerable<ModuleNavItem> GetNavItems(ModuleHostContext context)
 
 ### 任务中心创建与编辑合同
 
-任务定义本身可以继续用于历史任务展示、状态能力和重跑能力，但“新建任务”只展示宿主明确允许创建的定义。当前宿主会把 `canCreate` 下发给 Vue 管理端；没有 `CreateRoute` 且存在宿主验证通过的 `EditorComponentType` 的定义才会进入任务创建列表，内置模块和外部模块都适用。
+任务定义本身可以继续用于历史任务展示、状态能力和重跑能力，但“新建任务”只展示宿主明确允许创建的定义。当前宿主会把 `canCreate` 下发给管理端。内置任务仍需通过宿主编辑器校验；外部任务必须提供模块自身 `/ext/{moduleId}/...` 下的 `CreateRoute`，并为同一 `TaskType` 注册唯一且类型匹配的执行器和 `IModuleTaskLifecycleHandler`。绝对 URL、跨模块路由、路径穿越、重复任务类型或重复处理器均会令 `canCreate=false`。
 
-仅有 `CreateRoute` 的常驻监听或配置模块不会出现在“新建任务”弹窗中。已有任务仍可在任务中心编辑；当没有宿主编辑器但定义声明了 `CreateRoute` 时，宿主会把 `taskId` 附加到该路由后打开模块页面。模块页面必须接受该参数，并按任务 ID 读取和保存对应配置。
+外部模块页面必须接受编辑时附加的 `taskId` 和 `mode=edit`，并按任务 ID 读取和保存对应配置。
 如果任务页是持续监控类路由入口，且希望任务中心允许编辑已有任务，就同时在 `TaskCenter` 中设置 `CanEdit=true` 和 `AutoPauseBeforeEdit=true`；模块页面需要读取 `taskId` 并把编辑结果写回对应任务。
 
 
-模块开发必须验证：无效编辑器类型不会进入创建列表，路由-only 任务仍能在任务中心打开，创建列表不包含系统任务，且 `canCreate` 与实际页面能力一致。
+模块开发必须验证：无效编辑器类型不会进入创建列表，安全的外部 `CreateRoute` 能进入创建列表，任务类型冲突会整体禁用，且 `canCreate` 与实际页面能力一致。
 
-Vue SPA 还会额外要求任务类型存在宿主内置的 `TaskConfigForm`；外部模块应使用 `CreateRoute` 提供自己的页面，不要假设 .NET 编辑器类型会自动下发到浏览器。
+Vue SPA 对内置任务继续使用宿主 `TaskConfigForm`；外部模块应使用 `CreateRoute` 提供自己的页面，不要假设 .NET 编辑器类型会自动下发到浏览器。
 
 ### 1) 声明任务类型与创建编辑器
 
@@ -935,13 +935,9 @@ public void ConfigureServices(IServiceCollection services, ModuleHostContext con
 }
 ```
 
-## 持续任务（常驻后台能力）模式（推荐）
+## 持续任务（常驻后台能力）模式
 
-有些能力并不是“一次性批量任务”，而是需要模块启用后长期运行的后台监听/通知等。这类能力建议：
-
-1) 在模块内注册 `HostedService` 常驻后台运行（`ConfigureServices` 中 `services.AddHostedService<...>()`）。
-2) **不要**把它塞进批量任务队列（`IModuleTaskHandler`），避免队列阻塞或误触发。
-3) 仍然可以在“新建任务/任务中心”里提供一个“配置入口”，做法是注册 `IModuleTaskProvider` 并设置 `CreateRoute` 指向模块配置页：
+当前开发版提供宿主管理的常驻任务通道。需要任务中心 CRUD、暂停屏障和恢复语义的监听任务应声明 `ExecutionKind=persistent` 并实现 `IModulePersistentTaskHandler`，不要再由模块自行注册 `HostedService`。
 
 ```csharp
 public IEnumerable<ModuleTaskDefinition> GetTasks(ModuleHostContext context)
@@ -950,8 +946,9 @@ public IEnumerable<ModuleTaskDefinition> GetTasks(ModuleHostContext context)
     {
         Category = "bot",
         TaskType = "example_background_monitor",
+        ExecutionKind = ModuleTaskExecutionKinds.Persistent,
         DisplayName = "示例后台监听",
-        Description = "常驻后台监听，不占用批量任务队列；在配置里启用即可生效。",
+        Description = "常驻后台监听，使用独立并发池。",
         Icon = "notifications_active",
         CreateRoute = "/ext/example.monitor/settings",
         Order = 100
@@ -959,10 +956,13 @@ public IEnumerable<ModuleTaskDefinition> GetTasks(ModuleHostContext context)
 }
 ```
 
-这种模式的体验是：
+模块还必须注册唯一的 `IModulePersistentTaskHandler` 和 `IModuleTaskLifecycleHandler`。常驻处理器因安全条件需要暂停时调用 `IModulePersistentTaskExecutionHost.RequestPauseAsync`，随后尽快返回；宿主会执行 `running -> pausing -> paused`，只有执行实例退出后的 `paused` 才允许编辑。常驻任务不能创建 Cron 计划。
 
-- “新建任务”里点击后打开配置窗口（或跳转配置页）
-- “任务中心”顶部可直接编辑该持续任务配置（方便增删频道/目标等）
+`IModuleTaskLifecycleHandler` 的删除方法按 `PrepareDelete -> 删除宿主记录 -> CommitDelete` 调用，删除失败调用 `AbortDelete`；所有方法必须按 `OperationId` 幂等。宿主启动时调用 `ReconcileAsync`，模块应以传入的宿主任务 ID 清理孤儿状态或补做未完成提交。
+
+运行态不得写回任务配置。实现 `IModuleTaskStatusProvider` 批量返回心跳、阶段、消息和 `RequiresAttention`，任务中心会把这些字段合并到任务 DTO。处理器异常返回时常驻任务会暂停；正常意外返回会重新排队，不会标记完成。
+
+成功判据：常驻任务运行时普通批任务仍可获得 `BatchTasks:MaxConcurrent` 槽位；暂停接口返回后状态为 `paused` 且旧实例已退出；重启后 `running` 任务回到 `pending`、`pausing` 任务回到 `paused`。失败时检查 `Persistent module task runner` 日志、任务行的 `OwnerModuleId/ExecutionKind`、处理器唯一性诊断和模块 `ReconcileAsync`。回滚到旧宿主前必须先暂停并删除所有 `persistent` 任务，备份主库和模块库；旧宿主不会执行该通道。
 
 ### 示例：批量订阅/加群/启用 Bot（用户任务）
 
@@ -1020,7 +1020,7 @@ yield return new ModuleTaskDefinition
 };
 ```
 
-该页面用于已有任务的配置和编辑。任务中心打开时会追加 `taskId`，页面通过模块管理接口读取对应任务，并在校验后保存配置。它不会因为声明了 `CreateRoute` 就自动出现在“新建任务”列表。
+该页面用于任务创建和编辑。新建时直接打开 `CreateRoute`；编辑时追加 `taskId` 与 `mode=edit`，页面通过模块管理接口读取对应任务，并在校验后保存配置。
 
 实用建议（针对“多账号/多目标”类任务）：
 
@@ -1029,7 +1029,7 @@ yield return new ModuleTaskDefinition
 - 支持筛选：例如“账号分类筛选/搜索”，减少用户选择成本
 - 遵循宿主的账号排除规则：默认不展示 `Category.ExcludeFromOperations=true` 的账号（常用于“工作账号”）；如你的模块确实需要，也可以提供“包含工作账号”的开关
 
-没有专用创建编辑器的任务不会被宿主标记为 `canCreate`，也不会出现在“新建任务”列表。`EditorComponentType` 仅用于宿主内置任务的合法创建/编辑器；`EditComponentType` 保留给旧 Razor 兼容流程。
+外部任务需要安全 `CreateRoute`、唯一匹配的执行器和 `IModuleTaskLifecycleHandler` 才会被标记为 `canCreate`。`EditorComponentType` 仅用于宿主内置任务的合法创建/编辑器；`EditComponentType` 保留给旧 Razor 兼容流程。
 
 ### 4) 任务中心能力声明（建议按新约定填写）
 

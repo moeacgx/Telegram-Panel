@@ -92,6 +92,7 @@
           <template #default="{ row }">
             <StatusTag :status="displayStatus(row)" />
             <el-tag v-if="isPersistentTask(row)" size="small" type="info" class="mt-2">常驻</el-tag>
+            <el-tag v-if="row.requiresAttention" size="small" type="danger" class="mt-2">需处理</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="进度" min-width="220">
@@ -99,6 +100,7 @@
             <template v-if="isPersistentTask(row)">
               <el-progress :percentage="100" :stroke-width="8" status="success" :show-text="false" />
               <div class="cell-sub">常驻运行，已发送 {{ row.completed }} 条，失败 {{ row.failed }}</div>
+              <div v-if="row.runtimeMessage" class="cell-sub">{{ row.runtimeMessage }}</div>
             </template>
             <template v-else>
               <el-progress :percentage="taskProgress(row)" :stroke-width="8" />
@@ -153,6 +155,7 @@
           <template #default="{ row }">
             <StatusTag :status="displayStatus(row)" />
             <el-tag v-if="isPersistentTask(row)" size="small" type="info" class="mt-2">常驻</el-tag>
+            <el-tag v-if="row.requiresAttention" size="small" type="danger" class="mt-2">需处理</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="进度" min-width="220">
@@ -247,7 +250,7 @@
         <el-form-item label="提交方式">
           <el-radio-group v-model="createDialog.form.mode" @change="onCreateModeChanged">
             <el-radio-button value="once">立即执行</el-radio-button>
-            <el-radio-button value="scheduled">Cron 计划</el-radio-button>
+            <el-radio-button value="scheduled" :disabled="!currentCreateDefinition?.canSchedule">Cron 计划</el-radio-button>
           </el-radio-group>
         </el-form-item>
         <el-alert v-if="currentCreateDefinition?.description" :title="currentCreateDefinition.description" type="info" :closable="false" class="mb-3" />
@@ -548,9 +551,7 @@ const availableCategories = computed(() => {
   return Array.from(set).sort()
 })
 
-const taskCenterCreateDefinitions = computed(() =>
-  definitions.value.filter((x) => hasTaskConfigForm(x.taskType) && (x.canCreate || x.category !== 'system')),
-)
+const taskCenterCreateDefinitions = computed(() => definitions.value.filter((x) => x.canCreate))
 
 const creatableCategories = computed(() => {
   const set = new Set(taskCenterCreateDefinitions.value.map((x) => (x.category || '').trim()).filter(Boolean))
@@ -646,7 +647,7 @@ function displayStatus(task: BatchTask) {
 }
 
 function isPersistentTask(task: BatchTask) {
-  return task.taskType === 'user_chat_active' && task.total <= 0
+  return task.executionKind === 'persistent'
 }
 
 function scheduledStatus(status: string) {
@@ -654,7 +655,7 @@ function scheduledStatus(status: string) {
 }
 
 function isActiveStatus(status: string) {
-  return status === 'pending' || status === 'running' || status === 'paused'
+  return status === 'pending' || status === 'running' || status === 'pausing' || status === 'paused'
 }
 
 function isHistoryStatus(status: string) {
@@ -684,7 +685,8 @@ function canEdit(task: BatchTask) {
   const def = taskDefinition(task.taskType)
   if (!def?.canEdit) return false
   const status = displayStatus(task)
-  return !['pending', 'running'].includes(status) || def.autoPauseBeforeEdit
+  if (status === 'paused') return true
+  return (status === 'pending' || status === 'running') && def.autoPauseBeforeEdit
 }
 
 function canCopyTask(task: BatchTask) {
@@ -748,6 +750,7 @@ function ensureTaskType() {
   createDialog.value.form.name = ''
   createDialog.value.form.config = ''
   createDialog.value.form.total = defaultTotalForTask(createDialog.value.form.taskType)
+  createDialog.value.form.mode = first?.canSchedule ? createDialog.value.form.mode : 'once'
   createDraft.value = emptyDraft()
 }
 
@@ -757,6 +760,7 @@ function onTaskTypeChanged() {
   createDialog.value.form.name = ''
   createDialog.value.form.config = ''
   createDialog.value.form.total = defaultTotalForTask(createDialog.value.form.taskType)
+  if (!currentCreateDefinition.value?.canSchedule) createDialog.value.form.mode = 'once'
   createDraft.value = emptyDraft()
 }
 
@@ -941,6 +945,10 @@ async function openEditTask(task: BatchTask) {
     return
   }
   const status = displayStatus(task)
+  if (status === 'pausing') {
+    ElMessage.warning('任务仍在停止中，请等待状态变为已暂停后再编辑')
+    return
+  }
   if (status === 'pending' || status === 'running') {
     if (!def.autoPauseBeforeEdit) {
       ElMessage.warning('该任务尚未暂停，请先暂停后再编辑')
@@ -953,7 +961,7 @@ async function openEditTask(task: BatchTask) {
   const editRoute = resolveCreateTarget(def)
   if (editRoute && !hasTaskConfigForm(def.taskType)) {
     const separator = editRoute.includes('?') ? '&' : '?'
-    const routeWithTaskId = `${editRoute}${separator}taskId=${encodeURIComponent(String(task.id))}`
+    const routeWithTaskId = `${editRoute}${separator}taskId=${encodeURIComponent(String(task.id))}&mode=edit`
     if (isModuleEndpointRoute(routeWithTaskId)) {
       window.location.href = withModulePageMode(routeWithTaskId, false)
     } else {
@@ -1023,13 +1031,8 @@ async function deleteTask(task: BatchTask) {
 
 async function rerunTask(task: BatchTask) {
   await ElMessageBox.confirm(`将基于任务 #${task.id} 的配置创建一个新任务，是否继续？`, '确认重新运行', { type: 'warning' })
-  const fullTask = await loadTaskDetail(task.id)
-  await panelApi.createTask({
-    taskType: fullTask.taskType,
-    name: fullTask.name?.trim() || null,
-    total: Math.max(0, fullTask.total),
-    config: fullTask.config ? stripRuntimeFields(fullTask.taskType, fullTask.config) : null,
-  })
+  const created = await panelApi.rerunTask(task.id)
+  ElMessage.success(`已创建重跑任务 #${created.id}`)
   await load()
 }
 
@@ -1191,6 +1194,8 @@ async function showTaskDetails(task: BatchTask) {
   const lines = [
     `任务名称: ${batchTaskName(task)}`,
     `任务类型: ${taskName(task.taskType)}`,
+    `归属模块: ${task.ownerModuleId || '-'}`,
+    `执行通道: ${isPersistentTask(task) ? '常驻任务' : '批任务'}`,
     `状态: ${statusName(displayStatus(task))}`,
     `总数: ${task.total}`,
     `已完成: ${task.completed}`,
@@ -1199,6 +1204,10 @@ async function showTaskDetails(task: BatchTask) {
   ]
   if (task.startedAt) lines.push(`开始时间: ${formatTime(task.startedAt)}`)
   if (task.completedAt) lines.push(`完成时间: ${formatTime(task.completedAt)}`)
+  if (task.runtimePhase) lines.push(`运行阶段: ${task.runtimePhase}`)
+  if (task.runtimeMessage) lines.push(`运行消息: ${task.runtimeMessage}`)
+  if (task.heartbeatAtUtc) lines.push(`最近心跳: ${formatTime(task.heartbeatAtUtc)}`)
+  if (task.requiresAttention) lines.push('提醒: 需要人工处理')
   if (extraDetails.length > 0) lines.push(...extraDetails)
   detailDialog.value = {
     visible: true,
@@ -1791,6 +1800,7 @@ async function showScheduledDetails(task: ScheduledTask) {
 function statusName(status: string) {
   if (status === 'pending') return '待执行'
   if (status === 'running') return '执行中'
+  if (status === 'pausing') return '停止中'
   if (status === 'paused') return '已暂停'
   if (status === 'completed') return '已完成'
   if (status === 'failed') return '失败'

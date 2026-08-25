@@ -372,6 +372,7 @@ export const panelApi = {
     api.post<OperationResult>('/tasks/cleanup', { mode }).then((r) => r.data),
   pauseTask: (id: number) => api.post<OperationResult>(`/tasks/${id}/pause`).then((r) => r.data),
   resumeTask: (id: number) => api.post<OperationResult>(`/tasks/${id}/resume`).then((r) => r.data),
+  rerunTask: (id: number) => api.post<BatchTask>(`/tasks/${id}/rerun`).then((r) => r.data),
   cancelTask: (id: number) => api.post<OperationResult>(`/tasks/${id}/cancel`).then((r) => r.data),
   deleteTask: (id: number) => api.delete<OperationResult>(`/tasks/${id}`).then((r) => r.data),
   uploadTaskAvatarAsset: (form: FormData) =>

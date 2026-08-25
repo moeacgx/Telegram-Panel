@@ -520,8 +520,11 @@ builder.Services.AddScoped<IModuleTaskHandler, ChannelGroupPrivateCreateTaskHand
 builder.Services.AddScoped<IModuleTaskHandler, ChannelGroupPublicizeTaskHandler>();
 builder.Services.AddScoped<IModuleTaskHandler, AutoChangeLoginEmailTaskHandler>();
 builder.Services.AddScoped<IModuleTaskHandler, AccountAutoSyncTaskHandler>();
+builder.Services.AddSingleton<ModuleTaskLifecycleService>();
 builder.Services.AddSingleton<BatchTaskExecutionControlService>();
+builder.Services.AddSingleton<BatchTaskStartupRecoveryService>();
 builder.Services.AddHostedService<BatchTaskBackgroundService>();
+builder.Services.AddHostedService<PersistentModuleTaskBackgroundService>();
 builder.Services.AddHostedService<ScheduledTaskBackgroundService>();
 builder.Services.AddHostedService<AccountDataAutoSyncBackgroundService>();
 builder.Services.AddHostedService<AccountStatusAutoRefreshBackgroundService>();

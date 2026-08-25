@@ -71,6 +71,14 @@ public class BatchTaskManagementService
 
     public async Task<BatchTask> CreateTaskAsync(BatchTask task)
     {
+        task.OwnerModuleId = string.IsNullOrWhiteSpace(task.OwnerModuleId)
+            ? "host.legacy"
+            : task.OwnerModuleId.Trim();
+        task.ExecutionKind = string.IsNullOrWhiteSpace(task.ExecutionKind)
+            ? "batch"
+            : task.ExecutionKind.Trim().ToLowerInvariant();
+        if (task.ExecutionKind is not ("batch" or "persistent"))
+            throw new InvalidOperationException($"不支持的任务执行通道：{task.ExecutionKind}");
         task.CreatedAt = DateTime.UtcNow;
         task.Status = "pending";
         return await _batchTaskRepository.AddAsync(task);
@@ -142,6 +150,27 @@ public class BatchTaskManagementService
         return await _batchTaskRepository.TryPauseAsync(taskId, cancellationToken);
     }
 
+    public Task UpdateTaskRuntimeStateAsync(
+        int taskId,
+        string? phase,
+        string? message,
+        DateTime? heartbeatAtUtc,
+        bool requiresAttention,
+        CancellationToken cancellationToken = default) =>
+        _batchTaskRepository.UpdateRuntimeStateColumnsAsync(
+            taskId,
+            NormalizeRuntimeValue(phase, 100),
+            NormalizeRuntimeValue(message, 1000),
+            heartbeatAtUtc,
+            requiresAttention,
+            cancellationToken);
+
+    public Task<bool> TryBeginPauseTaskAsync(int taskId, CancellationToken cancellationToken = default) =>
+        _batchTaskRepository.TryBeginPauseAsync(taskId, cancellationToken);
+
+    public Task<bool> TryConfirmPausedTaskAsync(int taskId, CancellationToken cancellationToken = default) =>
+        _batchTaskRepository.TryConfirmPausedAsync(taskId, cancellationToken);
+
     public async Task ResumeTaskAsync(int taskId)
     {
         await TryResumeTaskAsync(taskId);
@@ -173,6 +202,21 @@ public class BatchTaskManagementService
         return requeued;
     }
 
+    public async Task<(int Requeued, int Paused)> RecoverInterruptedTasksAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var requeued = await RequeueRunningTasksAsync(cancellationToken: cancellationToken);
+        var paused = 0;
+        var pausingTasks = (await _batchTaskRepository.GetByStatusAsync("pausing")).ToList();
+        foreach (var task in pausingTasks)
+        {
+            if (await _batchTaskRepository.TryConfirmPausedAsync(task.Id, cancellationToken))
+                paused++;
+        }
+
+        return (requeued, paused);
+    }
+
     public async Task CompleteTaskAsync(int taskId, bool success = true)
     {
         var transitioned = await _batchTaskRepository.TryCompleteAsync(
@@ -181,8 +225,6 @@ public class BatchTaskManagementService
             DateTime.UtcNow);
         if (!transitioned)
             return;
-
-        await TrimHistoryTasksIfNeededAsync();
     }
 
     public async Task CancelTaskAsync(int taskId)
@@ -198,11 +240,7 @@ public class BatchTaskManagementService
             taskId,
             DateTime.UtcNow,
             cancellationToken);
-        if (!transitioned)
-            return false;
-
-        await TrimHistoryTasksIfNeededAsync(cancellationToken);
-        return true;
+        return transitioned;
     }
 
     public async Task DeleteTaskAsync(int id)
@@ -214,28 +252,10 @@ public class BatchTaskManagementService
         }
     }
 
-    private async Task TrimHistoryTasksIfNeededAsync(CancellationToken cancellationToken = default)
+    private static string? NormalizeRuntimeValue(string? value, int maxLength)
     {
-        var keepCount = GetHistoryRetentionLimit();
-        if (keepCount <= 0)
-            return;
-
-        var deletedCount = await _batchTaskRepository.TrimHistoryTasksAsync(keepCount, cancellationToken);
-        if (deletedCount > 0)
-        {
-            _logger.LogInformation(
-                "Trimmed {DeletedCount} historical batch tasks, keepCount={KeepCount}",
-                deletedCount,
-                keepCount);
-        }
+        var normalized = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        return normalized?.Length > maxLength ? normalized[..maxLength] : normalized;
     }
 
-    private int GetHistoryRetentionLimit()
-    {
-        var rawValue = _configuration["BatchTasks:HistoryRetentionLimit"];
-        if (!int.TryParse(rawValue, out var keepCount) || keepCount < 0)
-            return 0;
-
-        return Math.Min(keepCount, 5000);
-    }
 }

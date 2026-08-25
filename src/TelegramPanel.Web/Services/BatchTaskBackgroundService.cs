@@ -19,18 +19,24 @@ public sealed class BatchTaskBackgroundService : BackgroundService
     private readonly ILogger<BatchTaskBackgroundService> _logger;
     private readonly IConfiguration _configuration;
     private readonly BatchTaskExecutionControlService _executionControl;
+    private readonly BatchTaskStartupRecoveryService? _startupRecovery;
+    private readonly TelegramPanel.Web.Modules.ModuleContributionRegistry? _contributions;
     private readonly ConcurrentDictionary<int, Task> _runningTasks = new();
 
     public BatchTaskBackgroundService(
         IServiceScopeFactory scopeFactory,
         IConfiguration configuration,
         BatchTaskExecutionControlService executionControl,
-        ILogger<BatchTaskBackgroundService> logger)
+        ILogger<BatchTaskBackgroundService> logger,
+        BatchTaskStartupRecoveryService? startupRecovery = null,
+        TelegramPanel.Web.Modules.ModuleContributionRegistry? contributions = null)
     {
         _scopeFactory = scopeFactory;
         _configuration = configuration;
         _executionControl = executionControl;
         _logger = logger;
+        _startupRecovery = startupRecovery;
+        _contributions = contributions;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -57,7 +63,10 @@ public sealed class BatchTaskBackgroundService : BackgroundService
         // 延迟一点，避免与启动时 DB 迁移抢资源
         await Task.Delay(TimeSpan.FromSeconds(3), stoppingToken);
 
-        await RecoverInterruptedTasksAsync(stoppingToken);
+        if (_startupRecovery != null)
+            await _startupRecovery.EnsureRecoveredAsync(stoppingToken);
+        else
+            await RecoverInterruptedTasksAsync(stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -124,11 +133,15 @@ public sealed class BatchTaskBackgroundService : BackgroundService
         var taskManagement = scope.ServiceProvider.GetRequiredService<BatchTaskManagementService>();
         var supportedTaskTypes = scope.ServiceProvider
             .GetServices<IModuleTaskHandler>()
-            .Select(h => h.TaskType)
-            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Where(handler => !string.IsNullOrWhiteSpace(handler.TaskType))
+            .GroupBy(handler => handler.TaskType.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() == 1)
+            .Select(group => group.Key)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var pending = (await taskManagement.GetTasksByStatusAsync("pending"))
+            .Where(t => string.Equals(t.ExecutionKind, ModuleTaskExecutionKinds.Batch, StringComparison.OrdinalIgnoreCase))
+            .Where(IsOwnedBatchTask)
             .Where(t => supportedTaskTypes.Contains(t.TaskType))
             .Where(t => !_runningTasks.ContainsKey(t.Id))
             .OrderBy(t => t.CreatedAt)
@@ -180,21 +193,26 @@ public sealed class BatchTaskBackgroundService : BackgroundService
 
             try
             {
-                var handler = scope.ServiceProvider
+                var handlers = scope.ServiceProvider
                     .GetServices<IModuleTaskHandler>()
-                    .FirstOrDefault(h => string.Equals(h.TaskType, pending.TaskType, StringComparison.OrdinalIgnoreCase));
+                    .Where(h => string.Equals(h.TaskType, pending.TaskType, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
 
-                if (handler == null)
+                if (handlers.Count != 1)
                 {
                     failed = pending.Total == 0 ? 1 : pending.Total;
                     await taskManagement.UpdateTaskProgressAsync(pending.Id, completed, failed);
                     await taskManagement.CompleteTaskAsync(pending.Id, success: false);
-                    _logger.LogWarning("Unsupported batch task type: {TaskType} (task {TaskId})", pending.TaskType, pending.Id);
+                    _logger.LogWarning(
+                        "Batch task requires exactly one handler: {TaskType} (task {TaskId}, count={Count})",
+                        pending.TaskType,
+                        pending.Id,
+                        handlers.Count);
                     return;
                 }
 
                 var host = new DbBackedModuleTaskExecutionHost(pending, taskManagement, scope.ServiceProvider);
-                await handler.ExecuteAsync(host, executionToken);
+                await handlers[0].ExecuteAsync(host, executionToken);
                 executionToken.ThrowIfCancellationRequested();
 
                 var after = await taskManagement.GetTaskAsync(pending.Id);
@@ -261,8 +279,26 @@ public sealed class BatchTaskBackgroundService : BackgroundService
         finally
         {
             _runningTasks.TryRemove(taskId, out _);
-            _executionControl.CompleteExecution(execution);
+            await _executionControl.CompleteExecutionAsync(execution);
+            var keepCount = _configuration.GetValue("BatchTasks:HistoryRetentionLimit", 0);
+            if (keepCount > 0 && !stoppingToken.IsCancellationRequested)
+                await _executionControl.TrimHistoryTasksAsync(keepCount);
         }
+    }
+
+    private bool IsOwnedBatchTask(BatchTask task)
+    {
+        if (string.Equals(task.OwnerModuleId, "host.legacy", StringComparison.Ordinal))
+            return true;
+        if (_contributions == null
+            || !_contributions.TaskTypeToDefinition.TryGetValue(task.TaskType, out var registered))
+            return false;
+
+        return string.Equals(registered.Module.Id, task.OwnerModuleId, StringComparison.Ordinal)
+            && string.Equals(
+                registered.Definition.ExecutionKind,
+                ModuleTaskExecutionKinds.Batch,
+                StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsPersistentTask(BatchTask task)

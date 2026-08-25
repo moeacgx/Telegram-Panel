@@ -548,6 +548,8 @@ public sealed class BatchTaskExecutionBarrierTests
         {
             Id = task.Id,
             TaskType = task.TaskType,
+            OwnerModuleId = task.OwnerModuleId,
+            ExecutionKind = task.ExecutionKind,
             Status = task.Status,
             Total = task.Total,
             Completed = task.Completed,

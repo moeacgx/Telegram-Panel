@@ -11,7 +11,7 @@
 - `Channels`：频道信息（主要是账号创建的频道）与分组/展示字段
 - `Groups`：群组信息（主要是账号创建的群组）
 - `Bots` / `BotChannels`：机器人与其管理的频道（如果启用机器人管理）
-- `BatchTasks`：批量任务（pending/running/completed/failed），`Name` 可保存计划任务触发后的用户可读名称
+- `BatchTasks`：批量与常驻任务；`OwnerModuleId` 固化任务所有者，`ExecutionKind` 为 `batch|persistent`，状态包含 `pending/running/pausing/paused/completed/failed/canceled`，`Name` 保存用户可读名称
 - `TaskLogs`：任务日志（用于任务中心展示与排障）
 
 
@@ -20,6 +20,8 @@
 允许复用。接口和任务配置仍以内部 `Id` 做关联，`DisplayNumber` 只用于后台展示、搜索和人工
 填写账号范围。成功判据是迁移后 `Accounts.DisplayNumber` 全部大于 0 且唯一；失败时先检查
 迁移日志和唯一索引冲突。回滚到旧版会删除该列，回滚前不要把外部自动化只绑定到显示编号。
+
+当前开发版迁移会把已有 `BatchTasks` 回填为 `OwnerModuleId=host.legacy`、`ExecutionKind=batch`，并增加 `RuntimePhase`、`RuntimeMessage`、`HeartbeatAtUtc`、`RequiresAttention` 保存宿主级运行提醒。新模块任务创建时必须固化真实模块 ID 与执行通道，调度器不根据当前清单临时推导。成功判据是升级后旧任务仍由批任务通道执行，新建常驻任务保留真实所有者，宿主暂停提醒在重启后仍可查询。失败时检查 `IX_BatchTasks_ExecutionKind_Status`、模块任务类型冲突诊断和迁移日志。回滚前先暂停并删除常驻任务并备份数据库；迁移 Down 会删除这些新列。
 
 ## 常见问题
 

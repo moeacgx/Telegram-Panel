@@ -689,6 +689,8 @@ export interface BatchTask {
   id: number
   name?: string | null
   taskType: string
+  ownerModuleId: string
+  executionKind: 'batch' | 'persistent' | string
   status: string
   total: number
   completed: number
@@ -697,6 +699,10 @@ export interface BatchTask {
   createdAt: string
   startedAt?: string | null
   completedAt?: string | null
+  runtimePhase?: string | null
+  runtimeMessage?: string | null
+  heartbeatAtUtc?: string | null
+  requiresAttention: boolean
 }
 
 export interface ScheduledTask {
@@ -716,12 +722,15 @@ export interface ScheduledTask {
 
 export interface TaskDefinition {
   taskType: string
+  ownerModuleId: string
+  executionKind: 'batch' | 'persistent' | string
   displayName: string
   category: string
   description?: string | null
   icon: string
   createRoute?: string | null
   canCreate: boolean
+  canSchedule: boolean
   canPause: boolean
   canResume: boolean
   canEdit: boolean

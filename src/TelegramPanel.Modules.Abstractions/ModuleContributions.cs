@@ -58,6 +58,12 @@ public interface IModuleTaskProvider
 public sealed class ModuleTaskDefinition
 {
     /// <summary>
+    /// 执行通道。batch 使用普通批任务并发池，persistent 使用独立常驻任务并发池。
+    /// </summary>
+    [JsonPropertyName("executionKind")]
+    public string ExecutionKind { get; set; } = ModuleTaskExecutionKinds.Batch;
+
+    /// <summary>
     /// 任务分类：例如 user / bot / system（建议使用小写）。
     /// </summary>
     [JsonPropertyName("category")]
@@ -103,6 +109,16 @@ public sealed class ModuleTaskDefinition
 
     [JsonPropertyName("order")]
     public int Order { get; set; } = 0;
+}
+
+public static class ModuleTaskExecutionKinds
+{
+    public const string Batch = "batch";
+    public const string Persistent = "persistent";
+
+    public static bool IsValid(string? value) =>
+        string.Equals(value, Batch, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(value, Persistent, StringComparison.OrdinalIgnoreCase);
 }
 
 public sealed class ModuleTaskCenterCapabilities
@@ -151,6 +167,12 @@ public sealed class ModuleTaskSnapshot
 
     [JsonPropertyName("taskType")]
     public string TaskType { get; set; } = "";
+
+    [JsonPropertyName("ownerModuleId")]
+    public string OwnerModuleId { get; set; } = "host.legacy";
+
+    [JsonPropertyName("executionKind")]
+    public string ExecutionKind { get; set; } = ModuleTaskExecutionKinds.Batch;
 
     [JsonPropertyName("status")]
     public string Status { get; set; } = "";
@@ -215,6 +237,15 @@ public interface IModuleTaskHandler
     Task ExecuteAsync(IModuleTaskExecutionHost host, CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// 常驻模块任务处理器。此类任务由独立执行通道调度，不占用普通批任务槽位。
+/// </summary>
+public interface IModulePersistentTaskHandler
+{
+    string TaskType { get; }
+    Task ExecuteAsync(IModulePersistentTaskExecutionHost host, CancellationToken cancellationToken);
+}
+
 public interface IModuleTaskExecutionHost
 {
     int TaskId { get; }
@@ -226,6 +257,63 @@ public interface IModuleTaskExecutionHost
 
     Task<bool> IsStillRunningAsync(CancellationToken cancellationToken);
     Task UpdateProgressAsync(int completed, int failed, CancellationToken cancellationToken);
+}
+
+public interface IModulePersistentTaskExecutionHost : IModuleTaskExecutionHost
+{
+    /// <summary>
+    /// 处理器因安全条件主动请求暂停。该调用只发起状态转换与取消，避免执行实例等待自身退出。
+    /// </summary>
+    Task RequestPauseAsync(
+        string reason,
+        bool requiresAttention,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed class ModuleTaskRuntimeState
+{
+    [JsonPropertyName("taskId")]
+    public int TaskId { get; set; }
+
+    [JsonPropertyName("phase")]
+    public string? Phase { get; set; }
+
+    [JsonPropertyName("message")]
+    public string? Message { get; set; }
+
+    [JsonPropertyName("heartbeatAtUtc")]
+    public DateTime? HeartbeatAtUtc { get; set; }
+
+    [JsonPropertyName("requiresAttention")]
+    public bool RequiresAttention { get; set; }
+}
+
+public interface IModuleTaskStatusProvider
+{
+    string TaskType { get; }
+    Task<IReadOnlyList<ModuleTaskRuntimeState>> GetRuntimeStatesAsync(
+        IReadOnlyCollection<int> taskIds,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed class ModuleTaskLifecycleContext
+{
+    public string OperationId { get; init; } = "";
+    public ModuleTaskSnapshot Task { get; init; } = new();
+    public IServiceProvider Services { get; init; } = null!;
+}
+
+/// <summary>
+/// 模块自有状态的生命周期协调接口。所有方法必须以 OperationId 实现幂等。
+/// </summary>
+public interface IModuleTaskLifecycleHandler
+{
+    string TaskType { get; }
+    Task ValidateAsync(ModuleTaskLifecycleContext context, CancellationToken cancellationToken = default);
+    Task PrepareDeleteAsync(ModuleTaskLifecycleContext context, CancellationToken cancellationToken = default);
+    Task CommitDeleteAsync(ModuleTaskLifecycleContext context, CancellationToken cancellationToken = default);
+    Task AbortDeleteAsync(ModuleTaskLifecycleContext context, CancellationToken cancellationToken = default);
+    Task ReconcileAsync(IReadOnlyCollection<int> existingTaskIds, CancellationToken cancellationToken = default);
 }
 
 

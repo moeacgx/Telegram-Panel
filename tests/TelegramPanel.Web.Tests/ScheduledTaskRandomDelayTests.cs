@@ -60,6 +60,21 @@ public sealed class ScheduledTaskRandomDelayTests
         Assert.Equal(exactNextRunUtc, nextRunAtUtc);
     }
 
+    [Fact]
+    public async Task 手动触发不会在上次任务仍处于停止中时创建重复任务()
+    {
+        await using var fixture = await Fixture.CreateAsync(0);
+        var scheduleId = await fixture.AddScheduledTaskWithLastRunAsync("pausing");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Service.RunNowAsync(
+            scheduleId,
+            "host.system",
+            "batch"));
+
+        Assert.Contains("尚未结束", error.Message);
+        Assert.Equal(1, await fixture.GetBatchTaskCountAsync());
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         private readonly SqliteConnection _connection;
@@ -119,6 +134,36 @@ public sealed class ScheduledTaskRandomDelayTests
             Assert.True(value.HasValue);
             return DateTime.SpecifyKind(value.Value, DateTimeKind.Utc);
         }
+
+        public async Task<int> AddScheduledTaskWithLastRunAsync(string status)
+        {
+            var batchTask = new BatchTask
+            {
+                TaskType = "account_auto_sync",
+                Status = status,
+                Total = 1,
+                CreatedAt = DateTime.UtcNow
+            };
+            _db.BatchTasks.Add(batchTask);
+            await _db.SaveChangesAsync();
+
+            var scheduledTask = new ScheduledTask
+            {
+                Name = "停止屏障测试任务",
+                TaskType = "account_auto_sync",
+                Status = ScheduledTaskStatuses.Enabled,
+                Total = 1,
+                CronExpression = "0 * * * *",
+                LastBatchTaskId = batchTask.Id,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+            _db.ScheduledTasks.Add(scheduledTask);
+            await _db.SaveChangesAsync();
+            return scheduledTask.Id;
+        }
+
+        public Task<int> GetBatchTaskCountAsync() => _db.BatchTasks.CountAsync();
 
         public async ValueTask DisposeAsync()
         {

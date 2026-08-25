@@ -33,7 +33,11 @@ public class BatchTaskRepository : Repository<BatchTask>, IBatchTaskRepository
             setters => setters
                 .SetProperty(t => t.Status, "running")
                 .SetProperty(t => t.StartedAt, startedAt)
-                .SetProperty(t => t.CompletedAt, (DateTime?)null),
+                .SetProperty(t => t.CompletedAt, (DateTime?)null)
+                .SetProperty(t => t.RuntimePhase, "running")
+                .SetProperty(t => t.RuntimeMessage, (string?)null)
+                .SetProperty(t => t.HeartbeatAtUtc, startedAt)
+                .SetProperty(t => t.RequiresAttention, false),
             cancellationToken);
     }
 
@@ -47,6 +51,26 @@ public class BatchTaskRepository : Repository<BatchTask>, IBatchTaskRepository
             cancellationToken);
     }
 
+    public Task<bool> TryBeginPauseAsync(int id, CancellationToken cancellationToken = default)
+    {
+        return ExecuteConditionalUpdateAsync(
+            _dbSet.Where(t => t.Id == id && (t.Status == "pending" || t.Status == "running")),
+            setters => setters
+                .SetProperty(t => t.Status, "pausing")
+                .SetProperty(t => t.CompletedAt, (DateTime?)null),
+            cancellationToken);
+    }
+
+    public Task<bool> TryConfirmPausedAsync(int id, CancellationToken cancellationToken = default)
+    {
+        return ExecuteConditionalUpdateAsync(
+            _dbSet.Where(t => t.Id == id && t.Status == "pausing"),
+            setters => setters
+                .SetProperty(t => t.Status, "paused")
+                .SetProperty(t => t.CompletedAt, (DateTime?)null),
+            cancellationToken);
+    }
+
     public Task<bool> TryResumeAsync(int id, CancellationToken cancellationToken = default)
     {
         return ExecuteConditionalUpdateAsync(
@@ -54,7 +78,11 @@ public class BatchTaskRepository : Repository<BatchTask>, IBatchTaskRepository
             setters => setters
                 .SetProperty(t => t.Status, "pending")
                 .SetProperty(t => t.StartedAt, (DateTime?)null)
-                .SetProperty(t => t.CompletedAt, (DateTime?)null),
+                .SetProperty(t => t.CompletedAt, (DateTime?)null)
+                .SetProperty(t => t.RuntimePhase, (string?)null)
+                .SetProperty(t => t.RuntimeMessage, (string?)null)
+                .SetProperty(t => t.HeartbeatAtUtc, (DateTime?)null)
+                .SetProperty(t => t.RequiresAttention, false),
             cancellationToken);
     }
 
@@ -62,7 +90,7 @@ public class BatchTaskRepository : Repository<BatchTask>, IBatchTaskRepository
     {
         return ExecuteConditionalUpdateAsync(
             _dbSet.Where(t => t.Id == id
-                && (t.Status == "pending" || t.Status == "running" || t.Status == "paused")),
+                && (t.Status == "pending" || t.Status == "running" || t.Status == "pausing" || t.Status == "paused")),
             setters => setters
                 .SetProperty(t => t.Status, "canceled")
                 .SetProperty(t => t.CompletedAt, completedAt),
@@ -102,6 +130,25 @@ public class BatchTaskRepository : Repository<BatchTask>, IBatchTaskRepository
             cancellationToken);
     }
 
+    public async Task UpdateRuntimeStateColumnsAsync(
+        int id,
+        string? phase,
+        string? message,
+        DateTime? heartbeatAtUtc,
+        bool requiresAttention,
+        CancellationToken cancellationToken = default)
+    {
+        await ExecuteUpdateWithSqliteLockRetryAsync(
+            token => _dbSet.Where(t => t.Id == id).ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(t => t.RuntimePhase, phase)
+                    .SetProperty(t => t.RuntimeMessage, message)
+                    .SetProperty(t => t.HeartbeatAtUtc, heartbeatAtUtc)
+                    .SetProperty(t => t.RequiresAttention, requiresAttention),
+                token),
+            cancellationToken);
+    }
+
     public async Task UpdateConfigColumnAsync(int id, string? config, CancellationToken cancellationToken = default)
     {
         await ExecuteUpdateWithSqliteLockRetryAsync(
@@ -124,11 +171,7 @@ public class BatchTaskRepository : Repository<BatchTask>, IBatchTaskRepository
     public Task<bool> TryUpdateEditableDraftAsync(int id, int total, string? config, CancellationToken cancellationToken = default)
     {
         return ExecuteConditionalUpdateAsync(
-            _dbSet.Where(t => t.Id == id
-                && (t.Status == "paused"
-                    || t.Status == "completed"
-                    || t.Status == "failed"
-                    || t.Status == "canceled")),
+            _dbSet.Where(t => t.Id == id && t.Status == "paused"),
             setters => setters
                 .SetProperty(t => t.Total, total)
                 .SetProperty(t => t.Config, config),
@@ -138,11 +181,7 @@ public class BatchTaskRepository : Repository<BatchTask>, IBatchTaskRepository
     public Task<bool> TryUpdateEditableDraftAsync(int id, int total, string? config, string? name, CancellationToken cancellationToken = default)
     {
         return ExecuteConditionalUpdateAsync(
-            _dbSet.Where(t => t.Id == id
-                && (t.Status == "paused"
-                    || t.Status == "completed"
-                    || t.Status == "failed"
-                    || t.Status == "canceled")),
+            _dbSet.Where(t => t.Id == id && t.Status == "paused"),
             setters => setters
                 .SetProperty(t => t.Name, name)
                 .SetProperty(t => t.Total, total)
@@ -170,7 +209,7 @@ public class BatchTaskRepository : Repository<BatchTask>, IBatchTaskRepository
     {
         return await _dbSet
             .AsNoTracking()
-            .Where(t => t.Status == "pending" || t.Status == "running" || t.Status == "paused")
+            .Where(t => t.Status == "pending" || t.Status == "running" || t.Status == "pausing" || t.Status == "paused")
             .OrderBy(t => t.CreatedAt)
             .ThenBy(t => t.Id)
             .Select(t => ToListItem(t))
@@ -197,7 +236,7 @@ public class BatchTaskRepository : Repository<BatchTask>, IBatchTaskRepository
 
         var activeTasks = await _dbSet
             .AsNoTracking()
-            .Where(t => t.Status == "pending" || t.Status == "running" || t.Status == "paused")
+            .Where(t => t.Status == "pending" || t.Status == "running" || t.Status == "pausing" || t.Status == "paused")
             .OrderByDescending(t => t.CreatedAt)
             .Select(t => ToListItem(t))
             .ToListAsync(cancellationToken);
@@ -224,11 +263,17 @@ public class BatchTaskRepository : Repository<BatchTask>, IBatchTaskRepository
         Id = task.Id,
         Name = task.Name,
         TaskType = task.TaskType,
+        OwnerModuleId = task.OwnerModuleId,
+        ExecutionKind = task.ExecutionKind,
         Status = task.Status,
         Total = task.Total,
         Completed = task.Completed,
         Failed = task.Failed,
         Config = null,
+        RuntimePhase = task.RuntimePhase,
+        RuntimeMessage = task.RuntimeMessage,
+        HeartbeatAtUtc = task.HeartbeatAtUtc,
+        RequiresAttention = task.RequiresAttention,
         CreatedAt = task.CreatedAt,
         StartedAt = task.StartedAt,
         CompletedAt = task.CompletedAt
@@ -238,7 +283,7 @@ public class BatchTaskRepository : Repository<BatchTask>, IBatchTaskRepository
     {
         return await _dbSet
             .AsNoTracking()
-            .CountAsync(t => t.Status == "pending" || t.Status == "running" || t.Status == "paused", cancellationToken);
+            .CountAsync(t => t.Status == "pending" || t.Status == "running" || t.Status == "pausing" || t.Status == "paused", cancellationToken);
     }
 
     public async Task<int> TrimHistoryTasksAsync(int keepCount, CancellationToken cancellationToken = default)
@@ -248,7 +293,7 @@ public class BatchTaskRepository : Repository<BatchTask>, IBatchTaskRepository
 
         var staleTasks = await _dbSet
             .Where(t => t.Status == "completed" || t.Status == "failed" || t.Status == "canceled")
-            .OrderByDescending(t => t.CreatedAt)
+            .OrderByDescending(t => t.CompletedAt ?? t.CreatedAt)
             .ThenByDescending(t => t.Id)
             .Skip(keepCount)
             .ToListAsync(cancellationToken);

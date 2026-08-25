@@ -242,7 +242,35 @@ namespace TelegramPanel.Data.Migrations
                     b.Property<int>("Failed")
                         .HasColumnType("INTEGER");
 
+                    b.Property<DateTime?>("HeartbeatAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ExecutionKind")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("batch");
+
                     b.Property<string>("Name")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OwnerModuleId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("host.legacy");
+
+                    b.Property<bool>("RequiresAttention")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(false);
+
+                    b.Property<string>("RuntimeMessage")
+                        .HasMaxLength(1000)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RuntimePhase")
                         .HasMaxLength(100)
                         .HasColumnType("TEXT");
 
@@ -265,6 +293,8 @@ namespace TelegramPanel.Data.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("CreatedAt");
+
+                    b.HasIndex("ExecutionKind", "Status");
 
                     b.HasIndex("Status");
 

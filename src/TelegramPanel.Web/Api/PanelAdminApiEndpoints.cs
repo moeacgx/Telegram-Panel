@@ -253,6 +253,7 @@ public static class PanelAdminApiEndpoints
         secured.MapPost("/tasks/{id:int}/pause", PauseBatchTaskAsync);
         secured.MapPost("/tasks/{id:int}/resume", ResumeBatchTaskAsync);
         secured.MapPost("/tasks/{id:int}/cancel", CancelBatchTaskAsync);
+        secured.MapPost("/tasks/{id:int}/rerun", RerunBatchTaskAsync);
         secured.MapDelete("/tasks/{id:int}", DeleteBatchTaskAsync);
 
         secured.MapGet("/scheduled-tasks/{id:int}", GetScheduledTaskAsync);
@@ -402,8 +403,8 @@ public static class PanelAdminApiEndpoints
             accountCounts.Normal,
             accountCounts.Limited,
             accountCounts.Invalid,
-            activeTaskItems.Take(20).Select(ToTaskListDto).ToList(),
-            recentTasks.Select(ToTaskListDto).ToList()));
+            activeTaskItems.Take(20).Select(task => ToTaskListDto(task)).ToList(),
+            recentTasks.Select(task => ToTaskListDto(task)).ToList()));
     }
 
     private static async Task<IResult> CreateAccountCategoryAsync(
@@ -2985,7 +2986,7 @@ public static class PanelAdminApiEndpoints
             : Results.BadRequest(new AiTestResultDto(false, result.Model, result.ResponseText, result.Error));
     }
 
-    private static async Task<IResult> SaveBatchSettingsAsync(BatchSettingsDto request, IConfiguration configuration, IWebHostEnvironment environment, BatchTaskManagementService tasks, CancellationToken cancellationToken)
+    private static async Task<IResult> SaveBatchSettingsAsync(BatchSettingsDto request, IConfiguration configuration, IWebHostEnvironment environment, BatchTaskExecutionControlService executionControl, CancellationToken cancellationToken)
     {
         if (request.DefaultDelayMs < 1000 || request.DefaultDelayMs > 60000)
             return Results.BadRequest(new OperationResultDto(false, "默认操作间隔范围应为 1000-60000ms"));
@@ -3002,7 +3003,9 @@ public static class PanelAdminApiEndpoints
         batch["MaxConcurrent"] = request.MaxConcurrent;
         batch["HistoryRetentionLimit"] = request.HistoryRetentionLimit;
         await SaveLocalRootAsync(configuration, environment, root, cancellationToken);
-        var deleted = request.HistoryRetentionLimit > 0 ? await tasks.TrimHistoryTasksAsync(request.HistoryRetentionLimit) : 0;
+        var deleted = request.HistoryRetentionLimit > 0
+            ? await executionControl.TrimHistoryTasksAsync(request.HistoryRetentionLimit, cancellationToken)
+            : 0;
         return Results.Ok(new OperationResultDto(true, deleted > 0 ? $"批量操作配置已保存，并清理 {deleted} 条历史任务" : "批量操作配置已保存"));
     }
 
@@ -5322,13 +5325,25 @@ public static class PanelAdminApiEndpoints
         BatchTaskManagementService taskManagement,
         ScheduledTaskService scheduledTaskManagement,
         ModuleContributionRegistry contributions,
+        IEnumerable<IModuleTaskStatusProvider> statusProviders,
+        ILoggerFactory loggerFactory,
         PanelTimeZoneService timeZone,
         CancellationToken cancellationToken)
     {
         var take = Math.Clamp(count ?? 50, 1, 500);
-        var taskList = (await taskManagement.GetTaskCenterItemsAsync(take, cancellationToken))
+        var tasks = (await taskManagement.GetTaskCenterItemsAsync(take, cancellationToken))
             .OrderByDescending(x => x.CreatedAt)
-            .Select(ToTaskListDto)
+            .ToList();
+        var runtimeStates = await LoadRuntimeStatesAsync(
+            tasks,
+            statusProviders,
+            contributions,
+            loggerFactory.CreateLogger("ModuleTaskStatus"),
+            cancellationToken);
+        var taskList = tasks
+            .Select(task => ToTaskListDto(
+                task,
+                runtimeStates.GetValueOrDefault(task.Id)))
             .ToList();
         var scheduled = (await scheduledTaskManagement.GetAllAsync(cancellationToken))
             .OrderByDescending(x => x.CreatedAt)
@@ -5445,30 +5460,124 @@ public static class PanelAdminApiEndpoints
 
     private static async Task<IResult> CreateTaskAsync(
         CreateTaskRequestDto request,
-        BatchTaskManagementService tasks)
+        BatchTaskManagementService tasks,
+        ModuleContributionRegistry contributions,
+        ModuleTaskLifecycleService lifecycle,
+        CancellationToken cancellationToken)
     {
         ValidateTaskSubmission(request.TaskType, request.Config);
         var nameResult = TryNormalizeBatchTaskName(request.Name, out var taskName);
         if (nameResult != null)
             return nameResult;
 
-        var task = await tasks.CreateTaskAsync(new BatchTask
+        var taskType = request.TaskType.Trim();
+        if (!contributions.TaskTypeToDefinition.TryGetValue(taskType, out var registered)
+            || !registered.CanCreate)
+        {
+            return Results.BadRequest(new OperationResultDto(false, "该任务类型未开放标准创建入口"));
+        }
+
+        var draft = new BatchTask
         {
             Name = taskName,
-            TaskType = request.TaskType.Trim(),
+            TaskType = taskType,
+            OwnerModuleId = registered.Module.Id,
+            ExecutionKind = registered.Definition.ExecutionKind,
             Total = Math.Max(0, request.Total),
             Completed = 0,
             Failed = 0,
             Config = NormalizeNullable(request.Config)
-        });
+        };
+
+        try
+        {
+            await lifecycle.ValidateAsync(draft, Guid.NewGuid().ToString("N"), cancellationToken);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            return Results.BadRequest(new OperationResultDto(false, ex.Message));
+        }
+
+        var task = await tasks.CreateTaskAsync(draft);
 
         return Results.Ok(ToDto(task));
+    }
+
+    private static async Task<IResult> RerunBatchTaskAsync(
+        int id,
+        BatchTaskManagementService tasks,
+        ModuleContributionRegistry contributions,
+        IEnumerable<IModuleTaskRerunBuilder> rerunBuilders,
+        ModuleTaskLifecycleService lifecycle,
+        CancellationToken cancellationToken)
+    {
+        var source = await tasks.GetTaskAsync(id);
+        if (source == null)
+            return Results.NotFound(new OperationResultDto(false, "任务不存在或已被删除"));
+        if (source.Status is "pending" or "running" or "pausing")
+            return Results.Conflict(new OperationResultDto(false, "任务仍在执行或停止中，无法重跑"));
+        if (!contributions.TaskTypeToDefinition.TryGetValue(source.TaskType, out var registered))
+            return Results.BadRequest(new OperationResultDto(false, "任务类型已不可用"));
+        if (!registered.Module.BuiltIn && !registered.CanCreate)
+            return Results.BadRequest(new OperationResultDto(false, "外部任务类型当前不可创建"));
+
+        var matchingBuilders = rerunBuilders
+            .Where(builder => string.Equals(builder.TaskType, source.TaskType, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (matchingBuilders.Count > 1)
+            return Results.Conflict(new OperationResultDto(false, "任务重跑构建器不唯一"));
+
+        var snapshot = new ModuleTaskSnapshot
+        {
+            TaskId = source.Id,
+            TaskType = source.TaskType,
+            OwnerModuleId = source.OwnerModuleId,
+            ExecutionKind = source.ExecutionKind,
+            Status = source.Status,
+            Total = source.Total,
+            Completed = source.Completed,
+            Failed = source.Failed,
+            Config = source.Config
+        };
+        var request = matchingBuilders.Count == 1
+            ? matchingBuilders[0].Build(snapshot)
+            : new ModuleTaskCreateRequest
+            {
+                TaskType = source.TaskType,
+                Total = Math.Max(0, source.Total),
+                Config = source.Config
+            };
+        if (!string.Equals(request.TaskType?.Trim(), source.TaskType, StringComparison.OrdinalIgnoreCase))
+            return Results.BadRequest(new OperationResultDto(false, "重跑构建器不允许修改任务类型"));
+
+        var rerun = new BatchTask
+        {
+            Name = source.Name,
+            TaskType = source.TaskType,
+            OwnerModuleId = registered.Module.Id,
+            ExecutionKind = registered.Definition.ExecutionKind,
+            Total = Math.Max(0, request.Total),
+            Completed = 0,
+            Failed = 0,
+            Config = NormalizeNullable(request.Config)
+        };
+        try
+        {
+            await lifecycle.ValidateAsync(rerun, Guid.NewGuid().ToString("N"), cancellationToken);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            return Results.BadRequest(new OperationResultDto(false, ex.Message));
+        }
+
+        return Results.Ok(ToDto(await tasks.CreateTaskAsync(rerun)));
     }
 
     private static async Task<IResult> UpdateTaskAsync(
         int id,
         UpdateTaskRequestDto request,
         BatchTaskManagementService tasks,
+        ModuleTaskLifecycleService lifecycle,
         CancellationToken cancellationToken)
     {
         ValidateTaskSubmission(request.TaskType, request.Config);
@@ -5477,8 +5586,8 @@ public static class PanelAdminApiEndpoints
             return Results.NotFound(new OperationResultDto(false, "任务不存在或已被删除"));
 
         var status = GetDisplayStatus(existing);
-        if (status is "pending" or "running")
-            return Results.BadRequest(new OperationResultDto(false, "任务尚未安全暂停，请先暂停后再编辑"));
+        if (status != "paused")
+            return Results.BadRequest(new OperationResultDto(false, "仅已安全暂停的任务可以编辑"));
 
         if (!string.Equals(existing.TaskType, request.TaskType?.Trim(), StringComparison.OrdinalIgnoreCase))
             return Results.BadRequest(new OperationResultDto(false, "不允许修改任务类型"));
@@ -5495,11 +5604,36 @@ public static class PanelAdminApiEndpoints
                 return nameResult;
         }
 
+        var candidate = new BatchTask
+        {
+            Id = existing.Id,
+            Name = taskName,
+            TaskType = existing.TaskType,
+            OwnerModuleId = existing.OwnerModuleId,
+            ExecutionKind = existing.ExecutionKind,
+            Status = existing.Status,
+            Total = Math.Max(0, request.Total),
+            Completed = existing.Completed,
+            Failed = existing.Failed,
+            Config = NormalizeNullable(request.Config),
+            CreatedAt = existing.CreatedAt,
+            StartedAt = existing.StartedAt,
+            CompletedAt = existing.CompletedAt
+        };
+        try
+        {
+            await lifecycle.ValidateAsync(candidate, Guid.NewGuid().ToString("N"), cancellationToken);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            return Results.BadRequest(new OperationResultDto(false, ex.Message));
+        }
+
         var updatedDraft = await tasks.TryUpdateEditableTaskDraftAsync(
             id,
-            Math.Max(0, request.Total),
-            NormalizeNullable(request.Config),
-            taskName,
+            candidate.Total,
+            candidate.Config,
+            candidate.Name,
             cancellationToken);
         if (!updatedDraft)
             return Results.Conflict(new OperationResultDto(false, "任务状态已变化，请暂停任务后重新编辑"));
@@ -5512,9 +5646,12 @@ public static class PanelAdminApiEndpoints
 
     private static async Task<IResult> CreateScheduledTaskAsync(
         CreateScheduledTaskRequestDto request,
-        ScheduledTaskService scheduledTasks)
+        ScheduledTaskService scheduledTasks,
+        ModuleContributionRegistry contributions)
     {
         ValidateTaskSubmission(request.TaskType, request.ConfigJson);
+        if (!TryGetSchedulableTaskDefinition(request.TaskType, contributions, out _))
+            return Results.BadRequest(new OperationResultDto(false, "仅宿主内置批任务可以创建 Cron 计划"));
         var task = await scheduledTasks.CreateAsync(new ScheduledTask
         {
             Name = request.Name ?? string.Empty,
@@ -5532,9 +5669,12 @@ public static class PanelAdminApiEndpoints
     private static async Task<IResult> UpdateScheduledTaskAsync(
         int id,
         UpdateScheduledTaskRequestDto request,
-        ScheduledTaskService scheduledTasks)
+        ScheduledTaskService scheduledTasks,
+        ModuleContributionRegistry contributions)
     {
         ValidateTaskSubmission(request.TaskType, request.ConfigJson);
+        if (!TryGetSchedulableTaskDefinition(request.TaskType, contributions, out _))
+            return Results.BadRequest(new OperationResultDto(false, "仅宿主内置批任务可以创建 Cron 计划"));
         var task = await scheduledTasks.GetAsync(id);
         if (task == null)
             return Results.NotFound(new OperationResultDto(false, "计划任务不存在或已被删除"));
@@ -5557,11 +5697,21 @@ public static class PanelAdminApiEndpoints
     private static async Task<IResult> RunScheduledTaskNowAsync(
         int id,
         ScheduledTaskService scheduledTasks,
+        ModuleContributionRegistry contributions,
         CancellationToken cancellationToken)
     {
         try
         {
-            var created = await scheduledTasks.RunNowAsync(id, cancellationToken);
+            var scheduled = await scheduledTasks.GetAsync(id, cancellationToken);
+            if (scheduled == null)
+                return Results.NotFound(new OperationResultDto(false, "计划任务不存在或已被删除"));
+            if (!TryGetSchedulableTaskDefinition(scheduled.TaskType, contributions, out var registered))
+                return Results.BadRequest(new OperationResultDto(false, "仅宿主内置批任务可以通过计划任务运行"));
+            var created = await scheduledTasks.RunNowAsync(
+                id,
+                registered.Module.Id,
+                registered.Definition.ExecutionKind,
+                cancellationToken);
             return created == null
                 ? Results.NotFound(new OperationResultDto(false, "计划任务不存在或已被删除"))
                 : Results.Ok(ToDto(created));
@@ -5591,10 +5741,7 @@ public static class PanelAdminApiEndpoints
 
         foreach (var task in targets)
         {
-            if (historyOnly)
-                await tasks.DeleteTaskAsync(task.Id);
-            else
-                await executionControl.DeleteTaskAsync(task.Id, cancellationToken);
+            await executionControl.DeleteTaskAsync(task.Id, cancellationToken);
 
             var scopeId = TaskAssetScopeHelper.GetAssetScopeId(task.Config);
             if (!string.IsNullOrWhiteSpace(scopeId))
@@ -6196,11 +6343,13 @@ public static class PanelAdminApiEndpoints
             membership.SyncedAt);
     }
 
-    private static BatchTaskDto ToDto(BatchTask task) =>
+    private static BatchTaskDto ToDto(BatchTask task, ModuleTaskRuntimeState? runtime = null) =>
         new(
             task.Id,
             task.Name,
             task.TaskType,
+            task.OwnerModuleId,
+            task.ExecutionKind,
             task.Status,
             task.Total,
             task.Completed,
@@ -6208,13 +6357,19 @@ public static class PanelAdminApiEndpoints
             task.Config,
             task.CreatedAt,
             task.StartedAt,
-            task.CompletedAt);
+            task.CompletedAt,
+            runtime?.Phase ?? task.RuntimePhase,
+            runtime?.Message ?? task.RuntimeMessage,
+            runtime?.HeartbeatAtUtc ?? task.HeartbeatAtUtc,
+            task.RequiresAttention || (runtime?.RequiresAttention ?? false));
 
-    private static BatchTaskDto ToTaskListDto(BatchTask task) =>
+    private static BatchTaskDto ToTaskListDto(BatchTask task, ModuleTaskRuntimeState? runtime = null) =>
         new(
             task.Id,
             task.Name,
             task.TaskType,
+            task.OwnerModuleId,
+            task.ExecutionKind,
             task.Status,
             task.Total,
             task.Completed,
@@ -6222,7 +6377,67 @@ public static class PanelAdminApiEndpoints
             null,
             task.CreatedAt,
             task.StartedAt,
-            task.CompletedAt);
+            task.CompletedAt,
+            runtime?.Phase ?? task.RuntimePhase,
+            runtime?.Message ?? task.RuntimeMessage,
+            runtime?.HeartbeatAtUtc ?? task.HeartbeatAtUtc,
+            task.RequiresAttention || (runtime?.RequiresAttention ?? false));
+
+    private static async Task<IReadOnlyDictionary<int, ModuleTaskRuntimeState>> LoadRuntimeStatesAsync(
+        IReadOnlyCollection<BatchTask> tasks,
+        IEnumerable<IModuleTaskStatusProvider> providers,
+        ModuleContributionRegistry contributions,
+        ILogger logger,
+        CancellationToken cancellationToken)
+    {
+        var result = new Dictionary<int, ModuleTaskRuntimeState>();
+        var providerGroups = providers
+            .GroupBy(provider => provider.TaskType, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var taskGroup in tasks.GroupBy(
+                     task => (task.OwnerModuleId, task.TaskType),
+                     new TaskOwnerTypeComparer()))
+        {
+            if (!contributions.TaskTypeToDefinition.TryGetValue(taskGroup.Key.TaskType, out var registered)
+                || !string.Equals(registered.Module.Id, taskGroup.Key.OwnerModuleId, StringComparison.Ordinal)
+                || !providerGroups.TryGetValue(taskGroup.Key.TaskType, out var matching)
+                || matching.Count != 1)
+                continue;
+
+            var taskIds = taskGroup.Select(task => task.Id).ToArray();
+            try
+            {
+                var states = await matching[0].GetRuntimeStatesAsync(taskIds, cancellationToken);
+                foreach (var state in states.Where(state => taskIds.Contains(state.TaskId)))
+                    result[state.TaskId] = state;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(
+                    ex,
+                    "Module task runtime state query failed: module={ModuleId}, taskType={TaskType}",
+                    taskGroup.Key.OwnerModuleId,
+                    taskGroup.Key.TaskType);
+            }
+        }
+
+        return result;
+    }
+
+    private sealed class TaskOwnerTypeComparer : IEqualityComparer<(string OwnerModuleId, string TaskType)>
+    {
+        public bool Equals(
+            (string OwnerModuleId, string TaskType) x,
+            (string OwnerModuleId, string TaskType) y) =>
+            string.Equals(x.OwnerModuleId, y.OwnerModuleId, StringComparison.Ordinal)
+            && string.Equals(x.TaskType, y.TaskType, StringComparison.OrdinalIgnoreCase);
+
+        public int GetHashCode((string OwnerModuleId, string TaskType) value) =>
+            HashCode.Combine(
+                StringComparer.Ordinal.GetHashCode(value.OwnerModuleId),
+                StringComparer.OrdinalIgnoreCase.GetHashCode(value.TaskType));
+    }
 
     private static ScheduledTaskDto ToDto(ScheduledTask task) =>
         new(
@@ -6257,12 +6472,18 @@ public static class PanelAdminApiEndpoints
     private static TaskDefinitionDto ToDto(RegisteredTaskDefinition registered) =>
         new(
             registered.Definition.TaskType,
+            registered.Module.Id,
+            registered.Definition.ExecutionKind,
             registered.Definition.DisplayName,
             registered.Definition.Category,
             registered.Definition.Description,
             registered.Definition.Icon,
             registered.Definition.CreateRoute,
             registered.CanCreate,
+            registered.Module.BuiltIn && string.Equals(
+                registered.Definition.ExecutionKind,
+                ModuleTaskExecutionKinds.Batch,
+                StringComparison.OrdinalIgnoreCase),
             registered.Definition.TaskCenter.CanPause,
             registered.Definition.TaskCenter.CanResume,
             registered.Definition.TaskCenter.CanEdit,
@@ -7930,6 +8151,27 @@ public static class PanelAdminApiEndpoints
     private static bool IsHistoryStatus(string status) =>
         status is "completed" or "failed" or "canceled";
 
+    private static bool TryGetSchedulableTaskDefinition(
+        string? taskType,
+        ModuleContributionRegistry contributions,
+        out RegisteredTaskDefinition registered)
+    {
+        if (!string.IsNullOrWhiteSpace(taskType)
+            && contributions.TaskTypeToDefinition.TryGetValue(taskType.Trim(), out var candidate)
+            && candidate.Module.BuiltIn
+            && string.Equals(
+                candidate.Definition.ExecutionKind,
+                ModuleTaskExecutionKinds.Batch,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            registered = candidate;
+            return true;
+        }
+
+        registered = null!;
+        return false;
+    }
+
     private enum BatchEmailResultKind
     {
         Success,
@@ -8251,6 +8493,8 @@ public sealed record BatchTaskDto(
     int Id,
     string? Name,
     string TaskType,
+    string OwnerModuleId,
+    string ExecutionKind,
     string Status,
     int Total,
     int Completed,
@@ -8258,7 +8502,11 @@ public sealed record BatchTaskDto(
     string? Config,
     DateTime CreatedAt,
     DateTime? StartedAt,
-    DateTime? CompletedAt);
+    DateTime? CompletedAt,
+    string? RuntimePhase,
+    string? RuntimeMessage,
+    DateTime? HeartbeatAtUtc,
+    bool RequiresAttention);
 
 public sealed record ScheduledTaskDto(
     int Id,
@@ -8276,12 +8524,15 @@ public sealed record ScheduledTaskDto(
 
 public sealed record TaskDefinitionDto(
     string TaskType,
+    string OwnerModuleId,
+    string ExecutionKind,
     string DisplayName,
     string Category,
     string? Description,
     string Icon,
     string? CreateRoute,
     bool CanCreate,
+    bool CanSchedule,
     bool CanPause,
     bool CanResume,
     bool CanEdit,
