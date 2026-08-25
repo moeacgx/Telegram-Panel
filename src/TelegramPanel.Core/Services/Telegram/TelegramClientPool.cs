@@ -40,6 +40,7 @@ public class TelegramClientPool : ITelegramClientPool, IDisposable
         IAccountProxyResolver proxyResolver,
         ISessionPathResolver sessionPathResolver)
     {
+        TelegramLayerCompatibility.EnsureRegistered();
         _configuration = configuration;
         _logger = logger;
         _updateHub = updateHub;

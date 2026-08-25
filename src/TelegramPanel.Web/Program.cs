@@ -25,6 +25,8 @@ using Microsoft.Extensions.FileProviders;
 using System.Diagnostics;
 using System.Data.Common;
 
+TelegramLayerCompatibility.EnsureRegistered();
+
 // 诊断：对某个目录下的 *.json/*.session 做一次“可转换/可校验”检查（不写数据库）
 // 用法：先通过 Telegram__Proxy__Server/Port 配置代理；若确需直连，额外传入 --allow-direct。
 // dotnet run --project src/TelegramPanel.Web -- --diag-session-dir "D:/path/to/dir"
