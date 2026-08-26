@@ -5465,7 +5465,9 @@ public static class PanelAdminApiEndpoints
         ModuleTaskLifecycleService lifecycle,
         CancellationToken cancellationToken)
     {
-        ValidateTaskSubmission(request.TaskType, request.Config);
+        var validationResult = ValidateTaskSubmission(request.TaskType, request.Config);
+        if (validationResult != null)
+            return validationResult;
         var nameResult = TryNormalizeBatchTaskName(request.Name, out var taskName);
         if (nameResult != null)
             return nameResult;
@@ -5585,7 +5587,9 @@ public static class PanelAdminApiEndpoints
         ModuleTaskLifecycleService lifecycle,
         CancellationToken cancellationToken)
     {
-        ValidateTaskSubmission(request.TaskType, request.Config);
+        var validationResult = ValidateTaskSubmission(request.TaskType, request.Config);
+        if (validationResult != null)
+            return validationResult;
         var existing = await tasks.GetTaskAsync(id);
         if (existing == null)
             return Results.NotFound(new OperationResultDto(false, "任务不存在或已被删除"));
@@ -5657,7 +5661,9 @@ public static class PanelAdminApiEndpoints
         ScheduledTaskService scheduledTasks,
         ModuleContributionRegistry contributions)
     {
-        ValidateTaskSubmission(request.TaskType, request.ConfigJson);
+        var validationResult = ValidateTaskSubmission(request.TaskType, request.ConfigJson);
+        if (validationResult != null)
+            return validationResult;
         if (!TryGetSchedulableTaskDefinition(request.TaskType, contributions, out _))
             return Results.BadRequest(new OperationResultDto(false, "仅宿主内置批任务可以创建 Cron 计划"));
         var task = await scheduledTasks.CreateAsync(new ScheduledTask
@@ -5680,7 +5686,9 @@ public static class PanelAdminApiEndpoints
         ScheduledTaskService scheduledTasks,
         ModuleContributionRegistry contributions)
     {
-        ValidateTaskSubmission(request.TaskType, request.ConfigJson);
+        var validationResult = ValidateTaskSubmission(request.TaskType, request.ConfigJson);
+        if (validationResult != null)
+            return validationResult;
         if (!TryGetSchedulableTaskDefinition(request.TaskType, contributions, out _))
             return Results.BadRequest(new OperationResultDto(false, "仅宿主内置批任务可以创建 Cron 计划"));
         var task = await scheduledTasks.GetAsync(id);
@@ -7444,13 +7452,23 @@ public static class PanelAdminApiEndpoints
         return string.IsNullOrWhiteSpace(accountInfo.Username) ? null : accountInfo.Username.Trim();
     }
 
-    private static void ValidateTaskSubmission(string? taskType, string? config)
+    private static IResult? ValidateTaskSubmission(string? taskType, string? config)
     {
         if (string.IsNullOrWhiteSpace(taskType))
-            throw new InvalidOperationException("请先选择任务类型");
+            return Results.BadRequest(new OperationResultDto(false, "请先选择任务类型"));
 
-        if (!string.IsNullOrWhiteSpace(config))
-            System.Text.Json.JsonDocument.Parse(config);
+        if (string.IsNullOrWhiteSpace(config))
+            return null;
+
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(config);
+            return null;
+        }
+        catch (JsonException ex)
+        {
+            return Results.BadRequest(new OperationResultDto(false, $"任务配置 JSON 无效：{ex.Message}"));
+        }
     }
 
     private static IResult? TryNormalizeBatchTaskName(string? value, out string? name)

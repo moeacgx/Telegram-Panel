@@ -63,9 +63,10 @@
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item :icon="InfoFilled" @click="showScheduledDetails(row)">详情</el-dropdown-item>
-                  <el-dropdown-item :icon="VideoPlay" @click="runScheduledNow(row)">立即执行</el-dropdown-item>
-                  <el-dropdown-item :icon="Edit" @click="openEditScheduled(row)">编辑</el-dropdown-item>
-                  <el-dropdown-item v-if="canCopyScheduled(row)" :icon="CopyDocument" @click="copyScheduledTask(row)">复制</el-dropdown-item>
+                  <el-dropdown-item v-if="isDirectMessagingTask(row.taskType)" disabled>私信任务不支持 Cron 计划</el-dropdown-item>
+                  <el-dropdown-item v-if="!isDirectMessagingTask(row.taskType)" :icon="VideoPlay" @click="runScheduledNow(row)">立即执行</el-dropdown-item>
+                  <el-dropdown-item v-if="!isDirectMessagingTask(row.taskType)" :icon="Edit" @click="openEditScheduled(row)">编辑</el-dropdown-item>
+                  <el-dropdown-item v-if="!isDirectMessagingTask(row.taskType) && canCopyScheduled(row)" :icon="CopyDocument" @click="copyScheduledTask(row)">复制</el-dropdown-item>
                   <el-dropdown-item v-if="row.status === 'enabled'" :icon="VideoPause" @click="pauseScheduled(row)">暂停</el-dropdown-item>
                   <el-dropdown-item v-else :icon="VideoPlay" @click="resumeScheduled(row.id)">恢复</el-dropdown-item>
                   <el-dropdown-item divided :icon="Delete" @click="deleteScheduled(row)">删除</el-dropdown-item>
@@ -265,10 +266,11 @@
         <el-form-item label="提交方式">
           <el-radio-group v-model="createDialog.form.mode" @change="onCreateModeChanged">
             <el-radio-button value="once">立即执行</el-radio-button>
-            <el-radio-button value="scheduled" :disabled="!currentCreateDefinition?.canSchedule">Cron 计划</el-radio-button>
+            <el-radio-button value="scheduled" :disabled="!currentCreateDefinition?.canSchedule || isDirectMessagingTask(createDialog.form.taskType)">Cron 计划</el-radio-button>
           </el-radio-group>
         </el-form-item>
-        <el-alert v-if="currentCreateDefinition?.description" :title="currentCreateDefinition.description" type="info" :closable="false" class="mb-3" />
+        <el-alert v-if="isDirectMessagingTask(createDialog.form.taskType) && createDialog.form.mode === 'scheduled'" title="私信任务暂不支持 Cron 计划，请使用立即执行方式。" type="warning" :closable="false" class="mb-3" />
+        <el-alert v-else-if="currentCreateDefinition?.description" :title="currentCreateDefinition.description" type="info" :closable="false" class="mb-3" />
         <el-alert
           v-if="createDialog.sourceTaskId > 0"
           :title="`已复制任务 #${createDialog.sourceTaskId} 的配置；确认后会创建新任务，原任务不会被修改。`"
@@ -451,14 +453,15 @@
             <el-radio-button value="paused">暂停</el-radio-button>
           </el-radio-group>
         </el-form-item>
-        <DirectMessagingTaskConfigForm
+        <el-alert
           v-if="isDirectMessagingTask(editScheduledDialog.form.taskType)"
-          :task-type="editScheduledDialog.form.taskType"
-          :initial-config-json="editScheduledDialog.form.configJson"
-          @draft-changed="onEditScheduledDraftChanged"
+          title="私信任务暂不支持 Cron 计划编辑，请关闭后使用普通任务编辑。"
+          type="warning"
+          :closable="false"
+          class="mb-3"
         />
         <TaskConfigForm
-          v-else-if="hasTaskConfigForm(editScheduledDialog.form.taskType)"
+          v-else-if="!isDirectMessagingTask(editScheduledDialog.form.taskType) && hasTaskConfigForm(editScheduledDialog.form.taskType)"
           :task-type="editScheduledDialog.form.taskType"
           :initial-config-json="editScheduledDialog.form.configJson"
           @draft-changed="onEditScheduledDraftChanged"
@@ -475,7 +478,7 @@
       </el-form>
       <template #footer>
         <el-button :disabled="editScheduledDialog.saving" @click="editScheduledDialog.visible = false">关闭</el-button>
-        <el-button type="primary" :loading="editScheduledDialog.saving" :disabled="isDirectMessagingTask(editScheduledDialog.form.taskType) && !editScheduledDraft.canSubmit" @click="submitEditScheduled">保存计划任务</el-button>
+        <el-button type="primary" :loading="editScheduledDialog.saving" :disabled="isDirectMessagingTask(editScheduledDialog.form.taskType) || (hasTaskConfigForm(editScheduledDialog.form.taskType) && !editScheduledDraft.canSubmit)" @click="submitEditScheduled">保存计划任务</el-button>
       </template>
     </el-dialog>
   </div>
@@ -730,7 +733,7 @@ function canCopyTask(task: BatchTask) {
 }
 
 function canCopyScheduled(task: ScheduledTask) {
-  return canCopyDefinition(task.taskType)
+  return !isDirectMessagingTask(task.taskType) && canCopyDefinition(task.taskType)
 }
 
 function canCopyDefinition(taskType: string) {
@@ -786,7 +789,7 @@ function ensureTaskType() {
   createDialog.value.form.name = ''
   createDialog.value.form.config = ''
   createDialog.value.form.total = defaultTotalForTask(createDialog.value.form.taskType)
-  createDialog.value.form.mode = first?.canSchedule ? createDialog.value.form.mode : 'once'
+  createDialog.value.form.mode = first?.canSchedule && !isDirectMessagingTask(createDialog.value.form.taskType) ? createDialog.value.form.mode : 'once'
   createDraft.value = emptyDraft()
 }
 
@@ -796,7 +799,7 @@ function onTaskTypeChanged() {
   createDialog.value.form.name = ''
   createDialog.value.form.config = ''
   createDialog.value.form.total = defaultTotalForTask(createDialog.value.form.taskType)
-  if (!currentCreateDefinition.value?.canSchedule) createDialog.value.form.mode = 'once'
+  if (!currentCreateDefinition.value?.canSchedule || isDirectMessagingTask(createDialog.value.form.taskType)) createDialog.value.form.mode = 'once'
   createDraft.value = emptyDraft()
 }
 
@@ -819,6 +822,11 @@ async function submitCreate() {
   }
   if (isDirectMessagingTask(form.taskType) && !createDraft.value.canSubmit) {
     ElMessage.warning(createDraft.value.validationError || '请先完善私信任务配置')
+    return
+  }
+  if (form.mode === 'scheduled' && isDirectMessagingTask(form.taskType)) {
+    ElMessage.warning('私信任务暂不支持 Cron 计划，请使用立即执行方式')
+    form.mode = 'once'
     return
   }
   if (currentCreateTarget.value) {
@@ -1100,6 +1108,10 @@ async function copyTask(task: BatchTask) {
 }
 
 async function copyScheduledTask(task: ScheduledTask) {
+  if (isDirectMessagingTask(task.taskType)) {
+    ElMessage.warning('私信任务暂不支持 Cron 计划复制，请使用普通任务复制')
+    return
+  }
   const fullTask = await loadScheduledTaskDetail(task.id, task)
   openCopiedCreateDialog({
     sourceTaskId: fullTask.id,
@@ -1146,6 +1158,10 @@ function openCopiedCreateDialog(draft: {
 }
 
 async function runScheduledNow(task: ScheduledTask) {
+  if (isDirectMessagingTask(task.taskType)) {
+    ElMessage.warning('私信任务暂不支持 Cron 计划执行')
+    return
+  }
   await ElMessageBox.confirm(
     `将立即按“${scheduledName(task)}”的当前配置创建一条执行任务，用于测试 Cron 配置效果。原计划仍会按下次运行时间继续调度，是否继续？`,
     '确认立即执行',
@@ -1174,6 +1190,10 @@ async function deleteScheduled(task: ScheduledTask) {
 }
 
 async function openEditScheduled(task: ScheduledTask) {
+  if (isDirectMessagingTask(task.taskType)) {
+    ElMessage.warning('私信任务暂不支持 Cron 计划编辑，请使用普通任务编辑')
+    return
+  }
   const fullTask = await loadScheduledTaskDetail(task.id, task)
   editScheduledDraft.value = emptyDraft()
   editScheduledDialog.value = {
@@ -1193,6 +1213,10 @@ async function openEditScheduled(task: ScheduledTask) {
 
 async function submitEditScheduled() {
   const dialog = editScheduledDialog.value
+  if (isDirectMessagingTask(dialog.form.taskType)) {
+    ElMessage.warning('私信任务暂不支持 Cron 计划编辑，请使用普通任务编辑')
+    return
+  }
   if (isDirectMessagingTask(dialog.form.taskType) && !editScheduledDraft.value.canSubmit) {
     ElMessage.warning(editScheduledDraft.value.validationError || '请先完善私信任务配置')
     return

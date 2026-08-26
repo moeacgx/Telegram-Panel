@@ -761,16 +761,19 @@ public IEnumerable<ModulePageDefinition> GetPages(ModuleHostContext context)
 ### 宿主任务中心的私信任务（适用宿主 v1.31.76）
 
 `direct_message.live` 和 `direct_message.batch` 在宿主任务中心使用宿主原生
-Element Plus 表单。新建、普通编辑、计划任务编辑和复制都在任务中心完成，主流程不加载
+Element Plus 表单。新建、普通编辑和普通复制都在任务中心完成，主流程不加载
 模块 iframe；模块自带页面仍可以作为明确点击的独立备用入口，但这两个任务类型不应因为
 `CreateRoute` 自动进入 iframe。
 
+当前宿主不支持这两个私信类型的 Cron 创建、计划编辑、计划复制或立即执行；相关入口会被
+任务中心禁用。已有私信计划应先停用，再通过普通任务编辑配置。
+
 #### 四种任务操作使用同一份配置
 
-- **新建任务**：任务定义必须由宿主返回 `canCreate=true`。选择私信类型后，表单读取模块选项，校验通过后提交普通任务或 Cron 计划任务。
+- **新建任务**：任务定义必须由宿主返回 `canCreate=true`。选择私信类型后，表单读取模块选项，校验通过后提交普通任务；当前不创建 Cron 计划任务。
 - **普通编辑**：任务详情中的 `config` 回填到原生表单，保存时更新原任务；不跳转模块页面。
-- **计划编辑**：回填 `configJson`，同时保存名称、Cron 和启停状态。
-- **复制**：读取原任务完整配置，清理已知运行态字段后打开新建表单；原任务不变，仍通过宿主创建接口生成新记录。
+- **计划编辑**：私信类型不开放计划编辑或立即执行；其他可计划任务仍回填 `configJson`，同时保存名称、Cron 和启停状态。
+- **复制**：私信普通任务可复制到新建表单；私信 Cron 计划不开放复制，避免调用宿主不支持的计划接口。原任务不变，仍通过宿主创建接口生成新记录。
 
 同一任务类型编辑或复制时，表单只覆盖自己管理的字段，并透传顶层、`content` 以及
 `messageRules`、`forward`、`todo` 项中的未知字段。切换 `live` 与 `batch` 类型会清空上一类型的
@@ -779,17 +782,17 @@ Element Plus 表单。新建、普通编辑、计划任务编辑和复制都在�
 #### DirectMessagingConfiguration JSON 合同
 
 提交配置必须使用下列 camelCase 字段；表单内部状态名或旧 snake_case 名称不能作为新配置
-合同。`listenerAccountId`/`chats` 只适用于 `live`，`usernames`/`dictionaryKey` 只适用于
+合同。`listenerAccountId`/`chats` 只适用于 `live`，`manualUsernames`/`dictionaryKey` 只适用于
 `batch`。
 
 ```json
 {
   "listenerAccountId": 123,
   "chats": [1001, 1002],
-  "usernames": [],
+  "manualUsernames": [],
   "dictionaryKey": null,
   "senderSource": "Category",
-  "senderCategory": 7,
+  "senderCategory": "营销",
   "senderAccountIds": [],
   "senderMode": "Queue",
   "dedupeDays": 30,
@@ -799,7 +802,7 @@ Element Plus 表单。新建、普通编辑、计划任务编辑和复制都在�
   "content": {
     "action": "MessageRules",
     "messageRules": [
-      { "text": "要发送的文字", "assetId": null }
+      { "text": "要发送的文字", "imageAssetId": null }
     ],
     "forward": [],
     "todo": []
@@ -807,14 +810,18 @@ Element Plus 表单。新建、普通编辑、计划任务编辑和复制都在�
 }
 ```
 
-- `senderSource` 为 `Category` 时填写单个分类 ID `senderCategory`；为 `AccountIds` 时填写
+- `senderSource` 为 `Category` 时，`senderCategory` 必须填写分类名称字符串（例如 `营销`），
+  不能填写分类 ID、数字或数字字符串；宿主下拉框的内部 ID 只用于查找名称。无法把 ID
+  映射到名称时必须阻止提交。`senderSource` 为 `AccountIds` 时填写内部账号 ID 数组
   `senderAccountIds`。`senderMode` 只能是 `Queue` 或 `Random`。
 - `content.action` 只能是 `MessageRules`、`Forward` 或 `Todo`。对应内容分别写入
-  `content.messageRules`、`content.forward` 或 `content.todo`；未选择的数组为空。
-- `messageRules` 为 1～50 条，每条至少包含非空 `text` 或 `assetId`。图片通过上传接口取得
+  `content.messageRules`、`content.forward` 或 `content.todo`；未选择的对象为 `null`。
+- `messageRules` 为 1～50 条，每条至少包含非空 `text` 或 `imageAssetId`。图片通过上传接口取得
   `assetId`，可同时保存模块返回的 `fileName`。
-- 批量手工用户名会去重、去掉输入中的前缀 `@`，每项必须匹配
+- 批量手工用户名（界面词典选项称“用户名词典”）会去重、去掉输入中的前缀 `@`，每项必须匹配
   `^[A-Za-z][A-Za-z0-9_]{4,31}$`，最多 10000 条；任务总数为去重用户名数加所选词典的可用条目数。
+- `content.forward` 使用 `messageLink` 或 `sourceDictionaryKey` 二选一；`content.todo` 使用
+  `title`、`items`、`othersCanAppend` 和 `complete`。
 
 风控字段的默认值和边界如下：
 
@@ -837,10 +844,18 @@ Element Plus 表单。新建、普通编辑、计划任务编辑和复制都在�
 - `GET /api/panel/extensions/direct-messaging/accounts/{id}/groups`：按监听账号读取可选群组；切换账号会重新加载并清空旧选择。
 - `POST /api/panel/extensions/direct-messaging/assets`：以 `multipart/form-data` 的 `file` 字段上传图片；成功响应至少返回 `assetId`，可选返回 `fileName`。
 
+`options` 返回的账号保留 `id`、`telegramUserId`、`label`、`categoryId`，并提供
+`displayNumber`、`nickname`、`username`、`displayPhone`、`categoryName` 和 `isActive`。
+候选账号只包含 `isActive=true`；`TelegramStatusOk` 是连接状态，不参与筛选。
+
 任一必需读取或上传接口失败时，表单显示错误并发出 `draft-changed.canSubmit=false`；
-新建、编辑和计划编辑的保存按钮同时禁用，不能继续发送任务创建/更新请求。出现 401/403
+新建和普通编辑的保存按钮同时禁用，不能继续发送任务创建/更新请求。私信类型不提供
+计划编辑保存入口。出现 401/403
 先重新登录并检查管理员权限；404 通常表示模块未安装、未启用或接口版本不匹配；422/400
 应按返回的字段校验错误修正配置。
+
+`POST/PATCH /api/panel/tasks` 在模块生命周期校验失败时返回 4xx。JSON 解析错误（尤其数字
+`senderCategory`）会转成包含字段名和“配置校验失败”的明确错误，不再冒泡为 HTTP 500。
 
 #### 三张任务表和故障回退
 
