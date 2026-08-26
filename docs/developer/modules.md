@@ -795,8 +795,8 @@ Element Plus 表单。新建、普通编辑和普通复制都在任务中心完�
   "senderCategory": "营销",
   "senderAccountIds": [],
   "senderMode": "Queue",
-  "dedupeDays": 30,
-  "dedupeScope": "Global",
+  "dedupeDays": 3,
+  "dedupeScope": "Task",
   "cooldownSeconds": 60,
   "rolling24h": 20,
   "content": {
@@ -827,13 +827,31 @@ Element Plus 表单。新建、普通编辑和普通复制都在任务中心完�
 
 | 字段 | 默认值 | 允许范围 |
 | --- | ---: | --- |
-| `dedupeDays` | `30` | 整数 `0..3650` |
-| `dedupeScope` | `Global` | `Global` 或 `Task` |
+| `dedupeDays` | `3` | 整数 `0..3650`；`0` 表示不去重 |
+| `dedupeScope` | `Task` | `Task`（当前任务）或 `Global`（本模块全部任务） |
 | `cooldownSeconds` | `60` | 整数 `0..86400` |
 | `rolling24h` | `20` | 整数 `1..1000`，`0` 不表示不限 |
 
 表单在回填和提交前都会截断小数并夹紧到上述范围。未知字段保留原值，只有用户实际管理
 的字段会被覆盖。
+
+`direct_message.live` 与 `direct_message.batch` 的“不去重”开关不新增 JSON 字段或枚举：开启时
+仅提交 `dedupeDays=0`，保留当前 `dedupeScope`；回填旧配置的 `dedupeDays=0` 会自动开启该开关。
+关闭后恢复本次编辑中最后一个正数天数，未设置过正数时恢复默认值 `3`。`cooldownSeconds` 与
+`rolling24h` 不受该开关影响。
+
+去重执行由私信模块负责：宿主原生表单只是任务创建接口的配置承载层，不在宿主侧查询发送记录。
+新建任务默认使用 `dedupeScope=Task`，因此同一用户在不同任务之间不会因为历史成功记录被拦截；
+选择 `Global` 才会在模块全部任务之间共享去重窗口。已有任务的范围不会被自动改写。
+
+模块 `1.0.2` 的失败处理以单个目标为边界：发送账号与目标或转发来源的确定组合失败会记录失败
+账本并在同一轮改用其他发送账号；全部组合耗尽时只把当前目标标记为 `failed`，继续后续目标。
+用户名失效等目标永久错误也只跳过当前目标。最终 RPC 结果未知时，操作和目标会同时进入
+`uncertain`，当前目标不换号重发，但同轮其他目标继续处理；批量普通队列排空后才暂停等待人工
+裁决，实时任务继续监听。只有整个发送账号池永久隔离或缺少必要发送能力时才暂停整项任务。
+
+切换 `content.action` 时，宿主会在 DOM 更新后合并一次草稿校验结果；私信新建弹窗的正文区域
+保持稳定高度和滚动条宽度，Todo 校验提示不能触发反复的弹窗高度重算。
 
 #### API 前置条件与失败行为
 

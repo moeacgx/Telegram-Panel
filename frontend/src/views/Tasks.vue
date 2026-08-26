@@ -219,7 +219,13 @@
       </div>
     </el-card>
 
-    <el-dialog v-model="createDialog.visible" title="新建任务" width="min(760px, calc(100vw - 24px))" destroy-on-close class="task-dialog">
+    <el-dialog
+      v-model="createDialog.visible"
+      title="新建任务"
+      width="min(760px, calc(100vw - 24px))"
+      destroy-on-close
+      :class="['task-dialog', { 'direct-messaging-task-dialog': isDirectMessagingTask(createDialog.form.taskType) }]"
+    >
       <el-alert
         title="立即执行会创建一条后台执行记录；Cron 计划会按面板时区持续调度，并自动加入随机延迟避免多个计划任务整点同时启动。"
         type="info"
@@ -377,7 +383,13 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="editTaskDialog.visible" :title="`编辑任务 #${editTaskDialog.id}`" width="min(760px, calc(100vw - 24px))" destroy-on-close class="task-dialog">
+    <el-dialog
+      v-model="editTaskDialog.visible"
+      :title="`编辑任务 #${editTaskDialog.id}`"
+      width="min(760px, calc(100vw - 24px))"
+      destroy-on-close
+      :class="['task-dialog', { 'direct-messaging-task-dialog': isDirectMessagingTask(editTaskDialog.form.taskType) }]"
+    >
       <el-alert
         title="编辑会更新当前任务配置；若任务已完成或失败，可保存后使用重跑创建新任务。"
         type="info"
@@ -429,7 +441,7 @@
       :title="'编辑计划任务：' + (editScheduledDialog.form.name || '#' + editScheduledDialog.id)"
       width="min(760px, calc(100vw - 24px))"
       destroy-on-close
-      class="task-dialog"
+      :class="['task-dialog', { 'direct-messaging-task-dialog': isDirectMessagingTask(editScheduledDialog.form.taskType) }]"
     >
       <el-alert :title="`Cron 按面板时区解析：${timeZoneId || 'UTC'}。保存后会重新计算下次运行时间，并加入随机延迟避免整点并发。`" type="info" :closable="false" class="mb-3" />
       <el-form :label-position="isTaskDialogCompact ? 'top' : 'right'" :label-width="isTaskDialogCompact ? 'auto' : '96px'">
@@ -962,17 +974,17 @@ function emptyDraft(): TaskConfigDraft {
 
 function onCreateDraftChanged(draft: TaskConfigDraft) {
   createDraft.value = draft
-  createDialog.value.form.total = draft.total
+  if (createDialog.value.form.total !== draft.total) createDialog.value.form.total = draft.total
 }
 
 function onEditDraftChanged(draft: TaskConfigDraft) {
   editDraft.value = draft
-  editTaskDialog.value.form.total = draft.total
+  if (editTaskDialog.value.form.total !== draft.total) editTaskDialog.value.form.total = draft.total
 }
 
 function onEditScheduledDraftChanged(draft: TaskConfigDraft) {
   editScheduledDraft.value = draft
-  editScheduledDialog.value.form.total = draft.total
+  if (editScheduledDialog.value.form.total !== draft.total) editScheduledDialog.value.form.total = draft.total
 }
 
 async function pauseTask(id: number) {
@@ -1962,6 +1974,19 @@ onUnmounted(() => {
 
 :global(.task-dialog .el-dialog__footer) {
   flex: 0 0 auto;
+}
+
+/* 私信表单切换内容方式时保持正文高度和滚动条宽度稳定，避免校验提示触发布局抖动。 */
+:global(.task-dialog.direct-messaging-task-dialog) {
+  height: min(820px, calc(100vh - 24px));
+  margin: max(12px, calc((100vh - 820px) / 2)) auto;
+}
+
+:global(.task-dialog.direct-messaging-task-dialog .el-dialog__body) {
+  min-height: 0;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 @media (max-width: 640px) {

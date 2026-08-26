@@ -140,10 +140,27 @@
       <div class="form-hint no-offset">按原生清单对象提交给模块执行器。</div>
     </el-form-item>
 
+    <el-form-item label="不去重">
+      <el-switch
+        v-model="form.dedupeDisabled"
+        active-text="开启"
+        inactive-text="关闭"
+        aria-label="不去重"
+        @change="onDedupeDisabledChanged"
+      />
+      <div class="form-hint no-offset">开启后不检查历史发送记录；保留去重范围设置，冷却和滚动上限仍然生效。</div>
+    </el-form-item>
+
     <el-row :gutter="12">
       <el-col :xs="24" :sm="8">
         <el-form-item label="去重天数">
-          <el-input-number v-model="form.dedupDays" :min="0" :max="3650" class="full" />
+          <el-input-number
+            v-model="form.dedupDays"
+            :min="form.dedupeDisabled ? 0 : 1"
+            :max="3650"
+            :disabled="form.dedupeDisabled"
+            class="full"
+          />
         </el-form-item>
       </el-col>
       <el-col :xs="24" :sm="8">
@@ -228,6 +245,7 @@ interface DirectMessagingForm {
   todoText: string
   todoOthersCanAppend: boolean
   todoComplete: boolean
+  dedupeDisabled: boolean
   dedupDays: number
   dedupeScope: DedupeScope
   cooldownSeconds: number
@@ -258,6 +276,7 @@ const groups = ref<SelectOption[]>([])
 const textDictionaries = ref<DictionaryOption[]>([])
 const form = reactive<DirectMessagingForm>(defaultForm())
 const draft = reactive<TaskConfigDraft>(invalidDraft('配置加载中'))
+const lastPositiveDedupeDays = ref(3)
 const rawInitialConfig = ref<Record<string, unknown>>({})
 const pendingSenderCategoryName = ref('')
 const initialConfigError = ref('')
@@ -292,7 +311,17 @@ watch(
   { immediate: true },
 )
 
-watch(form, pushDraft, { deep: true })
+// 内容方式切换会同时更新校验提示和表单区块；等 DOM 完成切换后再向宿主回写草稿，避免同步布局反馈。
+watch(form, pushDraft, { deep: true, flush: 'post' })
+
+watch(
+  () => form.dedupDays,
+  (days) => {
+    if (!form.dedupeDisabled && days > 0) {
+      lastPositiveDedupeDays.value = clampInteger(days, 3, 1, 3650)
+    }
+  },
+)
 
 watch(
   () => form.senderSource,
@@ -384,6 +413,7 @@ async function loadGroups(accountId: number) {
 
 function resetForm() {
   Object.assign(form, defaultForm())
+  lastPositiveDedupeDays.value = 3
   rawInitialConfig.value = {}
   pendingSenderCategoryName.value = ''
   initialConfigError.value = ''
@@ -442,7 +472,10 @@ function applyInitialConfig() {
       : stringList(todoValue).join('\n')
     form.todoOthersCanAppend = todoRecord?.othersCanAppend === true
     form.todoComplete = todoRecord?.complete === true
-    form.dedupDays = clampInteger(readValue(config, 'dedupeDays', 'dedup_days', 'dedupDays'), 30, 0, 3650)
+    const dedupeDays = clampInteger(readValue(config, 'dedupeDays', 'dedup_days', 'dedupDays'), 3, 0, 3650)
+    form.dedupeDisabled = dedupeDays === 0
+    if (dedupeDays > 0) lastPositiveDedupeDays.value = dedupeDays
+    form.dedupDays = dedupeDays
     form.dedupeScope = normalizeDedupeScope(readValue(config, 'dedupeScope', 'dedup_scope', 'dedupScope'))
     form.cooldownSeconds = clampInteger(readValue(config, 'cooldownSeconds', 'cooldown_seconds'), 60, 0, 86400)
     form.rolling24h = clampInteger(readValue(config, 'rolling24h', 'max_messages_per_24_hours', 'maxMessagesPer24Hours', 'rolling_24h_limit'), 20, 1, 1000)
@@ -458,8 +491,16 @@ function pushDraft() {
   } catch (error) {
     next = invalidDraft(error instanceof Error ? error.message : '私信任务配置无效')
   }
+  if (sameDraft(draft, next)) return
   Object.assign(draft, next)
   emit('draft-changed', { ...next })
+}
+
+function sameDraft(current: TaskConfigDraft, next: TaskConfigDraft) {
+  return current.total === next.total
+    && current.config === next.config
+    && current.canSubmit === next.canSubmit
+    && current.validationError === next.validationError
 }
 
 function buildDraft(): TaskConfigDraft {
@@ -520,7 +561,9 @@ function buildDraft(): TaskConfigDraft {
     return invalidDraft('请填写清单标题和至少一条原生清单内容')
   }
 
-  const dedupeDays = clampInteger(form.dedupDays, 30, 0, 3650)
+  const dedupeDays = form.dedupeDisabled
+    ? 0
+    : clampInteger(form.dedupDays, lastPositiveDedupeDays.value || 3, 1, 3650)
   const cooldownSeconds = clampInteger(form.cooldownSeconds, 60, 0, 86400)
   const rolling24h = clampInteger(form.rolling24h, 20, 1, 1000)
   const rawConfig = cloneRecord(rawInitialConfig.value)
@@ -568,6 +611,17 @@ function buildDraft(): TaskConfigDraft {
 
 function addRule() {
   if (form.messageRules.length < 50) form.messageRules.push(newRule())
+}
+
+function onDedupeDisabledChanged(disabled: boolean | string | number) {
+  if (disabled === true) {
+    const currentDays = clampInteger(form.dedupDays, lastPositiveDedupeDays.value || 3, 0, 3650)
+    if (currentDays > 0) lastPositiveDedupeDays.value = currentDays
+    form.dedupDays = 0
+    return
+  }
+
+  form.dedupDays = clampInteger(lastPositiveDedupeDays.value, 3, 1, 3650)
 }
 
 function removeRule(index: number) {
@@ -624,8 +678,9 @@ function defaultForm(): DirectMessagingForm {
     todoText: '',
     todoOthersCanAppend: false,
     todoComplete: false,
-    dedupDays: 30,
-    dedupeScope: 'Global',
+    dedupeDisabled: false,
+    dedupDays: 3,
+    dedupeScope: 'Task',
     cooldownSeconds: 60,
     rolling24h: 20,
   }
@@ -937,7 +992,7 @@ function normalizeContentAction(value: unknown): ContentAction {
 }
 
 function normalizeDedupeScope(value: unknown): DedupeScope {
-  return value === 'Task' || value === 'task' || value === 'target' || value === 'sender' ? 'Task' : 'Global'
+  return value === 'Global' || value === 'global' ? 'Global' : 'Task'
 }
 
 function categoryNameValue(value: unknown): string {
