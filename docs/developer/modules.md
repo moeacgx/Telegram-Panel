@@ -758,6 +758,105 @@ public IEnumerable<ModulePageDefinition> GetPages(ModuleHostContext context)
 - 适用宿主前端已包含 Fragment 任务中心表单且已安装 Fragment 模块 1.2.9+ 时，`fragment_username_monitor` 可以直接在「任务中心」新建、编辑和保存配置；任务中心不再因为该任务的 `CreateRoute` 自动跳到模块静态页，模块页 `/ext/fragment-username-checker/main` 只作为独立入口保留。
 - 如果线上仍看到旧 Razor 页面，通常是生产环境还装着旧 `.tpm`，或模块加载失败后回滚到了 `LastGoodVersion`。
 
+### 宿主任务中心的私信任务（适用宿主 v1.31.76）
+
+`direct_message.live` 和 `direct_message.batch` 在宿主任务中心使用宿主原生
+Element Plus 表单。新建、普通编辑、计划任务编辑和复制都在任务中心完成，主流程不加载
+模块 iframe；模块自带页面仍可以作为明确点击的独立备用入口，但这两个任务类型不应因为
+`CreateRoute` 自动进入 iframe。
+
+#### 四种任务操作使用同一份配置
+
+- **新建任务**：任务定义必须由宿主返回 `canCreate=true`。选择私信类型后，表单读取模块选项，校验通过后提交普通任务或 Cron 计划任务。
+- **普通编辑**：任务详情中的 `config` 回填到原生表单，保存时更新原任务；不跳转模块页面。
+- **计划编辑**：回填 `configJson`，同时保存名称、Cron 和启停状态。
+- **复制**：读取原任务完整配置，清理已知运行态字段后打开新建表单；原任务不变，仍通过宿主创建接口生成新记录。
+
+同一任务类型编辑或复制时，表单只覆盖自己管理的字段，并透传顶层、`content` 以及
+`messageRules`、`forward`、`todo` 项中的未知字段。切换 `live` 与 `batch` 类型会清空上一类型的
+专用字段，避免把监听群组带入批量用户名任务，或反之。
+
+#### DirectMessagingConfiguration JSON 合同
+
+提交配置必须使用下列 camelCase 字段；表单内部状态名或旧 snake_case 名称不能作为新配置
+合同。`listenerAccountId`/`chats` 只适用于 `live`，`usernames`/`dictionaryKey` 只适用于
+`batch`。
+
+```json
+{
+  "listenerAccountId": 123,
+  "chats": [1001, 1002],
+  "usernames": [],
+  "dictionaryKey": null,
+  "senderSource": "Category",
+  "senderCategory": 7,
+  "senderAccountIds": [],
+  "senderMode": "Queue",
+  "dedupeDays": 30,
+  "dedupeScope": "Global",
+  "cooldownSeconds": 60,
+  "rolling24h": 20,
+  "content": {
+    "action": "MessageRules",
+    "messageRules": [
+      { "text": "要发送的文字", "assetId": null }
+    ],
+    "forward": [],
+    "todo": []
+  }
+}
+```
+
+- `senderSource` 为 `Category` 时填写单个分类 ID `senderCategory`；为 `AccountIds` 时填写
+  `senderAccountIds`。`senderMode` 只能是 `Queue` 或 `Random`。
+- `content.action` 只能是 `MessageRules`、`Forward` 或 `Todo`。对应内容分别写入
+  `content.messageRules`、`content.forward` 或 `content.todo`；未选择的数组为空。
+- `messageRules` 为 1～50 条，每条至少包含非空 `text` 或 `assetId`。图片通过上传接口取得
+  `assetId`，可同时保存模块返回的 `fileName`。
+- 批量手工用户名会去重、去掉输入中的前缀 `@`，每项必须匹配
+  `^[A-Za-z][A-Za-z0-9_]{4,31}$`，最多 10000 条；任务总数为去重用户名数加所选词典的可用条目数。
+
+风控字段的默认值和边界如下：
+
+| 字段 | 默认值 | 允许范围 |
+| --- | ---: | --- |
+| `dedupeDays` | `30` | 整数 `0..3650` |
+| `dedupeScope` | `Global` | `Global` 或 `Task` |
+| `cooldownSeconds` | `60` | 整数 `0..86400` |
+| `rolling24h` | `20` | 整数 `1..1000`，`0` 不表示不限 |
+
+表单在回填和提交前都会截断小数并夹紧到上述范围。未知字段保留原值，只有用户实际管理
+的字段会被覆盖。
+
+#### API 前置条件与失败行为
+
+宿主后台登录有效、私信模块已安装并启用、任务定义可创建，且模块接口可访问时，表单才
+允许提交。接口路径为：
+
+- `GET /api/panel/extensions/direct-messaging/options`：读取监听/发送账号、账号分类和文本词典选项。
+- `GET /api/panel/extensions/direct-messaging/accounts/{id}/groups`：按监听账号读取可选群组；切换账号会重新加载并清空旧选择。
+- `POST /api/panel/extensions/direct-messaging/assets`：以 `multipart/form-data` 的 `file` 字段上传图片；成功响应至少返回 `assetId`，可选返回 `fileName`。
+
+任一必需读取或上传接口失败时，表单显示错误并发出 `draft-changed.canSubmit=false`；
+新建、编辑和计划编辑的保存按钮同时禁用，不能继续发送任务创建/更新请求。出现 401/403
+先重新登录并检查管理员权限；404 通常表示模块未安装、未启用或接口版本不匹配；422/400
+应按返回的字段校验错误修正配置。
+
+#### 三张任务表和故障回退
+
+计划任务、执行中任务、历史任务的每行都使用一个“操作”按钮，点击后展开详情、编辑、复制、
+暂停/恢复、取消、重跑或删除等原有动作；动作仍按状态和能力条件显示，按钮可用键盘到达，
+窄屏下不会恢复并列图标溢出布局。
+
+如果任务类型不出现，先在「模块管理」确认模块已安装、启用且宿主版本范围包含 `1.31.76`，
+再检查任务定义接口中的 `canCreate` 和执行器唯一性。模块加载失败时宿主可回到
+`LastGoodVersion`，否则会自动禁用模块；修复或安装兼容 `.tpm` 后按模块管理提示重启服务。
+
+回滚或禁用前先暂停/取消正在运行的私信任务并备份任务 JSON。随后停用模块或切换到上一份
+`LastGoodVersion`，重启后确认任务类型已隐藏、已有任务保持暂停且没有新的提交请求。该宿主
+原生表单改动不需要数据库迁移；恢复到 `v1.31.76` 或兼容版本后可继续使用原配置。若模块
+接口仍失败，保留独立模块页面仅用于诊断，不要在任务中心强行提交。
+
 ## 旧版 UI 模块项目模板（Razor 组件，兼容模式）
 
 如果你的模块已经有旧页面，或暂时没有对应的 Vue 原生页面，仍可以通过 `IModuleUiProvider.GetPages` 提供兼容 Razor 页面。此时可以把模块做成 `Microsoft.NET.Sdk.Razor` 项目（类似 Razor Class Library），例如：
