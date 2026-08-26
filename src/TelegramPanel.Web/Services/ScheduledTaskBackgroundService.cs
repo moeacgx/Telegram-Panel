@@ -1,5 +1,7 @@
 using TelegramPanel.Core.Services;
 using TelegramPanel.Data.Entities;
+using TelegramPanel.Modules;
+using TelegramPanel.Web.Modules;
 
 namespace TelegramPanel.Web.Services;
 
@@ -47,6 +49,7 @@ public sealed class ScheduledTaskBackgroundService : BackgroundService
         using var scope = _scopeFactory.CreateScope();
         var scheduledTaskService = scope.ServiceProvider.GetRequiredService<ScheduledTaskService>();
         var batchTaskManagement = scope.ServiceProvider.GetRequiredService<BatchTaskManagementService>();
+        var contributions = scope.ServiceProvider.GetRequiredService<ModuleContributionRegistry>();
 
         var enabledTasks = await scheduledTaskService.GetEnabledAsync(cancellationToken);
         if (enabledTasks.Count == 0)
@@ -56,6 +59,21 @@ public sealed class ScheduledTaskBackgroundService : BackgroundService
         foreach (var scheduledTask in enabledTasks)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            if (!contributions.TaskTypeToDefinition.TryGetValue(scheduledTask.TaskType, out var registered)
+                || !registered.Module.BuiltIn
+                || !string.Equals(
+                    registered.Definition.ExecutionKind,
+                    ModuleTaskExecutionKinds.Batch,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                await scheduledTaskService.PauseAsync(scheduledTask.Id, cancellationToken);
+                _logger.LogWarning(
+                    "Paused schedule without a built-in batch owner: schedule={ScheduledTaskId}, taskType={TaskType}",
+                    scheduledTask.Id,
+                    scheduledTask.TaskType);
+                continue;
+            }
 
             var nextRunAtUtc = scheduledTask.NextRunAtUtc;
             if (!nextRunAtUtc.HasValue)
@@ -70,7 +88,7 @@ public sealed class ScheduledTaskBackgroundService : BackgroundService
             if (scheduledTask.LastBatchTaskId.HasValue)
             {
                 var lastBatchTask = await batchTaskManagement.GetTaskAsync(scheduledTask.LastBatchTaskId.Value);
-                if (lastBatchTask != null && lastBatchTask.Status is "pending" or "running" or "paused")
+                if (lastBatchTask != null && lastBatchTask.Status is "pending" or "running" or "pausing" or "paused")
                 {
                     _logger.LogInformation(
                         "计划任务 {ScheduledTaskName}（{ScheduledTaskId}）上次执行尚未结束，本轮跳过",
@@ -85,6 +103,8 @@ public sealed class ScheduledTaskBackgroundService : BackgroundService
             {
                 Name = NormalizeBatchTaskName(scheduledTask.Name),
                 TaskType = scheduledTask.TaskType,
+                OwnerModuleId = registered.Module.Id,
+                ExecutionKind = registered.Definition.ExecutionKind,
                 Total = Math.Max(0, scheduledTask.Total),
                 Completed = 0,
                 Failed = 0,

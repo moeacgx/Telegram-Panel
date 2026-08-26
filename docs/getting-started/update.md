@@ -6,6 +6,12 @@
 
 Cloudflare R2 预签名 `PUT` URL 若返回 `Missing x-amz-content-sha256`，升级到包含该修复的版本后重试；面板会对 R2 上传自动发送 `x-amz-content-sha256: UNSIGNED-PAYLOAD`。
 
+## 升级到 1.31.76 的持久模块任务合同
+
+需要使用 `IModulePersistentTaskExecutionHost.DeferAsync`、`CompleteAsync` 或 `IModuleTaskLifecycleHandler.CommitUpsertAsync` 的外部模块，宿主最低版本为 `1.31.76`。升级前备份主数据库和模块数据目录；启动后确认迁移 `20260826093000_AddBatchTaskNextEligibleAt` 已应用，数据库存在 `IX_BatchTasks_ExecutionKind_Status_NextEligibleAtUtc`，任务中心可创建对应模块任务，延后任务在 `nextEligibleAtUtc` 到期前保持等待且不占执行槽。新建任务应直接返回 `pending`，若出现 `initializing_failed` 或 `updating_failed`，检查模块生命周期处理器日志后删除失败记录并重建任务。
+
+若启动时迁移失败，保留日志并恢复升级前数据库和镜像，不要手工修改 `__EFMigrationsHistory`。需要回滚到 `1.31.75` 时，先暂停并删除依赖新合同的持久任务、备份模块库，再恢复升级前数据库快照；旧宿主不会识别这些新增执行方法。
+
 <a id="bucket-backup-restore"></a>
 
 ## 从存储桶备份恢复

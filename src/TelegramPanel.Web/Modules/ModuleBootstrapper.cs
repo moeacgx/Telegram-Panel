@@ -142,7 +142,8 @@ public static class ModuleBootstrapper
         // 贡献注册表（任务/API/UI 元数据）：启动时固化一次，启用/停用通常需要重启
         services.AddSingleton(sp => new ModuleContributionRegistry(
             sp.GetRequiredService<ModuleRegistry>(),
-            sp.GetRequiredService<ILogger<ModuleContributionRegistry>>()));
+            sp.GetRequiredService<ILogger<ModuleContributionRegistry>>(),
+            sp));
     }
 
     private static void TryConfigureAndRegister(
@@ -159,7 +160,7 @@ public static class ModuleBootstrapper
     {
         try
         {
-            module.ConfigureServices(services, context);
+            ConfigureServicesAtomically(module, services, context);
         }
         catch (Exception ex)
         {
@@ -168,6 +169,25 @@ public static class ModuleBootstrapper
         }
 
         registry.Add(new LoadedModule(id, version, builtIn, module, context, manifest, moduleRootPath));
+    }
+
+    internal static void ConfigureServicesAtomically(
+        ITelegramPanelModule module,
+        IServiceCollection services,
+        ModuleHostContext context)
+    {
+        var serviceSnapshot = services.ToArray();
+        try
+        {
+            module.ConfigureServices(services, context);
+        }
+        catch
+        {
+            services.Clear();
+            foreach (var descriptor in serviceSnapshot)
+                services.Add(descriptor);
+            throw;
+        }
     }
 
     private static void EnsureBuiltInModules(ModuleState state, BuiltInModuleCatalog builtInCatalog, string hostVersion)

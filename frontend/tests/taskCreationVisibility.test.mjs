@@ -7,12 +7,10 @@ const taskConfigFormSource = await readFile(new URL('../src/components/TaskConfi
 const accountsSource = await readFile(new URL('../src/views/Accounts.vue', import.meta.url), 'utf8')
 const typesSource = await readFile(new URL('../src/api/types.ts', import.meta.url), 'utf8')
 
-test('新建任务展示宿主前端支持的专用表单任务类型', () => {
+test('新建任务只展示后端允许创建的任务类型', () => {
   assert.match(typesSource, /canCreate:\s*boolean/)
-  assert.match(
-    tasksSource,
-    /definitions\.value\.filter\(\(x\) => hasTaskConfigForm\(x\.taskType\) && \(x\.canCreate \|\| x\.category !== 'system'\)\)/,
-  )
+  assert.match(tasksSource, /definitions\.value\.filter\(\(x\) => x\.canCreate\)/)
+  assert.doesNotMatch(tasksSource, /x\.canCreate \|\| x\.category !== 'system'/)
   assert.match(tasksSource, /taskCenterCreateDefinitions\.value\.map/)
   assert.match(tasksSource, /taskCenterCreateDefinitions\.value\s*\.filter/)
 })
@@ -30,7 +28,7 @@ test('Fragment 用户名监控在任务中心使用独立配置表单', () => {
 
 test('独立模块任务编辑时携带任务 ID 返回模块页面', () => {
   assert.match(tasksSource, /resolveCreateTarget\(def\)/)
-  assert.match(tasksSource, /taskId=\$\{encodeURIComponent\(String\(task\.id\)\)\}/)
+  assert.match(tasksSource, /taskId=\$\{encodeURIComponent\(String\(task\.id\)\)\}&mode=edit/)
   assert.match(tasksSource, /withModulePageMode\(routeWithTaskId, false\)/)
 })
 
@@ -80,7 +78,7 @@ test('账号详情展示登录邮箱状态', () => {
 test('待执行或执行中任务编辑前必须经过暂停屏障', () => {
   assert.match(
     tasksSource,
-    /return !\['pending', 'running'\]\.includes\(status\) \|\| def\.autoPauseBeforeEdit/,
+    /if \(status === 'paused'\) return true[\s\S]*?return \(status === 'pending' \|\| status === 'running'\) && def\.autoPauseBeforeEdit/,
   )
 
   const editStart = tasksSource.indexOf("  if (status === 'pending' || status === 'running') {")
@@ -96,6 +94,23 @@ test('待执行或执行中任务编辑前必须经过暂停屏障', () => {
   const pauseIndex = editBlock.indexOf('await panelApi.pauseTask(task.id)')
   const reloadIndex = editBlock.indexOf('await load()')
   assert.ok(confirmIndex < pauseIndex && pauseIndex < reloadIndex, '暂停屏障调用顺序必须为确认、暂停、刷新')
+})
+
+test('常驻任务使用后端执行通道、停止中状态和服务端重跑合同', () => {
+  assert.match(typesSource, /executionKind:\s*'batch' \| 'persistent' \| string/)
+  assert.match(typesSource, /requiresAttention:\s*boolean/)
+  assert.match(typesSource, /nextEligibleAtUtc\?:\s*string \| null/)
+  assert.match(typesSource, /canSchedule:\s*boolean/)
+  assert.match(tasksSource, /return task\.executionKind === 'persistent'/)
+  assert.match(tasksSource, /status === 'pausing'/)
+  assert.match(tasksSource, /status === 'initializing'\) return '正在初始化'/)
+  assert.match(tasksSource, /status === 'updating'\) return '正在提交配置'/)
+  assert.match(tasksSource, /下次领取时间/)
+  assert.match(tasksSource, /row\.requiresAttention/)
+  assert.match(tasksSource, /row\.runtimeMessage/)
+  assert.match(tasksSource, /await panelApi\.rerunTask\(task\.id\)/)
+  assert.match(tasksSource, /:disabled="!currentCreateDefinition\?\.canSchedule"/)
+  assert.doesNotMatch(tasksSource, /async function rerunTask[\s\S]*?await panelApi\.createTask\(/)
 })
 
 test('账号持续活跃支持回复消息与转发来源配置', () => {
@@ -157,7 +172,7 @@ test('新建和编辑即时任务支持自定义任务名称', () => {
   assert.match(tasksSource, /name:\s*taskDisplayName \|\| null/)
   assert.match(tasksSource, /name:\s*fullTask\.name\?\.trim\(\) \|\| ''/)
   assert.match(tasksSource, /name:\s*dialog\.form\.name\.trim\(\)/)
-  assert.match(tasksSource, /name:\s*fullTask\.name\?\.trim\(\) \|\| null/)
+  assert.match(tasksSource, /const created = await panelApi\.rerunTask\(task\.id\)/)
 })
 
 test('任务账号来源只能在分类和编号之间二选一', () => {

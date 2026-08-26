@@ -11,6 +11,7 @@ const label = computed(() => {
   switch (props.status) {
     case 'pending': return '等待中'
     case 'running': return '执行中'
+    case 'pausing': return '停止中'
     case 'paused': return '已暂停'
     case 'completed': return '已完成'
     case 'failed': return '失败'
@@ -23,6 +24,7 @@ const label = computed(() => {
 const type = computed(() => {
   switch (props.status) {
     case 'running': return 'primary'
+    case 'pausing': return 'warning'
     case 'completed': return 'success'
     case 'failed': return 'danger'
     case 'paused': return 'warning'

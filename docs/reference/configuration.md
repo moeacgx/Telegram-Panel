@@ -152,6 +152,12 @@ Docker 下常用环境变量（见 `docker-compose.yml`）：
 `Batch task runner started` 与后续任务启动记录。回滚到旧版前无需迁移数据，但旧版执行器可能只在启动时读取
 并发值，调整后需要重启面板才会生效。
 
+### 模块常驻任务执行器
+
+`PersistentModuleTasks:Enabled` 默认 `true`；`PollIntervalSeconds` 默认 `2`，允许 `1-30`；`MaxConcurrent` 默认 `4`，允许 `1-32`。这些任务使用独立并发池，不占用 `BatchTasks:MaxConcurrent`。当前设置页尚不编辑这三个值，需要在本地配置或部署覆盖中设置。
+
+成功判据是启动日志出现 `Persistent module task runner started`，任务行 `ExecutionKind=persistent` 后由常驻通道领取，普通批任务仍能并行运行。任务一直 `pending` 时检查模块是否启用、`OwnerModuleId` 是否匹配、是否恰好注册一个 `IModulePersistentTaskHandler` 和生命周期处理器。回滚前先暂停并删除常驻任务；旧版会忽略配置键，但不会执行这些任务。
+
 ### 群聊活跃任务发送分配
 
 “用户群聊活跃”任务在准备阶段会先过滤停用账号、异常账号、排除批量操作的分类，以及无法解析目标的账号-目标组合。

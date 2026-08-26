@@ -75,6 +75,24 @@ public sealed class BatchTaskBackgroundServiceCancellationTests
         }
     }
 
+    [Fact]
+    public async Task 普通批任务执行器不会领取常驻任务()
+    {
+        using var harness = CreateHarness(taskExecutionKind: ModuleTaskExecutionKinds.Persistent);
+
+        await harness.Service.StartAsync(CancellationToken.None);
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(4));
+            Assert.Equal(0, harness.Handler.CallCount);
+            Assert.Equal("pending", harness.Repository.GetStatus(1));
+        }
+        finally
+        {
+            await harness.Service.StopAsync(CancellationToken.None);
+        }
+    }
+
     private static async Task AssertStoppedBeforeHandlerAsync(bool cancel)
     {
         using var harness = CreateHarness();
@@ -99,7 +117,11 @@ public sealed class BatchTaskBackgroundServiceCancellationTests
         Assert.False(harness.Control.HasActiveExecution(1));
     }
 
-    private static TestHarness CreateHarness(bool handlerWaitsForRelease = false, int initialMaxConcurrent = 1, int taskCount = 1)
+    private static TestHarness CreateHarness(
+        bool handlerWaitsForRelease = false,
+        int initialMaxConcurrent = 1,
+        int taskCount = 1,
+        string taskExecutionKind = ModuleTaskExecutionKinds.Batch)
     {
         var baseOutputPath = Path.Combine(
             Path.GetTempPath(),
@@ -123,6 +145,7 @@ public sealed class BatchTaskBackgroundServiceCancellationTests
             {
                 Id = id,
                 TaskType = "test",
+                ExecutionKind = taskExecutionKind,
                 Status = "pending",
                 Total = 1,
                 CreatedAt = DateTime.UtcNow.AddMilliseconds(id)
@@ -529,6 +552,8 @@ public sealed class BatchTaskBackgroundServiceCancellationTests
         {
             Id = task.Id,
             TaskType = task.TaskType,
+            OwnerModuleId = task.OwnerModuleId,
+            ExecutionKind = task.ExecutionKind,
             Status = task.Status,
             Total = task.Total,
             Completed = task.Completed,

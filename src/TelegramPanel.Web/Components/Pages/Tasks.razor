@@ -1545,7 +1545,21 @@
 
         try
         {
-            var created = await ScheduledTaskManagement.RunNowAsync(task.Id);
+            if (!Contributions.TaskTypeToDefinition.TryGetValue(task.TaskType, out var registered)
+                || !registered.Module.BuiltIn
+                || !string.Equals(
+                    registered.Definition.ExecutionKind,
+                    ModuleTaskExecutionKinds.Batch,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                Snackbar.Add("仅宿主内置批任务可以通过计划任务运行", Severity.Warning);
+                return;
+            }
+
+            var created = await ScheduledTaskManagement.RunNowAsync(
+                task.Id,
+                registered.Module.Id,
+                registered.Definition.ExecutionKind);
             if (created == null)
             {
                 Snackbar.Add("计划任务不存在或已被删除", Severity.Warning);

@@ -154,7 +154,11 @@ public sealed class ScheduledTaskService
         return updated;
     }
 
-    public async Task<BatchTask?> RunNowAsync(int id, CancellationToken cancellationToken = default)
+    public async Task<BatchTask?> RunNowAsync(
+        int id,
+        string ownerModuleId,
+        string executionKind,
+        CancellationToken cancellationToken = default)
     {
         var scheduledTask = await _scheduledTaskRepository.GetByIdAsync(id);
         if (scheduledTask == null)
@@ -163,7 +167,7 @@ public sealed class ScheduledTaskService
         if (scheduledTask.LastBatchTaskId.HasValue)
         {
             var lastBatchTask = await _batchTaskManagement.GetTaskAsync(scheduledTask.LastBatchTaskId.Value);
-            if (lastBatchTask?.Status is "pending" or "running" or "paused")
+            if (lastBatchTask?.Status is "pending" or "running" or "pausing" or "paused")
                 throw new InvalidOperationException("上次执行任务尚未结束，请等待完成或取消后再手动执行");
         }
 
@@ -171,6 +175,8 @@ public sealed class ScheduledTaskService
         {
             Name = NormalizeBatchTaskName(scheduledTask.Name),
             TaskType = scheduledTask.TaskType,
+            OwnerModuleId = ownerModuleId,
+            ExecutionKind = executionKind,
             Total = Math.Max(0, scheduledTask.Total),
             Completed = 0,
             Failed = 0,
