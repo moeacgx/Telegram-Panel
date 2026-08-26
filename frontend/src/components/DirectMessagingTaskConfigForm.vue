@@ -41,7 +41,7 @@
         <el-input v-model="form.manualUsernamesText" type="textarea" :rows="5" placeholder="每行一个用户名，可带或不带 @" />
         <div class="form-hint no-offset">会去重后计入任务总数。</div>
       </el-form-item>
-      <el-form-item label="文本词典">
+      <el-form-item label="用户名词典">
         <el-select v-model="form.dictionaryKey" clearable filterable class="full" placeholder="可选，追加词典内全部用户名">
           <el-option
             v-for="dictionary in textDictionaries"
@@ -50,7 +50,7 @@
             :value="dictionary.key"
           />
         </el-select>
-        <div class="form-hint no-offset">任务总数 = 去重后的手工用户名数 + 词典可用条目数。</div>
+        <div class="form-hint no-offset">任务总数 = 去重后的手工用户名数 + 用户名词典可用条目数。</div>
       </el-form-item>
     </template>
 
@@ -77,19 +77,25 @@
       </el-radio-group>
     </el-form-item>
 
-    <el-form-item label="内容方式">
-      <el-radio-group v-model="form.contentAction">
+<el-form-item label="内容方式">
+  <el-radio-group v-model="form.contentAction">
         <el-radio-button value="MessageRules">文本/图片规则</el-radio-button>
         <el-radio-button value="Forward">原生转发</el-radio-button>
         <el-radio-button value="Todo">原生清单</el-radio-button>
-      </el-radio-group>
-    </el-form-item>
+  </el-radio-group>
+</el-form-item>
+<el-form-item v-if="form.contentAction === 'MessageRules'" label="规则选择方式">
+  <el-radio-group v-model="form.ruleMode">
+    <el-radio-button value="Queue">轮询</el-radio-button>
+    <el-radio-button value="Random">随机</el-radio-button>
+  </el-radio-group>
+</el-form-item>
 
     <template v-if="form.contentAction === 'MessageRules'">
       <div class="message-rule-toolbar">
         <div>
           <strong>文本/图片规则</strong>
-          <div class="form-hint no-offset compact">每条规则可发送文本、图片，或两者组合；最多 50 条。</div>
+  <div class="form-hint no-offset compact">每条规则只能发送文本或图片；最多 50 条。</div>
         </div>
         <el-button type="primary" plain size="small" :icon="Plus" :disabled="form.messageRules.length >= 50" @click="addRule">
           添加规则
@@ -106,23 +112,32 @@
         <el-form-item label="图片">
           <div class="rule-image-actions">
             <el-upload :auto-upload="false" :show-file-list="false" accept="image/*" :disabled="rule.uploading" @change="uploadRuleImage(index, $event)">
-            <el-button :icon="Upload" :loading="rule.uploading">{{ rule.assetId ? '更换图片' : '上传图片' }}</el-button>
-          </el-upload>
+              <el-button :icon="Upload" :loading="rule.uploading">{{ rule.assetId ? '更换图片' : '上传图片' }}</el-button>
+            </el-upload>
             <el-button v-if="rule.assetId" link type="danger" :icon="Delete" @click="clearRuleImage(rule)">移除图片</el-button>
           </div>
           <div v-if="rule.assetId" class="form-hint no-offset">已上传：{{ rule.fileName || rule.assetId }}</div>
+        </el-form-item>
+        <el-form-item label="图片说明">
+          <el-input v-model="rule.caption" maxlength="1024" placeholder="可选，最多 1024 个字符" />
         </el-form-item>
       </div>
     </template>
 
     <el-form-item v-else-if="form.contentAction === 'Forward'" label="原生转发来源">
       <el-input v-model="form.forwardUrlsText" type="textarea" :rows="5" placeholder="每行一个 Telegram 消息链接" />
-      <div class="form-hint no-offset">由 Telegram 原生转发接口发送来源消息。</div>
+      <div class="form-hint no-offset">只能填写一个消息链接；如果使用来源词典，请改填下方词典键。</div>
+    </el-form-item>
+    <el-form-item v-if="form.contentAction === 'Forward'" label="来源词典键">
+      <el-input v-model="form.forwardSourceDictionaryKey" placeholder="可选，与消息链接二选一" />
     </el-form-item>
 
-    <el-form-item v-else label="原生清单">
-      <el-input v-model="form.todoText" type="textarea" :rows="5" placeholder="每行一条原生发送内容或目标项" />
-      <div class="form-hint no-offset">按原生清单顺序提交给模块执行器。</div>
+    <el-form-item v-if="form.contentAction === 'Todo'" label="原生清单">
+      <el-input v-model="form.todoTitle" placeholder="清单标题" />
+      <el-input v-model="form.todoText" type="textarea" :rows="5" placeholder="每行一条清单项" />
+      <el-checkbox v-model="form.todoOthersCanAppend">允许收件人追加</el-checkbox>
+      <el-checkbox v-model="form.todoComplete">允许收件人完成</el-checkbox>
+      <div class="form-hint no-offset">按原生清单对象提交给模块执行器。</div>
     </el-form-item>
 
     <el-row :gutter="12">
@@ -159,6 +174,8 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import type { UploadFile } from 'element-plus'
 import { Delete, Plus, Upload } from '@element-plus/icons-vue'
 import { api, extractApiErrorMessage } from '@/api/client'
+import { panelApi } from '@/api/panel'
+import type { OperationAccount } from '@/api/types'
 import type { TaskConfigDraft } from './TaskConfigForm.vue'
 
 type SenderSource = 'Category' | 'AccountIds'
@@ -173,6 +190,10 @@ interface SelectOption {
   label: string
 }
 
+interface CategoryOption extends SelectOption {
+  name: string
+}
+
 interface DictionaryOption {
   key: string
   label: string
@@ -184,6 +205,7 @@ interface MessageRuleForm {
   text: string
   assetId: string
   fileName: string
+  caption: string
   uploading: boolean
   passthrough: Record<string, unknown>
 }
@@ -198,9 +220,14 @@ interface DirectMessagingForm {
   senderAccountIds: number[]
   senderMode: SenderMode
   contentAction: ContentAction
+  ruleMode: SenderMode
   messageRules: MessageRuleForm[]
   forwardUrlsText: string
+  forwardSourceDictionaryKey: string
+  todoTitle: string
   todoText: string
+  todoOthersCanAppend: boolean
+  todoComplete: boolean
   dedupDays: number
   dedupeScope: DedupeScope
   cooldownSeconds: number
@@ -226,12 +253,15 @@ const optionsError = ref('')
 const groupsError = ref('')
 const assetError = ref('')
 const accounts = ref<SelectOption[]>([])
-const categories = ref<SelectOption[]>([])
+const categories = ref<CategoryOption[]>([])
 const groups = ref<SelectOption[]>([])
 const textDictionaries = ref<DictionaryOption[]>([])
 const form = reactive<DirectMessagingForm>(defaultForm())
 const draft = reactive<TaskConfigDraft>(invalidDraft('配置加载中'))
 const rawInitialConfig = ref<Record<string, unknown>>({})
+const pendingSenderCategoryName = ref('')
+const initialConfigError = ref('')
+const senderCategoryFormatError = ref('')
 
 const isLiveTask = computed(() => props.taskType === 'direct_message.live')
 const isBatchTask = computed(() => props.taskType === 'direct_message.batch')
@@ -253,6 +283,7 @@ watch(
     const taskTypeChanged = !!previous && taskType !== previous[0]
     resetForm()
     if (!taskTypeChanged) applyInitialConfig()
+    resolveSenderCategorySelection()
     if (isLiveTask.value && form.listenerAccountId <= 0 && accounts.value.length > 0) {
       form.listenerAccountId = accounts.value[0].id
     }
@@ -262,6 +293,28 @@ watch(
 )
 
 watch(form, pushDraft, { deep: true })
+
+watch(
+  () => form.senderSource,
+  (source, previousSource) => {
+    if (restoringInitialConfig || source === previousSource) return
+    if (source === 'AccountIds') {
+      form.senderCategory = null
+      pendingSenderCategoryName.value = ''
+      senderCategoryFormatError.value = ''
+    }
+  },
+)
+
+watch(
+  () => form.senderCategory,
+  () => {
+    if (!restoringInitialConfig) {
+      pendingSenderCategoryName.value = ''
+      senderCategoryFormatError.value = ''
+    }
+  },
+)
 
 watch(
   () => form.listenerAccountId,
@@ -279,8 +332,17 @@ async function loadOptions() {
   try {
     const response = await api.get<unknown>('/extensions/direct-messaging/options')
     const payload = response.data
-    accounts.value = normalizeSelectOptions(findArray(payload, ['accounts', 'operationAccounts', 'senderAccounts']), ['displayPhone', 'phone', 'nickname', 'username', 'name'])
-    categories.value = normalizeSelectOptions(findArray(payload, ['accountCategories', 'categories', 'senderCategories']), ['name', 'displayName'])
+    const moduleAccounts = findArray(payload, ['accounts', 'operationAccounts', 'senderAccounts'])
+    let operationAccounts: OperationAccount[] = []
+    try {
+      // 仅用宿主账号接口补齐模块已经返回的账号，不能扩大模块候选池。
+      operationAccounts = await panelApi.operationAccounts()
+    } catch {
+      // 旧宿主或权限不足时保留模块提供的旧 label。
+    }
+    accounts.value = normalizeAccountOptions(moduleAccounts, operationAccounts)
+    categories.value = normalizeCategoryOptions(findArray(payload, ['accountCategories', 'categories', 'senderCategories']))
+    resolveSenderCategorySelection()
     textDictionaries.value = normalizeDictionaryOptions(findArray(payload, ['textDictionaries', 'dictionaries', 'usernameDictionaries']))
     if (isLiveTask.value && form.listenerAccountId <= 0 && accounts.value.length > 0) {
       form.listenerAccountId = accounts.value[0].id
@@ -323,6 +385,9 @@ async function loadGroups(accountId: number) {
 function resetForm() {
   Object.assign(form, defaultForm())
   rawInitialConfig.value = {}
+  pendingSenderCategoryName.value = ''
+  initialConfigError.value = ''
+  senderCategoryFormatError.value = ''
   groups.value = []
   groupsError.value = ''
   assetError.value = ''
@@ -336,6 +401,7 @@ function applyInitialConfig() {
   try {
     config = JSON.parse(raw) as Record<string, unknown>
   } catch {
+    initialConfigError.value = '任务配置 JSON 格式无效，无法安全回填'
     return
   }
 
@@ -349,13 +415,33 @@ function applyInitialConfig() {
     form.manualUsernamesText = stringList(readValue(config, 'usernames', 'manual_usernames', 'manualUsernames')).join('\n')
     form.dictionaryKey = textValue(readValue(config, 'dictionaryKey', 'text_dictionary', 'textDictionary', 'dictionary'))
     form.senderSource = normalizeSenderSource(readValue(config, 'senderSource', 'sender_source_mode', 'senderSourceMode', 'account_source_mode'))
-    form.senderCategory = nullablePositiveNumber(readValue(config, 'senderCategory', 'sender_category') ?? readValue(config, 'sender_category_ids', 'senderCategoryIds', 'category_ids'))
+    const senderCategoryValue = readValue(config, 'senderCategory', 'sender_category') ?? readValue(config, 'sender_category_ids', 'senderCategoryIds', 'category_ids')
+    if (isNumericCategoryValue(senderCategoryValue)) {
+      form.senderCategory = null
+      senderCategoryFormatError.value = 'senderCategory 必须是分类名称字符串，不能使用数字 ID'
+    } else {
+      form.senderCategory = null
+      pendingSenderCategoryName.value = categoryNameValue(senderCategoryValue)
+    }
     form.senderAccountIds = numberList(readValue(config, 'senderAccountIds', 'sender_account_ids', 'account_ids'))
     form.senderMode = normalizeSenderMode(readValue(config, 'senderMode', 'sender_selection_mode', 'senderSelectionMode', 'account_mode'))
     form.contentAction = normalizeContentAction((content ? readValue(content, 'action') : undefined) ?? readValue(config, 'content_mode', 'contentMode', 'message_action_mode'))
+    form.ruleMode = normalizeSenderMode(content ? readValue(content, 'ruleMode') : undefined)
     form.messageRules = readMessageRules((content ? readValue(content, 'messageRules', 'rules') : undefined) ?? readValue(config, 'message_rules', 'messageRules'))
-    form.forwardUrlsText = stringList((content ? readValue(content, 'forward', 'forwardUrls', 'forwardSourceUrls') : undefined) ?? readValue(config, 'forward_source_urls', 'forwardSourceUrls', 'forward_urls')).join('\n')
-    form.todoText = stringList((content ? readValue(content, 'todo', 'todoItems', 'items') : undefined) ?? readValue(config, 'native_list', 'nativeList', 'native_items')).join('\n')
+    const forwardValue = (content ? readValue(content, 'forward', 'forwardUrls', 'forwardSourceUrls') : undefined) ?? readValue(config, 'forward_source_urls', 'forwardSourceUrls', 'forward_urls')
+    const forwardRecord = asRecord(forwardValue)
+    form.forwardUrlsText = forwardRecord
+      ? textValue(readValue(forwardRecord, 'messageLink', 'url', 'link'))
+      : stringList(forwardValue).join('\n')
+    form.forwardSourceDictionaryKey = forwardRecord ? textValue(readValue(forwardRecord, 'sourceDictionaryKey', 'dictionaryKey')) : ''
+    const todoValue = (content ? readValue(content, 'todo', 'todoItems', 'items') : undefined) ?? readValue(config, 'native_list', 'nativeList', 'native_items')
+    const todoRecord = asRecord(todoValue)
+    form.todoTitle = todoRecord ? textValue(readValue(todoRecord, 'title', 'name')) : ''
+    form.todoText = todoRecord
+      ? readTodoItems(todoRecord).map((item) => item.text).join('\n')
+      : stringList(todoValue).join('\n')
+    form.todoOthersCanAppend = todoRecord?.othersCanAppend === true
+    form.todoComplete = todoRecord?.complete === true
     form.dedupDays = clampInteger(readValue(config, 'dedupeDays', 'dedup_days', 'dedupDays'), 30, 0, 3650)
     form.dedupeScope = normalizeDedupeScope(readValue(config, 'dedupeScope', 'dedup_scope', 'dedupScope'))
     form.cooldownSeconds = clampInteger(readValue(config, 'cooldownSeconds', 'cooldown_seconds'), 60, 0, 86400)
@@ -378,12 +464,16 @@ function pushDraft() {
 
 function buildDraft(): TaskConfigDraft {
   if (!supportedTaskType.value) return invalidDraft('该任务类型没有私信专用配置表单')
+  if (initialConfigError.value) return invalidDraft(initialConfigError.value)
   if (loadingOptions.value) return invalidDraft('正在加载私信任务配置选项')
   if (apiFailure.value) return invalidDraft(apiFailure.value)
   if (form.messageRules.some((rule) => rule.uploading)) return invalidDraft('图片上传中，请等待完成')
 
-  const senderCategory = nullablePositiveNumber(form.senderCategory)
+  const senderCategoryId = nullablePositiveNumber(form.senderCategory)
   const senderAccountIds = uniqueNumbers(form.senderAccountIds)
+  const selectedCategory = categories.value.find((category) => category.id === senderCategoryId)
+  const senderCategory = form.senderSource === 'Category' ? selectedCategory?.name.trim() || '' : null
+  if (senderCategoryFormatError.value) return invalidDraft(senderCategoryFormatError.value)
   if (form.senderSource === 'Category' && !senderCategory) {
     return invalidDraft('请选择发送账号分类')
   }
@@ -404,23 +494,30 @@ function buildDraft(): TaskConfigDraft {
   if (isBatchTask.value && usernames.length > 10000) return invalidDraft('手工用户名最多 10000 条')
   const dictionaryCount = selectedDictionaryCount.value
   if (isBatchTask.value && form.dictionaryKey && dictionaryCount <= 0) {
-    return invalidDraft('请选择包含可用条目的文本词典')
+    return invalidDraft('请选择包含可用条目的用户名词典')
   }
   if (isBatchTask.value && usernames.length + dictionaryCount === 0) {
-    return invalidDraft('请填写手工用户名或选择文本词典')
+    return invalidDraft('请填写手工用户名或选择用户名词典')
   }
 
   const messageRules = normalizeRules(form.messageRules)
   const forward = uniqueLines(form.forwardUrlsText)
+  const forwardSourceDictionaryKey = form.forwardSourceDictionaryKey.trim()
   const todo = uniqueLines(form.todoText)
   if (form.contentAction === 'MessageRules' && (form.messageRules.length < 1 || form.messageRules.length > 50 || messageRules.length === 0)) {
     return invalidDraft('请至少填写一条文本/图片规则')
   }
-  if (form.contentAction === 'Forward' && forward.length === 0) {
-    return invalidDraft('请至少填写一个原生转发来源')
+  if (form.contentAction === 'MessageRules' && messageRules.some((rule) => Boolean(rule.text) && Boolean(rule.imageAssetId))) {
+    return invalidDraft('每条规则只能填写文本或图片其中一种')
   }
-  if (form.contentAction === 'Todo' && todo.length === 0) {
-    return invalidDraft('请至少填写一条原生清单内容')
+  if (form.contentAction === 'Forward' && forward.length > 1) {
+    return invalidDraft('原生转发只能填写一个消息链接')
+  }
+  if (form.contentAction === 'Forward' && ((forward.length > 0) === Boolean(forwardSourceDictionaryKey))) {
+    return invalidDraft('原生转发必须在消息链接和来源词典键之间二选一')
+  }
+  if (form.contentAction === 'Todo' && (!form.todoTitle.trim() || todo.length === 0)) {
+    return invalidDraft('请填写清单标题和至少一条原生清单内容')
   }
 
   const dedupeDays = clampInteger(form.dedupDays, 30, 0, 3650)
@@ -428,26 +525,26 @@ function buildDraft(): TaskConfigDraft {
   const rolling24h = clampInteger(form.rolling24h, 20, 1, 1000)
   const rawConfig = cloneRecord(rawInitialConfig.value)
   const rawContent = cloneRecord(asRecord(rawConfig.content))
+  const rawAction = inferContentAction(rawContent)
   const rawMessageRules = readValue(rawContent, 'messageRules', 'rules')
   const rawForward = readValue(rawContent, 'forward', 'forwardUrls', 'forwardSourceUrls')
   const rawTodo = readValue(rawContent, 'todo', 'todoItems', 'items')
   removeManagedTopLevelFields(rawConfig)
   removeManagedContentFields(rawContent)
 
+  const rawForwardRecord = rawAction === 'Forward' ? asRecord(rawForward) : null
+  const rawTodoRecord = rawAction === 'Todo' ? asRecord(rawTodo) : null
   const content = {
     ...rawContent,
     action: form.contentAction,
-    messageRules: form.contentAction === 'MessageRules' ? messageRules : cloneContentItems(rawMessageRules),
-    forward: form.contentAction === 'Forward' ? mergeContentItems(rawForward, forward, ['url', 'sourceUrl', 'value', 'text', 'content']) : cloneContentItems(rawForward),
-    todo: form.contentAction === 'Todo' ? mergeContentItems(rawTodo, todo, ['text', 'content', 'value', 'item']) : cloneContentItems(rawTodo),
+    ruleMode: form.ruleMode,
+    messageRules: form.contentAction === 'MessageRules' ? messageRules : [],
+    forward: form.contentAction === 'Forward' ? buildForwardConfig(rawForwardRecord, forward[0] || '', forwardSourceDictionaryKey) : null,
+    todo: form.contentAction === 'Todo' ? buildTodoConfig(rawTodoRecord, form.todoTitle.trim(), todo, form.todoOthersCanAppend, form.todoComplete) : null,
   }
 
-  const config = {
+  const config: Record<string, unknown> = {
     ...rawConfig,
-    listenerAccountId: isLiveTask.value ? form.listenerAccountId : null,
-    chats: isLiveTask.value ? chats : [],
-    usernames: isBatchTask.value ? usernames : [],
-    dictionaryKey: isBatchTask.value ? form.dictionaryKey || null : null,
     senderSource: form.senderSource,
     senderCategory: form.senderSource === 'Category' ? senderCategory : null,
     senderAccountIds: form.senderSource === 'AccountIds' ? senderAccountIds : [],
@@ -457,6 +554,13 @@ function buildDraft(): TaskConfigDraft {
     cooldownSeconds,
     rolling24h,
     content,
+  }
+  if (isLiveTask.value) {
+    config.listenerAccountId = Math.trunc(form.listenerAccountId)
+    config.chats = chats
+  } else {
+    config.manualUsernames = usernames
+    config.dictionaryKey = form.dictionaryKey || null
   }
 
   return validDraft(isBatchTask.value ? usernames.length + dictionaryCount : 0, config)
@@ -512,9 +616,14 @@ function defaultForm(): DirectMessagingForm {
     senderAccountIds: [],
     senderMode: 'Queue',
     contentAction: 'MessageRules',
+    ruleMode: 'Queue',
     messageRules: [newRule()],
     forwardUrlsText: '',
+    forwardSourceDictionaryKey: '',
+    todoTitle: '',
     todoText: '',
+    todoOthersCanAppend: false,
+    todoComplete: false,
     dedupDays: 30,
     dedupeScope: 'Global',
     cooldownSeconds: 60,
@@ -524,7 +633,7 @@ function defaultForm(): DirectMessagingForm {
 
 function newRule(): MessageRuleForm {
   ruleSequence += 1
-  return { id: `direct-rule-${ruleSequence}`, text: '', assetId: '', fileName: '', uploading: false, passthrough: {} }
+  return { id: `direct-rule-${ruleSequence}`, text: '', assetId: '', fileName: '', caption: '', uploading: false, passthrough: {} }
 }
 
 function validDraft(total: number, config: Record<string, unknown>): TaskConfigDraft {
@@ -537,7 +646,7 @@ function invalidDraft(validationError: string): TaskConfigDraft {
 
 function removeManagedTopLevelFields(config: Record<string, unknown>) {
   for (const key of [
-    'listenerAccountId', 'chats', 'usernames', 'dictionaryKey', 'senderSource', 'senderCategory', 'senderAccountIds', 'senderMode',
+    'listenerAccountId', 'chats', 'usernames', 'manualUsernames', 'dictionaryKey', 'senderSource', 'senderCategory', 'senderAccountIds', 'senderMode',
     'dedupeDays', 'dedupeScope', 'cooldownSeconds', 'rolling24h', 'content',
     'monitor_account_id', 'monitorAccountId', 'listener_account_id', 'group_ids', 'groupIds', 'target_group_ids',
     'manual_usernames', 'manualUsernames', 'text_dictionary', 'textDictionary', 'dictionary',
@@ -559,7 +668,10 @@ function removeManagedContentFields(content: Record<string, unknown>) {
 
 function extractRulePassthrough(record: Record<string, unknown>): Record<string, unknown> {
   const passthrough = cloneRecord(record)
-  for (const key of ['text', 'content', 'assetId', 'imageAssetId', 'image_asset_path', 'imageAssetPath', 'image_path', 'imagePath', 'fileName', 'imageName', 'image_name']) {
+  for (const key of [
+    'text', 'content', 'assetId', 'imageAssetId', 'image_asset_path', 'imageAssetPath', 'image_path', 'imagePath',
+    'fileName', 'imageName', 'image_name', 'caption', 'imageCaption', 'caption_text',
+  ]) {
     delete passthrough[key]
   }
   return passthrough
@@ -615,6 +727,63 @@ function findArray(value: unknown, keys: string[]): unknown[] {
   return []
 }
 
+function normalizeAccountOptions(items: unknown[], supplements: OperationAccount[] = []): SelectOption[] {
+  const supplementById = new Map(
+    supplements
+      .filter((account) => Number.isFinite(Number(account.id)) && Number(account.id) > 0)
+      .map((account) => [Math.trunc(Number(account.id)), account]),
+  )
+  const seen = new Set<number>()
+  return items.flatMap((item) => {
+    const record = asRecord(item)
+    if (!record) return []
+    const id = Math.trunc(positiveNumber(readValue(record, 'id', 'accountId'), 0))
+    if (id <= 0 || seen.has(id)) return []
+    seen.add(id)
+    const supplement = supplementById.get(id)
+    const displayNumber = positiveNumber(
+      readValue(record, 'displayNumber') ?? supplement?.displayNumber,
+      0,
+    )
+    const displayPhone = textValue(readValue(record, 'displayPhone', 'phone') ?? supplement?.displayPhone)
+    const nickname = textValue(readValue(record, 'nickname') ?? supplement?.nickname)
+    const username = textValue(readValue(record, 'username') ?? supplement?.username)
+    const legacyLabel = textValue(record.label)
+    const label = formatAccountOptionLabel(displayNumber, nickname, username, displayPhone)
+      || legacyLabel
+      || `#${id}`
+    return [{ id, label }]
+  })
+}
+
+function formatAccountOptionLabel(
+  displayNumber: number,
+  nickname: string,
+  username: string,
+  displayPhone: string,
+): string {
+  const parts: string[] = []
+  if (displayNumber > 0) parts.push(`#${Math.trunc(displayNumber)}`)
+  if (nickname) parts.push(nickname)
+  if (username) parts.push(username.startsWith('@') ? username : `@${username}`)
+  if (parts.length > (displayNumber > 0 ? 1 : 0)) return parts.join(' · ')
+  if (displayNumber > 0 && displayPhone) return `#${Math.trunc(displayNumber)} · ${displayPhone}`
+  return displayPhone
+}
+
+function normalizeCategoryOptions(items: unknown[]): CategoryOption[] {
+  const seen = new Set<number>()
+  return items.flatMap((item) => {
+    const record = asRecord(item)
+    if (!record) return []
+    const id = Math.trunc(positiveNumber(readValue(record, 'id', 'categoryId'), 0))
+    const name = textValue(readValue(record, 'name', 'displayName', 'label'))
+    if (id <= 0 || !name || seen.has(id)) return []
+    seen.add(id)
+    return [{ id, name, label: name }]
+  })
+}
+
 function normalizeSelectOptions(items: unknown[], labelKeys: string[]): SelectOption[] {
   const seen = new Set<number>()
   return items.flatMap((item) => {
@@ -624,6 +793,10 @@ function normalizeSelectOptions(items: unknown[], labelKeys: string[]): SelectOp
     if (id <= 0 || seen.has(id)) return []
     seen.add(id)
     const labelParts = labelKeys.map((key) => textValue(record[key])).filter(Boolean)
+    if (labelParts.length === 0) {
+      const legacyLabel = textValue(record.label)
+      if (legacyLabel) labelParts.push(legacyLabel)
+    }
     return [{ id, label: labelParts.length > 0 ? labelParts.join(' / ') : `#${id}` }]
   })
 }
@@ -645,15 +818,18 @@ function normalizeDictionaryOptions(items: unknown[]): DictionaryOption[] {
 function normalizeRules(value: MessageRuleForm[]) {
   return value
     .map((rule) => {
-      const normalized: Record<string, unknown> & { text: string; assetId: string | null } = {
-        ...cloneRecord(rule.passthrough),
+      const passthrough = cloneRecord(rule.passthrough)
+      for (const key of ['caption', 'imageCaption', 'caption_text']) delete passthrough[key]
+      const normalized: Record<string, unknown> & { text: string; imageAssetId: string | null } = {
+        ...passthrough,
         text: rule.text.trim(),
-        assetId: rule.assetId.trim() || null,
+        imageAssetId: rule.assetId.trim() || null,
       }
       if (rule.fileName.trim()) normalized.fileName = rule.fileName.trim()
+      if (rule.caption.trim()) normalized.caption = rule.caption.trim()
       return normalized
     })
-    .filter((rule, index) => rule.text || rule.assetId || Object.keys(value[index].passthrough).length > 0)
+    .filter((rule) => rule.text || rule.imageAssetId)
 }
 
 function readMessageRules(value: unknown): MessageRuleForm[] {
@@ -666,6 +842,7 @@ function readMessageRules(value: unknown): MessageRuleForm[] {
       text: textValue(readValue(record, 'text', 'content')),
       assetId: textValue(readValue(record, 'assetId', 'imageAssetId', 'image_asset_path', 'imageAssetPath', 'image_path', 'imagePath')),
       fileName: textValue(readValue(record, 'fileName', 'imageName', 'image_name')),
+      caption: textValue(readValue(record, 'caption', 'imageCaption')),
       passthrough: extractRulePassthrough(record),
     }]
   })
@@ -761,6 +938,106 @@ function normalizeContentAction(value: unknown): ContentAction {
 
 function normalizeDedupeScope(value: unknown): DedupeScope {
   return value === 'Task' || value === 'task' || value === 'target' || value === 'sender' ? 'Task' : 'Global'
+}
+
+function categoryNameValue(value: unknown): string {
+  const record = asRecord(value)
+  if (record) return textValue(readValue(record, 'name', 'categoryName', 'label'))
+  if (typeof value !== 'string') return ''
+  const normalized = value.trim()
+  return /^\d+$/.test(normalized) ? '' : normalized
+}
+
+function isNumericCategoryValue(value: unknown): boolean {
+  if (typeof value === 'number' && Number.isFinite(value)) return true
+  if (typeof value === 'string') return /^\d+$/.test(value.trim())
+  const record = asRecord(value)
+  if (!record) return false
+  if (textValue(readValue(record, 'name', 'categoryName', 'label'))) return false
+  return typeof record.id === 'number' || (typeof record.id === 'string' && /^\d+$/.test(record.id.trim()))
+}
+
+function inferContentAction(content: Record<string, unknown>): ContentAction {
+  const explicit = readValue(content, 'action')
+  if (explicit !== undefined) return normalizeContentAction(explicit)
+  if (readValue(content, 'forward', 'forwardUrls', 'forwardSourceUrls') !== undefined) return 'Forward'
+  if (readValue(content, 'todo', 'todoItems', 'items') !== undefined) return 'Todo'
+  return 'MessageRules'
+}
+
+function buildForwardConfig(raw: Record<string, unknown> | null, messageLink: string, sourceDictionaryKey: string) {
+  const forward = cloneRecord(raw)
+  delete forward.messageLink
+  delete forward.sourceDictionaryKey
+  return {
+    ...forward,
+    messageLink: messageLink || null,
+    sourceDictionaryKey: sourceDictionaryKey || null,
+  }
+}
+
+interface TodoItemValue {
+  id: number
+  text: string
+  passthrough: Record<string, unknown>
+}
+
+function readTodoItems(todo: Record<string, unknown>): TodoItemValue[] {
+  const items = Array.isArray(todo.items) ? todo.items : []
+  return items.flatMap((item, index) => {
+    const record = asRecord(item)
+    if (!record) return []
+    return [{
+      id: Math.max(1, Math.trunc(positiveNumber(readValue(record, 'id'), index + 1))),
+      text: textValue(readValue(record, 'text', 'content', 'value')),
+      passthrough: extractTodoItemPassthrough(record),
+    }]
+  })
+}
+
+function extractTodoItemPassthrough(record: Record<string, unknown>): Record<string, unknown> {
+  const passthrough = cloneRecord(record)
+  delete passthrough.id
+  delete passthrough.text
+  delete passthrough.content
+  delete passthrough.value
+  return passthrough
+}
+
+function buildTodoConfig(
+  raw: Record<string, unknown> | null,
+  title: string,
+  lines: string[],
+  othersCanAppend: boolean,
+  complete: boolean,
+) {
+  const todo = cloneRecord(raw)
+  const rawItems = readTodoItems(todo)
+  delete todo.title
+  delete todo.items
+  delete todo.othersCanAppend
+  delete todo.complete
+  const items = lines.map((text, index) => ({
+    ...cloneRecord(rawItems[index]?.passthrough),
+    id: rawItems[index]?.id || index + 1,
+    text,
+  }))
+  return { ...todo, title, items, othersCanAppend, complete }
+}
+
+function resolveSenderCategorySelection() {
+  const wanted = pendingSenderCategoryName.value.trim().toLocaleLowerCase()
+  if (!wanted || categories.value.length === 0) return
+  const match = categories.value.find((category) => category.name.trim().toLocaleLowerCase() === wanted)
+  if (match) {
+    restoringInitialConfig = true
+    form.senderCategory = match.id
+    restoringInitialConfig = false
+    pendingSenderCategoryName.value = ''
+    senderCategoryFormatError.value = ''
+  } else {
+    senderCategoryFormatError.value = `无法将分类名称“${pendingSenderCategoryName.value}”映射到当前账号分类`
+  }
 }
 
 function requestErrorMessage(error: unknown, fallback: string): string {

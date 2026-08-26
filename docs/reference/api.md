@@ -240,14 +240,25 @@ Telegram 限流和 Session/代理状态。该功能不引入数据库迁移，�
 ### 私信任务原生表单（宿主 v1.31.76）
 
 任务中心的 `direct_message.live` 和 `direct_message.batch` 使用宿主原生表单，
-主流程不加载模块 iframe；字段、默认值、边界和复制/编辑行为见
+主流程不加载模块 iframe；字段、默认值、边界和普通复制/编辑行为见
 [模块任务配置合同](../developer/modules.md#v13176)。
 调用方必须先完成后台登录，并确保提供任务定义的私信模块已安装、启用且返回
 `canCreate=true`。选项接口或账号群组接口失败时表单标记 `canSubmit=false`，保存请求不会发出。
 
-- `GET /api/panel/extensions/direct-messaging/options`：返回私信表单的账号分类、可用发送账号和文本/图片字典选项。
+当前宿主不支持私信类型的 Cron 创建、计划编辑、计划复制或立即执行；任务中心会禁用这些
+入口。需要调整已有计划时先停用计划，再使用普通任务编辑。
+
+- `GET /api/panel/extensions/direct-messaging/options`：返回私信表单的账号分类、可用发送账号和
+  文本/图片字典选项。账号保留 `id`、`telegramUserId`、`label`、`categoryId`，并提供
+  `displayNumber`、`nickname`、`username`、`displayPhone`、`categoryName`、`isActive`；只返回
+  `isActive=true`，不按 `TelegramStatusOk` 过滤。批量界面将文本词典显示为“用户名词典”。
 - `GET /api/panel/extensions/direct-messaging/accounts/{id}/groups`：按监听账号读取可选群组；切换账号后应重新请求，失败时不得提交旧列表。
 - `POST /api/panel/extensions/direct-messaging/assets`：上传图片，使用 `multipart/form-data` 的 `file` 字段；成功响应至少包含 `assetId` 和 `fileName`，表单将 `assetId` 写入 `content.messageRules` 对应规则。
+
+提交配置时 `senderCategory` 必须是分类名称字符串，不能是分类 ID 或数字字符串；宿主会将
+下拉框内部 ID 映射为名称，无法映射时禁止提交。批量配置使用 `manualUsernames` 和
+`dictionaryKey`，内容字段使用 `content.action`、`messageRules`、`forward`、`todo`，图片规则写入
+`imageAssetId`。模块生命周期解析或字段校验失败统一返回 4xx，并包含字段名和“配置校验失败”。
 
 未安装或停用模块时，任务定义不会显示创建入口；先安装兼容版本并确认
 `canCreate=true`。接口持续失败时检查管理员 Cookie、模块日志和响应错误，必要时停用
