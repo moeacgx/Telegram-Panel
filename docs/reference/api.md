@@ -237,6 +237,46 @@ Telegram 限流和 Session/代理状态。该功能不引入数据库迁移，�
 - `GET /api/panel/extensions/fragment-username-checker`：Fragment 用户名监控静态页面初始化数据；可带 `taskId` 读取可编辑任务配置。
 - `POST /api/panel/extensions/fragment-username-checker/tasks`：创建或保存 Fragment 用户名监控任务；请求包含 `usernames`、`targetGroupIds`、`checkIntervalSeconds`、`queryDelayMs`、`durationHours`，编辑时额外传 `taskId`。
 
+### 私信任务原生表单（宿主 v1.31.76）
+
+任务中心的 `direct_message.live` 和 `direct_message.batch` 使用宿主原生表单，
+主流程不加载模块 iframe；字段、默认值、边界和普通复制/编辑行为见
+[模块任务配置合同](../developer/modules.md#v13176)。
+调用方必须先完成后台登录，并确保提供任务定义的私信模块已安装、启用且返回
+`canCreate=true`。选项接口或账号群组接口失败时表单标记 `canSubmit=false`，保存请求不会发出。
+
+当前宿主不支持私信类型的 Cron 创建、计划编辑、计划复制或立即执行；任务中心会禁用这些
+入口。需要调整已有计划时先停用计划，再使用普通任务编辑。
+
+- `GET /api/panel/extensions/direct-messaging/options`：返回私信表单的账号分类、可用发送账号和
+  文本/图片字典选项。账号保留 `id`、`telegramUserId`、`label`、`categoryId`，并提供
+  `displayNumber`、`nickname`、`username`、`displayPhone`、`categoryName`、`isActive`；只返回
+  `isActive=true`，不按 `TelegramStatusOk` 过滤。批量界面将文本词典显示为“用户名词典”。
+- `GET /api/panel/extensions/direct-messaging/accounts/{id}/groups`：按监听账号读取可选群组；切换账号后应重新请求，失败时不得提交旧列表。
+- `POST /api/panel/extensions/direct-messaging/assets`：上传图片，使用 `multipart/form-data` 的 `file` 字段；成功响应至少包含 `assetId` 和 `fileName`，表单将 `assetId` 写入 `content.messageRules` 对应规则。
+
+提交配置时 `senderCategory` 必须是分类名称字符串，不能是分类 ID 或数字字符串；宿主会将
+下拉框内部 ID 映射为名称，无法映射时禁止提交。批量配置使用 `manualUsernames` 和
+`dictionaryKey`，内容字段使用 `content.action`、`messageRules`、`forward`、`todo`，图片规则写入
+`imageAssetId`。模块生命周期解析或字段校验失败统一返回 4xx，并包含字段名和“配置校验失败”。
+
+私信原生表单的“不去重”开关不增加接口字段：开启时仍按现有合同提交 `dedupeDays=0`，并原样保留
+`dedupeScope`；读取到 `dedupeDays=0` 时开关自动开启。关闭后恢复最后一次正数去重天数，未记录时为
+`3`；`cooldownSeconds` 和 `rolling24h` 继续生效。
+
+去重判断和历史账本均由 `pro.direct-messaging` 模块执行，宿主前端只负责承载配置并提交任务。
+新建任务默认 `dedupeScope=Task`（仅当前任务去重）；需要跨任务共享去重窗口时显式选择
+`dedupeScope=Global`。已有任务的配置保持原值。
+
+模块 `1.0.2` 执行时会按目标隔离失败：账号与目标/来源组合失败会自动换发送账号，全部组合失败或
+目标永久无效时只终结当前目标并继续；`uncertain` 不会自动换号重发当前目标，但不会阻断同轮其他
+目标。批量任务仅在普通目标处理完后进入人工裁决，整个发送池永久不可用时才暂停整项任务。
+
+未安装或停用模块时，任务定义不会显示创建入口；先安装兼容版本并确认
+`canCreate=true`。接口持续失败时检查管理员 Cookie、模块日志和响应错误，必要时停用
+私信任务定义并回滚到上一稳定宿主版本（`LastGoodVersion`）；已有任务应先暂停，避免
+在不完整配置下运行。
+
 - `fragment_username_monitor` 可直接通过 `POST /api/panel/tasks` 或 `PATCH /api/panel/tasks/{id}` 保存配置，前端表单写入的配置键为 `Usernames`、`TargetGroupIds`、`CheckIntervalSeconds`、`QueryDelayMs`、`DurationHours`；保存时会清空 `StartedAtUtc`、`AssignedUsernames`、`LastCheckTime`、`Error`、`Canceled` 等运行态字段。适用条件是宿主前端包含 Fragment 任务中心表单，且已安装提供该任务定义的 Fragment 模块 1.2.9+。
 
 `GET /api/panel/tasks` 和 `GET /api/panel/tasks/{id}` 的 `BatchTaskDto` 包含可空 `name`。普通一次性任务可为空，前端使用“任务类型 #ID”兜底；计划任务触发或手动“立即执行”创建的批量任务会复制计划任务名称，历史任务应优先展示 `name`，并保留任务类型作为辅助说明。自 v1.31.57 起，`POST /api/panel/tasks` 和 `PATCH /api/panel/tasks/{id}` 支持可选 `name`，服务端会去除首尾空白并限制最多 100 个字符；即时任务传空或省略时继续使用兜底显示，编辑任务时省略 `name` 会保留原名称，传空字符串会清空名称。该字段通过 `BatchTasks.Name` 持久化；回滚到旧版需先忽略或删除该列。
