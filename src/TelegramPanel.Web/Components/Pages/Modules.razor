@@ -59,7 +59,7 @@
         @if (Contributions.Diagnostics.Count > 0)
         {
             <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
-                <MudText Typo="Typo.subtitle2">检测到模块贡献冲突（已自动忽略部分定义）：</MudText>
+                <MudText Typo="Typo.subtitle2">模块兼容性与贡献检查（任务创建合同或重复定义）：</MudText>
                 <MudList T="System.String" Dense="true">
                     @foreach (var d in Contributions.Diagnostics)
                     {
@@ -295,7 +295,7 @@
     {
         bool? ok = await DialogService.ShowMessageBox(
             "确认删除",
-            $"确定删除模块「{id}」吗？删除会移动到回收站目录（可手动找回），但仍建议先停用并重启确认无依赖。",
+            $"确定删除模块「{id}」吗？将永久删除，不会移入回收站。建议先停用并重启确认无依赖。",
             yesText: "删除", cancelText: "取消");
 
         if (ok != true)
@@ -329,19 +329,8 @@
         if (m.BuiltIn)
             return;
 
-        var active = (m.ActiveVersion ?? "").Trim();
-        var lastGood = (m.LastGoodVersion ?? "").Trim();
-        var keep = new HashSet<string>(StringComparer.Ordinal);
-        if (!string.IsNullOrWhiteSpace(active)) keep.Add(active);
-        if (!string.IsNullOrWhiteSpace(lastGood)) keep.Add(lastGood);
-
-        var toRemove = m.InstalledVersions
-            .Where(v => !string.IsNullOrWhiteSpace(v))
-            .Distinct(StringComparer.Ordinal)
-            .Where(v => !keep.Contains(v))
-            .ToList();
-
-        if (toRemove.Count == 0)
+        var preview = (await ModuleInstaller.GetPrunePreviewAsync()).FirstOrDefault(item => item.Id == m.Id);
+        if (preview == null)
         {
             Snackbar.Add("没有可清理的旧版本", Severity.Info);
             return;
@@ -349,9 +338,9 @@
 
         bool? ok = await DialogService.ShowMessageBox(
             "清理旧版本",
-            $"将删除模块「{m.Id}」的旧版本：{string.Join(", ", toRemove)}。\n" +
-            $"保留版本：{string.Join(", ", keep)}。\n" +
-            "删除会移动到回收站目录（可手动找回），是否继续？",
+            $"将删除模块「{m.Id}」的旧版本：{string.Join(", ", preview.Versions)}。\n" +
+            $"保留版本：{string.Join(", ", preview.KeptVersions)}。\n" +
+            "将永久删除，不会移入回收站，是否继续？",
             yesText: "继续", cancelText: "取消");
 
         if (ok != true)

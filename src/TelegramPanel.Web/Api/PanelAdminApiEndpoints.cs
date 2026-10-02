@@ -64,6 +64,7 @@ public static class PanelAdminApiEndpoints
             secured.RequireAuthorization();
 
         secured.MapProxyManagementApi();
+        secured.MapModuleRepositoryApi();
 
         secured.MapGet("/summary", GetSummaryAsync);
 

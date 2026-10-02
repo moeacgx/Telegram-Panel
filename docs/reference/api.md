@@ -4,6 +4,26 @@ Vue 后台使用 `/api/panel` 下的管理接口。开启后台登录时，除�
 管理员 Cookie；这些接口不是面向公网的稳定开放 API。完整行为以
 `PanelAdminApiEndpoints.cs` 和各功能 Endpoint 文件为准。
 
+## 模块仓库与批量版本清理
+
+适用：包含在线仓库功能的版本；所有接口沿用管理员鉴权。前置条件、目录合同、故障排查和回滚见
+[在线模块仓库维护](../developer/module-repositories.md)。
+
+- `GET /api/panel/module-repositories`：仓库列表，只返回 `hasToken`，不返回令牌。
+- `POST /api/panel/module-repositories`：新增；请求 `name/kind/location/ref/token/clearToken`。
+  `kind` 为 `github`（`location=owner/repo`）或 `https`（完整 index.json 地址）；`ref` 默认 `main`。
+- `PUT /api/panel/module-repositories/{id}`：更新；令牌留空保留，`clearToken=true` 清除，改变目标清除旧令牌。
+- `DELETE /api/panel/module-repositories/{id}`：删除来源和令牌，不卸载已安装模块。
+- `GET /api/panel/module-repositories/{id}/index`：连接并校验目录，返回 `schemaVersion/modules`。
+- `POST /api/panel/module-repositories/{id}/install`：请求 `moduleId/version/sha256/activateAndEnable/autoRestart`；
+  服务器重新取目录并下载校验，返回 `success/message/moduleId/version`。安装成功但启用失败会明确写入 `message`。
+- `GET /api/panel/modules/prune-preview`：返回 `[{id,versions,keptVersions}]`。
+- `POST /api/panel/modules/prune-all`：请求 `{autoRestart}`；返回 `success/removedVersions/results`，
+  `results` 每项含 `id/version/success/message`。部分失败用 `success=false` 表示，HTTP 200 不代表全部成功。
+
+清理永久删除旧包及旧安装目录，保护当前/最后可用/运行版本。成功判据是逐项结果和刷新后的版本清单；
+空清理不重启，部分成功最多一次重启。仓库验证失败返回不含凭据的错误信息。
+
 ## 登录与账号
 
 - `POST /api/panel/auth/login`：后台登录

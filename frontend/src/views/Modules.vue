@@ -22,7 +22,7 @@
 
         <div class="switch-row">
           <el-switch v-model="autoRestart" active-text="模块变更后自动重启服务（推荐）" />
-          <el-switch v-model="activateAndEnable" active-text="上传后自动切换到新版本并启用" />
+          <el-switch v-model="activateAndEnable" active-text="安装后自动切换到新版本并启用" />
         </div>
 
         <div class="toolbar">
@@ -33,6 +33,8 @@
       </div>
     </el-card>
 
+    <ModuleRepositories :modules="modules" :auto-restart="autoRestart" :activate-and-enable="activateAndEnable" @installed="load" />
+
     <el-card shadow="never" class="page-card mt-4">
       <el-alert
         v-if="diagnostics.length"
@@ -41,13 +43,15 @@
         show-icon
         class="mb-3"
       >
-        <template #title>检测到模块贡献冲突（已自动忽略部分定义）</template>
+        <template #title>模块兼容性与贡献检查</template>
+        <p>部分任务尚未满足标准创建与重跑合同，或存在重复定义。清理旧版本不能补齐接口，请更新对应模块。模块独立页面的可用性需单独检查。</p>
         <div v-for="item in diagnostics" :key="item" class="diagnostic-line">{{ item }}</div>
       </el-alert>
 
       <div class="toolbar mb-3">
         <div class="toolbar-title">已安装模块 ({{ modules.length }})</div>
         <div class="toolbar-spacer" />
+        <el-button :loading="pruning" :disabled="loading || pruning" @click="pruneAll">一键清理旧版本</el-button>
         <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
       </div>
 
@@ -118,10 +122,13 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import type { UploadFile, UploadFiles, UploadUserFile } from 'element-plus'
 import { Refresh, Upload } from '@element-plus/icons-vue'
 import { panelApi } from '@/api/panel'
+import ModuleRepositories from '@/components/ModuleRepositories.vue'
+import { moduleRepositoriesApi } from '@/api/moduleRepositories'
 import type { ModuleOverview } from '@/api/types'
 
 const loading = ref(false)
 const installing = ref(false)
+const pruning = ref(false)
 const autoRestart = ref(true)
 const activateAndEnable = ref(true)
 const modules = ref<ModuleOverview[]>([])
@@ -203,20 +210,16 @@ async function disable(id: string) {
 }
 
 async function prune(module: ModuleOverview) {
-  const active = module.activeVersion || ''
-  const lastGood = module.lastGoodVersion || ''
-  const keepSet = new Set([active, lastGood].filter(Boolean))
-  const toRemove = module.installedVersions.filter((version) => !keepSet.has(version))
-  if (toRemove.length === 0) {
+  const preview = (await moduleRepositoriesApi.prunePreview()).find(item => item.id === module.id)
+  if (!preview) {
     ElMessage.info('没有可清理的旧版本')
     return
   }
-  const keep = Array.from(keepSet).join('、') || '当前有效版本'
-  await ElMessageBox.confirm(
-    `将删除模块「${module.id}」的旧版本：${toRemove.join(', ')}。\n保留：${keep}。\n删除会移动到回收站目录，是否继续？`,
+  try { await ElMessageBox.confirm(
+    `将永久删除模块「${module.id}」的旧版本：${preview.versions.join(', ')}。\n保留：${preview.keptVersions.join('、')}。\n不会移入回收站，是否继续？`,
     '确认清理旧版本',
     { type: 'warning' },
-  )
+  ) } catch { return }
   await panelApi.pruneModuleVersions(module.id, autoRestart.value)
   ElMessage.success('已清理旧版本')
   await load()
@@ -224,7 +227,7 @@ async function prune(module: ModuleOverview) {
 
 async function remove(module: ModuleOverview) {
   await ElMessageBox.confirm(
-    `确定删除模块「${module.id}」吗？删除会移动到回收站目录，建议先停用并重启确认无依赖。`,
+    `确定删除模块「${module.id}」吗？将永久删除模块及安装包，不会移入回收站。建议先停用并重启确认无依赖。`,
     '确认删除',
     { type: 'warning' },
   )
@@ -236,6 +239,29 @@ async function remove(module: ModuleOverview) {
 function showDetails(module: ModuleOverview) {
   details.module = module
   details.visible = true
+}
+
+async function pruneAll() {
+  if (pruning.value) return
+  pruning.value = true
+  try {
+    const preview = await moduleRepositoriesApi.prunePreview()
+    if (!preview.length) { ElMessage.info('没有可清理的旧版本'); return }
+    const count = preview.reduce((sum, item) => sum + item.versions.length, 0)
+    try {
+      await ElMessageBox.confirm(
+        `将永久删除 ${preview.length} 个模块的 ${count} 个旧版本及安装包。保留当前版本、最后可用版本和本进程加载版本；不影响模块数据。不会移入回收站。\n${preview.map(item => `${item.id}: ${item.versions.join(', ')}`).join('\n')}`,
+        '一键清理旧版本', { type: 'warning' },
+      )
+    } catch { return }
+    const result = await moduleRepositoriesApi.pruneAll(autoRestart.value)
+    if (result.success) ElMessage.success(`已清理 ${result.removedVersions} 个旧版本`)
+    else await ElMessageBox.alert(
+      `已清理 ${result.removedVersions} 个版本；以下版本失败：\n${result.results.filter(item => !item.success).map(item => `${item.id} ${item.version}: ${item.message}`).join('\n')}`,
+      '部分清理失败', { type: 'warning' },
+    )
+    await load()
+  } finally { pruning.value = false }
 }
 
 onMounted(load)

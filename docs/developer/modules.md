@@ -16,6 +16,7 @@
 ## 面板入口
 
 - 「模块管理」：安装/启用/停用/卸载模块（通常需重启生效）
+- 在线仓库、私有令牌、批量版本清理与个人仓库维护见[在线模块仓库维护](module-repositories.md)。
 - 「API 管理」：基于已启用模块，创建对应的外部 API 配置项（`X-API-Key` 鉴权）
 - 「任务中心」：基于已启用模块，动态展示任务类型与分类
 
@@ -755,7 +756,7 @@ public IEnumerable<ModulePageDefinition> GetPages(ModuleHostContext context)
 - 静态资源不会被宿主自动映射，模块必须自己在 `MapEndpoints` 中提供资源访问接口，或把脚本样式内联到 HTML。
 - 修改页面/API 后必须递增 `manifest.json` 的版本，重新打包并更新生产模块包。
 - Fragment 用户名监控模块自 1.2.9 起已切换为模块自带静态页面：入口仍是 `/ext/fragment-username-checker/main`，`GetPages()` 返回空，页面通过 `/api/panel/extensions/fragment-username-checker` 聚合接口读取分类、可用私密频道数和可编辑任务配置。
-- 适用宿主前端已包含 Fragment 任务中心表单且已安装 Fragment 模块 1.2.9+ 时，`fragment_username_monitor` 可以直接在「任务中心」新建、编辑和保存配置；任务中心不再因为该任务的 `CreateRoute` 自动跳到模块静态页，模块页 `/ext/fragment-username-checker/main` 只作为独立入口保留。
+- Fragment 的前端表单不代表已满足当前宿主的标准创建合同。在引入严格任务合同的宿主中，必须同时注册匹配执行器、生命周期处理器并声明安全创建路由，才能从任务中心新建或重跑；仅安装 1.2.9 不能保证满足条件。模块页 `/ext/fragment-username-checker/main` 仍是独立入口，其可用性需单独验收。
 - 如果线上仍看到旧 Razor 页面，通常是生产环境还装着旧 `.tpm`，或模块加载失败后回滚到了 `LastGoodVersion`。
 
 ### 宿主任务中心的私信任务（适用宿主 v1.31.76）

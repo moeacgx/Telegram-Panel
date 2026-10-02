@@ -45,6 +45,7 @@ nav:
       - API: reference/api.md
   - 开发:
       - 模块开发: developer/modules.md
+      - 在线模块仓库维护: developer/module-repositories.md
       - 群组管理员移除: developer/group-admin-removal.md
       - WTelegram Layer 兼容性: developer/telegram-layer-compatibility.md
       - 文档维护: developer/documentation.md

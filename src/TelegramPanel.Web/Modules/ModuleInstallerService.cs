@@ -1,18 +1,80 @@
 using System.IO.Compression;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using TelegramPanel.Modules;
 
 namespace TelegramPanel.Web.Modules;
 
 public sealed class ModuleInstallerService
 {
+    private readonly SemaphoreSlim _mutationGate = new(1, 1);
+    private readonly ModuleRegistry _registry;
     private readonly ModuleLayout _layout;
     private readonly ModuleStateStore _stateStore;
     private readonly BuiltIn.BuiltInModuleCatalog _builtInCatalog;
     private readonly string _hostVersion;
 
-    public ModuleInstallerService(ModuleLayout layout, ModuleStateStore stateStore, BuiltIn.BuiltInModuleCatalog builtInCatalog, string hostVersion)
+    private async Task<T> MutateAsync<T>(Func<Task<T>> action)
     {
+        await _mutationGate.WaitAsync();
+        try { return await action(); }
+        finally { _mutationGate.Release(); }
+    }
+
+    public Task<InstallResult> InstallAsync(Stream stream, string fileName, bool enableAfterInstall = false) =>
+        MutateAsync(() => InstallCoreAsync(stream, fileName, enableAfterInstall));
+    public Task<OperationResult> EnableAsync(string id, string? version = null) => MutateAsync(() => EnableCoreAsync(id, version));
+    public Task<OperationResult> DisableAsync(string id) => MutateAsync(() => DisableCoreAsync(id));
+    public Task<OperationResult> SetActiveVersionAsync(string id, string version) => MutateAsync(() => SetActiveVersionCoreAsync(id, version));
+    public Task<OperationResult> RemoveModuleAsync(string id) => MutateAsync(() => RemoveModuleCoreAsync(id));
+    public Task<OperationResult> RemoveModuleVersionAsync(string id, string version) => MutateAsync(() => RemoveModuleVersionCoreAsync(id, version));
+    public Task<OperationResult> PruneOldVersionsAsync(string id) => MutateAsync(() => PruneOldVersionsCoreAsync(id));
+
+    public Task<InstallResult> InstallFromRepositoryAsync(Stream stream, string id, string version, bool activate) => MutateAsync(async () =>
+    {
+        var result = await InstallCoreAsync(stream, $"{id}-{version}.tpm", expectedId: id, expectedVersion: version);
+        if (!result.Success) return result;
+        if (activate)
+        {
+            // Enable 在校验兼容性与依赖成功后才保存活动版本，失败不破坏原版本。
+            var enabled = await EnableCoreAsync(id, version);
+            if (!enabled.Success) return result with { Message = $"模块已安装，但未启用：{enabled.Message}。原有启用状态保持不变。" };
+        }
+        return result with { Message = activate ? "模块已安装并启用，重启后加载" : "模块已安装，尚未切换启用版本" };
+    });
+
+    private HashSet<string> ProtectedVersions(ModuleStateItem item) => new(
+        new[] { item.ActiveVersion, item.LastGoodVersion }
+            .Concat(_registry.Modules.Where(m => string.Equals(m.Id, item.Id, StringComparison.OrdinalIgnoreCase)).Select(m => m.Version))
+            .Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v!.Trim().TrimEnd('.')), StringComparer.OrdinalIgnoreCase);
+
+    internal static bool IsSafeVersion(string? version) => version != null
+        && Regex.IsMatch(version, @"^[0-9]+\.[0-9]+\.[0-9]+$") && SemVer.TryParse(version, out _);
+
+    public Task<IReadOnlyList<ModulePrunePreview>> GetPrunePreviewAsync() => MutateAsync(async () =>
+        (IReadOnlyList<ModulePrunePreview>)(await _stateStore.LoadAsync()).Modules.Where(m => !m.BuiltIn)
+            .Select(m => new ModulePrunePreview(m.Id,
+                m.InstalledVersions.Distinct(StringComparer.Ordinal).Where(v => !ProtectedVersions(m).Contains(v)).ToList(),
+                ProtectedVersions(m).ToList())).Where(m => m.Versions.Count > 0).ToList());
+
+    public Task<ModulePruneResult> PruneAllOldVersionsAsync() => MutateAsync(async () =>
+    {
+        var state = await _stateStore.LoadAsync();
+        var results = new List<ModulePruneItemResult>();
+        foreach (var item in state.Modules.Where(m => !m.BuiltIn))
+        {
+            foreach (var version in item.InstalledVersions.Distinct(StringComparer.Ordinal).Where(v => !ProtectedVersions(item).Contains(v)))
+            {
+                var result = await RemoveModuleVersionCoreAsync(item.Id, version);
+                results.Add(new(item.Id, version, result.Success, result.Success ? "已删除" : result.Message));
+            }
+        }
+        return new ModulePruneResult(results.All(r => r.Success), results.Count(r => r.Success), results);
+    });
+
+    public ModuleInstallerService(ModuleLayout layout, ModuleStateStore stateStore, BuiltIn.BuiltInModuleCatalog builtInCatalog, string hostVersion, ModuleRegistry? registry = null)
+    {
+        _registry = registry ?? new ModuleRegistry();
         _layout = layout;
         _stateStore = stateStore;
         _builtInCatalog = builtInCatalog;
@@ -71,7 +133,7 @@ public sealed class ModuleInstallerService
         return list;
     }
 
-    public async Task<InstallResult> InstallAsync(Stream packageStream, string fileName, bool enableAfterInstall = false)
+    private async Task<InstallResult> InstallCoreAsync(Stream packageStream, string fileName, bool enableAfterInstall = false, string? expectedId = null, string? expectedVersion = null)
     {
         if (packageStream == null)
             throw new ArgumentNullException(nameof(packageStream));
@@ -87,7 +149,14 @@ public sealed class ModuleInstallerService
         try
         {
             using var buffer = new MemoryStream();
-            await packageStream.CopyToAsync(buffer);
+            var copyBuffer = new byte[81920];
+            int read;
+            while ((read = await packageStream.ReadAsync(copyBuffer)) != 0)
+            {
+                if (buffer.Length + read > 50L * 1024 * 1024)
+                    return InstallResult.Fail("模块包不能超过 50MB");
+                buffer.Write(copyBuffer, 0, read);
+            }
             buffer.Position = 0;
 
             // 1) 解压到 staging
@@ -118,6 +187,14 @@ public sealed class ModuleInstallerService
             var validateError = ValidateManifest(manifest);
             if (!string.IsNullOrWhiteSpace(validateError))
                 return InstallResult.Fail(validateError);
+
+            if ((expectedId != null && manifest.Id != expectedId) || (expectedVersion != null && manifest.Version != expectedVersion))
+                return InstallResult.Fail("模块包的 ID 或版本与仓库目录不一致，未安装");
+            if (_builtInCatalog.TryGetManifest(manifest.Id, out _))
+                return InstallResult.Fail("不能覆盖内置模块");
+            var existingState = await _stateStore.LoadAsync();
+            if (existingState.Modules.Any(m => string.Equals(m.Id, manifest.Id, StringComparison.OrdinalIgnoreCase) && m.Id != manifest.Id))
+                return InstallResult.Fail("模块 ID 与已安装模块存在大小写冲突");
 
             var hostCompatError = CheckHostCompatibility(manifest);
             if (!string.IsNullOrWhiteSpace(hostCompatError))
@@ -187,7 +264,7 @@ public sealed class ModuleInstallerService
         }
     }
 
-    public async Task<OperationResult> EnableAsync(string id, string? version = null)
+    private async Task<OperationResult> EnableCoreAsync(string id, string? version = null)
     {
         id = (id ?? "").Trim();
         version = string.IsNullOrWhiteSpace(version) ? null : version.Trim();
@@ -246,7 +323,7 @@ public sealed class ModuleInstallerService
         return OperationResult.Ok();
     }
 
-    public async Task<OperationResult> DisableAsync(string id)
+    private async Task<OperationResult> DisableCoreAsync(string id)
     {
         id = (id ?? "").Trim();
         if (id.Length == 0)
@@ -262,11 +339,11 @@ public sealed class ModuleInstallerService
         return OperationResult.Ok();
     }
 
-    public async Task<OperationResult> SetActiveVersionAsync(string id, string version)
+    private async Task<OperationResult> SetActiveVersionCoreAsync(string id, string version)
     {
         id = (id ?? "").Trim();
         version = (version ?? "").Trim();
-        if (id.Length == 0 || version.Length == 0)
+        if (!IsSafeId(id) || !IsSafeVersion(version))
             return OperationResult.Fail("参数无效");
 
         var state = await _stateStore.LoadAsync();
@@ -278,7 +355,7 @@ public sealed class ModuleInstallerService
             return OperationResult.Fail("内置模块版本随宿主，不支持切换");
 
         var dir = Path.Combine(_layout.InstalledDir, id, version);
-        if (!Directory.Exists(dir))
+        if (!item.InstalledVersions.Contains(version, StringComparer.Ordinal) || !Directory.Exists(dir))
             return OperationResult.Fail("该版本未安装");
 
         item.ActiveVersion = version;
@@ -286,11 +363,11 @@ public sealed class ModuleInstallerService
         return OperationResult.Ok();
     }
 
-    public async Task<OperationResult> RemoveModuleAsync(string id)
+    private async Task<OperationResult> RemoveModuleCoreAsync(string id)
     {
         id = (id ?? "").Trim();
-        if (id.Length == 0)
-            return OperationResult.Fail("id 不能为空");
+        if (!IsSafeId(id))
+            return OperationResult.Fail("模块 ID 无效");
 
         var state = await _stateStore.LoadAsync();
         var item = state.Modules.FirstOrDefault(m => string.Equals(m.Id, id, StringComparison.Ordinal));
@@ -325,11 +402,11 @@ public sealed class ModuleInstallerService
         }
     }
 
-    public async Task<OperationResult> RemoveModuleVersionAsync(string id, string version)
+    private async Task<OperationResult> RemoveModuleVersionCoreAsync(string id, string version)
     {
         id = (id ?? "").Trim();
         version = (version ?? "").Trim();
-        if (id.Length == 0 || version.Length == 0)
+        if (!IsSafeId(id) || !IsSafeVersion(version))
             return OperationResult.Fail("参数无效");
 
         var state = await _stateStore.LoadAsync();
@@ -340,8 +417,13 @@ public sealed class ModuleInstallerService
         if (item.BuiltIn)
             return OperationResult.Fail("内置模块不支持删除版本");
 
-        if (string.Equals((item.ActiveVersion ?? "").Trim(), version, StringComparison.Ordinal))
-            return OperationResult.Fail("不能删除当前启用版本，请先切换 ActiveVersion");
+        if (state.Modules.Count(m => string.Equals(m.Id, id, StringComparison.OrdinalIgnoreCase)) > 1)
+            return OperationResult.Fail("模块状态存在 ID 大小写冲突，请先备份并修复状态");
+
+        if (!item.InstalledVersions.Contains(version, StringComparer.Ordinal))
+            return OperationResult.Fail("该版本未安装");
+        if (ProtectedVersions(item).Contains(version))
+            return OperationResult.Fail("不能删除当前版本、最后可用版本或本进程仍加载的版本");
 
         try
         {
@@ -372,7 +454,7 @@ public sealed class ModuleInstallerService
         }
     }
 
-    public async Task<OperationResult> PruneOldVersionsAsync(string id)
+    private async Task<OperationResult> PruneOldVersionsCoreAsync(string id)
     {
         id = (id ?? "").Trim();
         if (id.Length == 0)
@@ -387,11 +469,7 @@ public sealed class ModuleInstallerService
             return OperationResult.Fail("内置模块不支持清理版本");
 
         item.InstalledVersions ??= new List<string>();
-        var active = (item.ActiveVersion ?? "").Trim();
-        var lastGood = (item.LastGoodVersion ?? "").Trim();
-        var keep = new HashSet<string>(StringComparer.Ordinal);
-        if (!string.IsNullOrWhiteSpace(active)) keep.Add(active);
-        if (!string.IsNullOrWhiteSpace(lastGood)) keep.Add(lastGood);
+        var keep = ProtectedVersions(item);
 
         var toRemove = item.InstalledVersions
             .Where(v => !string.IsNullOrWhiteSpace(v))
@@ -404,7 +482,7 @@ public sealed class ModuleInstallerService
 
         foreach (var v in toRemove)
         {
-            var r = await RemoveModuleVersionAsync(id, v);
+            var r = await RemoveModuleVersionCoreAsync(id, v);
             if (!r.Success)
                 return r;
         }
@@ -568,17 +646,26 @@ public sealed class ModuleInstallerService
         if (manifest.Name.Length > 100)
             return "模块名称过长";
 
-        if (!SemVer.TryParse(manifest.Version, out _))
+        if (!IsSafeVersion(manifest.Version))
             return "模块版本必须是 x.y.z";
 
         if (string.IsNullOrWhiteSpace(manifest.Entry.Assembly) || string.IsNullOrWhiteSpace(manifest.Entry.Type))
             return "入口点缺失（entry.assembly / entry.type）";
 
+        if (manifest.Entry.Assembly.IndexOfAny(['/', '\\', ':']) >= 0
+            || !manifest.Entry.Assembly.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
+            || manifest.Entry.Assembly != Path.GetFileName(manifest.Entry.Assembly))
+            return "入口程序集必须是 lib 下的 DLL 文件名";
         return null;
     }
 
     private static bool IsSafeId(string id)
     {
+        if (string.IsNullOrWhiteSpace(id) || id is "." or ".." || id.EndsWith('.') || id.Length > 100)
+            return false;
+        var stem = id.Split('.')[0];
+        if (new[] { "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9" }.Contains(stem, StringComparer.OrdinalIgnoreCase))
+            return false;
         foreach (var ch in id)
         {
             if (char.IsLetterOrDigit(ch))
@@ -602,6 +689,11 @@ public sealed class ModuleInstallerService
         if (!destFull.EndsWith(Path.DirectorySeparatorChar))
             destFull += Path.DirectorySeparatorChar;
 
+        if (zip.Entries.Count > 5000 || zip.Entries.Sum(x => (decimal)x.Length) > 200L * 1024 * 1024)
+            return "模块解压内容超过限制（最多 5000 项、200MB）";
+        var entries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        long extractedBytes = 0;
+        var buffer = new byte[81920];
         foreach (var entry in zip.Entries)
         {
             var entryPath = (entry.FullName ?? string.Empty).Replace('\\', '/');
@@ -612,6 +704,9 @@ public sealed class ModuleInstallerService
             if (entryPath.StartsWith("/", StringComparison.Ordinal) || entryPath.StartsWith("\\", StringComparison.Ordinal))
                 return "压缩包包含非法路径（绝对路径）";
 
+            if (entryPath.Split('/').Any(part => part is "." or ".." || part.Contains(':') || part.EndsWith(' ') || part.EndsWith('.'))
+                || !entries.Add(entryPath.TrimEnd('/')))
+                return "压缩包包含非法或重复路径";
             var relative = entryPath.Replace('/', Path.DirectorySeparatorChar);
             var targetFull = Path.GetFullPath(Path.Combine(destFull, relative));
             if (!targetFull.StartsWith(destFull, StringComparison.OrdinalIgnoreCase))
@@ -625,7 +720,17 @@ public sealed class ModuleInstallerService
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(targetFull) ?? destFull);
-            entry.ExtractToFile(targetFull, overwrite: true);
+            using var source = entry.Open();
+            using var target = new FileStream(targetFull, FileMode.CreateNew, FileAccess.Write);
+            int read;
+            while ((read = source.Read(buffer)) != 0)
+            {
+                // ZIP 中央目录声明的长度可伪造，必须按实际解压字节计数。
+                extractedBytes += read;
+                if (extractedBytes > 200L * 1024 * 1024)
+                    return "模块实际解压内容超过 200MB";
+                target.Write(buffer, 0, read);
+            }
         }
 
         return null;
@@ -653,3 +758,7 @@ public sealed record OperationResult(bool Success, string Message)
     public static OperationResult Ok() => new(true, "ok");
     public static OperationResult Fail(string msg) => new(false, msg);
 }
+
+public sealed record ModulePrunePreview(string Id, IReadOnlyList<string> Versions, IReadOnlyList<string> KeptVersions);
+public sealed record ModulePruneItemResult(string Id, string Version, bool Success, string Message);
+public sealed record ModulePruneResult(bool Success, int RemovedVersions, IReadOnlyList<ModulePruneItemResult> Results);

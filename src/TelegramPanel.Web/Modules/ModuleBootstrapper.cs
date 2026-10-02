@@ -22,12 +22,16 @@ public static class ModuleBootstrapper
         services.AddSingleton(layout);
         services.AddSingleton(new ModuleHostContext(hostVersion, layout.Root));
         services.AddSingleton<ModuleStateStore>();
+        services.AddSingleton<ModuleRepositoryStore>();
+        services.AddSingleton<ModuleRepositoryTransport>();
+        services.AddSingleton<ModuleRepositoryService>();
         services.AddSingleton(builtInCatalog);
         services.AddSingleton(sp => new ModuleInstallerService(
             sp.GetRequiredService<ModuleLayout>(),
             sp.GetRequiredService<ModuleStateStore>(),
             sp.GetRequiredService<BuiltInModuleCatalog>(),
-            hostVersion));
+            hostVersion,
+            sp.GetRequiredService<ModuleRegistry>()));
 
         // 在 DI 构建前加载模块清单并执行 ConfigureServices
         var registry = new ModuleRegistry();
