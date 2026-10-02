@@ -21,7 +21,7 @@ public sealed class ExternalApiDefinition
     public JsonObject Config { get; set; } = new();
 
     /// <summary>
-    /// 内置踢人/封禁 API 的强类型配置。
+    /// 踢人/封禁 API 的持久化配置；由可安装演示模块执行，保留已有配置和密钥合同。
     /// </summary>
     public KickApiDefinition? Kick { get; set; }
 }

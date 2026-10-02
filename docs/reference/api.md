@@ -6,6 +6,12 @@ Vue 后台使用 `/api/panel` 下的管理接口。开启后台登录时，除�
 
 ## 模块仓库与批量版本清理
 
+从包含外置改动的宿主 1.31.77 起，`POST /api/kick` 由公开的 `demo.kick-api` 模块提供，
+未安装并启用时没有该端点。仍使用 `X-API-Key` 和原 `ExternalApi:Apis` 中 `Type=kick` 配置；
+`ExternalApi:Enabled=false` 时返回 404。成功提交返回 202，执行由后台任务完成。
+管理页面为 `/ext/demo.kick-api/kick`，模块管理 API 保持 `/api/panel/extensions/kick-api`。
+迁移、权限、测试与回滚见[在线模块仓库维护](../developer/module-repositories.md)。
+
 适用：包含在线仓库功能的版本；所有接口沿用管理员鉴权。前置条件、目录合同、故障排查和回滚见
 [在线模块仓库维护](../developer/module-repositories.md)。
 

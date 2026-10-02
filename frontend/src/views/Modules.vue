@@ -60,6 +60,7 @@
           <template #default="{ row }">
             <div class="cell-main">{{ displayName(row) }}</div>
             <div class="cell-sub">{{ row.id }}</div>
+            <div v-if="row.id === 'builtin.tasks'" class="cell-sub">提供任务中心的任务目录、编辑和重跑能力；停用会影响现有系统任务。</div>
             <div v-if="row.manifestError" class="error-text">{{ row.manifestError }}</div>
           </template>
         </el-table-column>

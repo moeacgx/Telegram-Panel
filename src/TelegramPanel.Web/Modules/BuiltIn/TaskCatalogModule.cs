@@ -12,7 +12,7 @@ public sealed class TaskCatalogModule : ITelegramPanelModule, IModuleTaskProvide
         Manifest = new ModuleManifest
         {
             Id = "builtin.tasks",
-            Name = "任务：内置批量任务",
+            Name = "系统任务目录（任务中心基础能力）",
             Version = version,
             Host = new HostCompatibility(),
             Entry = new ModuleEntryPoint { Assembly = "", Type = typeof(TaskCatalogModule).FullName ?? "" }

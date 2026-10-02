@@ -194,9 +194,12 @@ public static class ModuleBootstrapper
         }
     }
 
-    private static void EnsureBuiltInModules(ModuleState state, BuiltInModuleCatalog builtInCatalog, string hostVersion)
+    internal static void EnsureBuiltInModules(ModuleState state, BuiltInModuleCatalog builtInCatalog, string hostVersion)
     {
         state.Modules ??= new List<ModuleStateItem>();
+
+        // 踢人能力已迁至可安装演示模块。旧内置项只有宿主版本元数据，移除时不触碰 API 配置和任务。
+        state.Modules.RemoveAll(item => item.BuiltIn && item.Id == "builtin.kick-api");
 
         foreach (var manifest in builtInCatalog.CreateModules().Select(m => m.Manifest))
         {
