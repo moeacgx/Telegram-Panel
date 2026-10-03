@@ -11,6 +11,11 @@
 公开仓库提供 `demo.kick-api` 踢人/封禁演示源码及安装包；不会自动公开私有模块代码或包。
 运行中的面板通过 HTTPS 读取目录，不依赖 Git、SSH 或部署目录中的子模块。
 
+公开仓库的 `skills/tgpanel-module-workflow/SKILL.md` 附带可分发模块开发技能，覆盖静态页面、任务合同、
+轻量打包和在线目录维护。Fork 后可让 Agent 直接读取，或将整个技能文件夹复制到工具的技能目录。
+Git 保存源码，Release 保存编译后的 `.tpm`，`index.json` 连接二者；面板不在线编译源码。
+Fork 不会复制 Release 资产，自行修改后需要发布自己的包并更新下载 URL 和哈希。
+
 ```bash
 git submodule update --init module-repository
 ```
@@ -19,6 +24,11 @@ git submodule update --init module-repository
 不要将个人令牌、业务配置或运行目录提交到子模块。
 
 ## 个人仓库最短维护流程
+
+模块管理页的“在线模块仓库”区域提供“官方模块仓库”“Fork 创建个人仓库”和“仓库维护说明”入口，
+均在新标签页打开。Fork 入口只打开 GitHub 的创建页面，不会自动创建仓库或更改面板配置。
+入口随包含本次页面改动的版本生效；需要 GitHub 登录或仓库访问失败时，可直接访问下方官方仓库地址。
+验收时确认三个链接分别打开公开仓库、Fork 页面和仓库 README；回滚前端版本即可撤回入口，不影响已配置仓库。
 
 1. Fork 官方目录仓库，或创建根目录包含 `index.json` 的公开/私有仓库。
 2. 按[模块开发合同](modules.md)构建 `.tpm`，递增版本并验证目标宿主兼容性。

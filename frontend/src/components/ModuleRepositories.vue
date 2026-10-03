@@ -5,6 +5,12 @@
       <el-button type="primary" :disabled="busy" @click="edit()">添加仓库</el-button>
     </div>
     <p class="muted">可连接官方、个人公开或私有仓库。模块与面板在同一进程运行，请仅安装可信作者的模块。</p>
+    <nav class="repository-toolbar repository-guide" aria-label="模块仓库开发与维护">
+      <el-link type="primary" href="https://github.com/moeacgx/Telegram-Panel-Modules" target="_blank" rel="noopener noreferrer">官方模块仓库</el-link>
+      <el-link type="primary" href="https://github.com/moeacgx/Telegram-Panel-Modules/fork" target="_blank" rel="noopener noreferrer">Fork 创建个人仓库</el-link>
+      <el-link type="primary" href="https://github.com/moeacgx/Telegram-Panel-Modules#readme" target="_blank" rel="noopener noreferrer">仓库维护说明</el-link>
+    </nav>
+    <p class="muted">想修改演示模块或发布自己的模块？先 Fork 官方仓库，按维护说明修改源码、构建并发布模块包、更新目录，再点击“添加仓库”填写你的 owner/repo。私有仓库还需配置只读访问令牌。</p>
     <div class="repository-toolbar">
       <el-select v-model="selectedId" placeholder="选择仓库" :disabled="busy" @change="clearCatalog" style="min-width: 260px">
         <el-option v-for="repo in repositories" :key="repo.id" :label="repo.name" :value="repo.id" />
@@ -124,4 +130,5 @@ onMounted(load)
 <style scoped>
 .repository-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
 .repository-toolbar strong { margin-right: auto; }
+.repository-guide { margin-top: 12px; }
 </style>

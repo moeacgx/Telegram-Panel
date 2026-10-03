@@ -16,6 +16,7 @@ Vue 后台使用 `/api/panel` 下的管理接口。开启后台登录时，除�
 [在线模块仓库维护](../developer/module-repositories.md)。
 
 - `GET /api/panel/module-repositories`：仓库列表，只返回 `hasToken`，不返回令牌。
+- 页面上的官方仓库、Fork 和维护说明入口为外部链接，不调用仓库写入接口；Fork 完成后仍须手动添加仓库配置。
 - `POST /api/panel/module-repositories`：新增；请求 `name/kind/location/ref/token/clearToken`。
   `kind` 为 `github`（`location=owner/repo`）或 `https`（完整 index.json 地址）；`ref` 默认 `main`。
 - `PUT /api/panel/module-repositories/{id}`：更新；令牌留空保留，`clearToken=true` 清除，改变目标清除旧令牌。
