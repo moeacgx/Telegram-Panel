@@ -203,21 +203,8 @@ export const panelApi = {
     treatNoBotSuffixAsBot?: boolean
     delayMs?: number | null
   }) => api.post<AccountBatchOperationResult>('/accounts/chat-membership', payload, { timeout: 300_000 }).then((r) => r.data),
-  createChatMembershipTask: (payload: CreateChatMembershipTaskRequest) => {
-    const links = Array.from(new Set(payload.links.map((x) => x.trim()).filter(Boolean)))
-    const total = Math.max(0, payload.accountIds.length * links.length)
-    return api.post<BatchTask>('/tasks', {
-      taskType: 'user_join_subscribe',
-      total,
-      config: JSON.stringify({
-        accountIds: Array.from(new Set(payload.accountIds.filter((x) => x > 0))),
-        operation: payload.operation,
-        links,
-        treatNoBotSuffixAsBot: payload.treatNoBotSuffixAsBot === true,
-        delayMs: payload.delayMs ?? 2000,
-      }),
-    }).then((r) => r.data)
-  },
+  createChatMembershipTask: (payload: CreateChatMembershipTaskRequest) =>
+    api.post<BatchTask>('/accounts/chat-membership/tasks', payload).then((r) => r.data),
   updateAccountProfile: (id: number, form: FormData) =>
     api.post<OperationResult>(`/accounts/${id}/profile`, form, { timeout: 120_000 }).then((r) => r.data),
   batchUpdateProfile: (payload: {

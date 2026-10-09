@@ -1101,6 +1101,22 @@ public IEnumerable<ModuleTaskDefinition> GetTasks(ModuleHostContext context)
 
 ### 示例：批量订阅/加群/启用 Bot（用户任务）
 
+自 v1.31.79 起，账号页通过
+`POST /api/panel/accounts/chat-membership/tasks` 创建 `user_join_subscribe`。
+这是依赖账号页面上下文的内置任务，任务目录仍只注册展示与暂停、恢复、重跑能力，
+不配置虚假编辑器或 `CreateRoute`，不开放通用创建弹窗。专用接口先校验并规范请求，
+再一次性持久化 `builtin.tasks` 所有的 `batch/pending` 任务；该内置类型没有模块私有
+配置提交步骤。外部模块仍须遵守标准创建目录及生命周期合同，不能复用此接口提交其他任务。
+验收需同时确认专用入口成功返回任务、去重后的总数正确、无效请求不落库，
+以及标准创建目录仍不包含该类型。若创建后执行失败，应查看任务 `failures` 中的账号、
+目标与原因，区分 Telegram 会话/权限错误和创建入口错误。此修复不改变持久化结构；
+回滚前后端即可恢复旧行为，已创建的同类型任务不需转换。
+
+构建环境使用已发布 v1.31.78 验证过的 `SixLabors.ImageSharp 3.1.12`，
+宿主 Core 项目固定该版本，避免 `3.*` 在全新还原时漂移到需要额外许可证的 3.2.0。
+该固定不表示依赖没有安全风险；还原或构建出现的 NuGet 安全警告仍需独立审查，
+后续升级必须验证许可证、兼容性与构建结果，不得通过禁用许可校验绕过。
+
 该类任务的典型形态是“多账号 × 多链接”的组合执行，并允许在 UI 中切换操作模式：
 
 - `join`：订阅频道 / 加入群组 / 启用外部 Bot（发送 `/start`）
@@ -1110,9 +1126,9 @@ public IEnumerable<ModuleTaskDefinition> GetTasks(ModuleHostContext context)
 
 ```json
 {
-  "Mode": "join",
-  "AccountIds": [1, 2],
-  "Links": [
+  "operation": "join",
+  "accountIds": [1, 2],
+  "links": [
     "https://t.me/xxx",
     "t.me/+hash",
     "@username",
@@ -1120,8 +1136,8 @@ public IEnumerable<ModuleTaskDefinition> GetTasks(ModuleHostContext context)
     "@examplebot",
     "https://t.me/examplebot?start=abc"
   ],
-  "DelayMs": 2000,
-  "TreatNoBotSuffixAsBot": false
+  "delayMs": 2000,
+  "treatNoBotSuffixAsBot": false
 }
 ```
 

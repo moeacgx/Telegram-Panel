@@ -96,6 +96,24 @@ HTTP `400`，`success=false`、`nextStep=null`、`account=null`，`message` 返�
 失败先检查数据库迁移、Session、出口与验证码确认结果；回滚前备份数据库，旧程序会忽略新增记录，
 不得手动删除新增表或迁移历史。完整约束见[账号详情密码与登录邮箱合同](../developer/documentation.md)。
 
+### 账号加群、订阅和 Bot 后台任务
+
+自 v1.31.79 起，管理员通过
+`POST /api/panel/accounts/chat-membership/tasks` 提交账号列表中的后台操作。
+请求包含 `accountIds`（数据库主键数组）、`operation`（`join` 或 `leave`）、
+`links`（目标数组）、可选 `treatNoBotSuffixAsBot` 和 `delayMs`。
+服务端过滤非正账号编号并去重，目标按换行、空格和英文逗号拆分后忽略大小写去重；
+操作间隔默认 2000 毫秒，限制为 0～60000 毫秒。无账号、无目标或操作类型无效返回 400，
+不会写入任务。成功返回普通 `BatchTaskDto`，其 `taskType=user_join_subscribe`、
+`ownerModuleId=builtin.tasks`、`executionKind=batch`、`status=pending`，
+`total` 为规范化后的账号数乘目标数；执行结果在任务中心查看。
+
+该接口沿用面板管理员鉴权，不接受调用方指定所有者、任务类型或运行态。
+账号页面仍先执行风控检查和用户确认；`POST /api/panel/tasks` 保持标准创建目录限制，
+不会因该专用入口而开放 `user_join_subscribe`。若仍提示“未开放标准创建入口”，
+检查浏览器是否加载旧版前端以及请求是否仍指向 `/tasks`。无需数据库迁移；
+回滚时前后端一起恢复旧版，已创建任务配置仍可读取，但旧版入口会恢复原错误。
+
 ### 账号编号
 
 自 v1.31.57 起，账号列表、账号详情、任务账号候选和风控确认中的账号 DTO 都返回
