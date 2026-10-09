@@ -21,6 +21,8 @@ public sealed class WgcfWarpService : BackgroundService
     private readonly ILogger<WgcfWarpService> _logger;
     private readonly string _root;
     private readonly string _script = Path.Combine(AppContext.BaseDirectory, "wgcf-warp", "warpctl.py");
+    private readonly Func<bool> _hasDependencies;
+    private readonly Func<IEnumerable<string>, CancellationToken, Task>? _runCommand;
     private readonly ConcurrentDictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private readonly Channel<string> _queue = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
     private readonly SemaphoreSlim _stateLock = new(1, 1);
@@ -29,14 +31,21 @@ public sealed class WgcfWarpService : BackgroundService
 
     public WgcfWarpService(IServiceScopeFactory scopes, IConfiguration configuration,
         IWebHostEnvironment environment, ILogger<WgcfWarpService> logger)
+        : this(scopes, configuration, environment, logger, null, null) { }
+
+    internal WgcfWarpService(IServiceScopeFactory scopes, IConfiguration configuration,
+        IWebHostEnvironment environment, ILogger<WgcfWarpService> logger,
+        Func<bool>? hasDependencies, Func<IEnumerable<string>, CancellationToken, Task>? runCommand)
     {
         _scopes = scopes;
         _logger = logger;
         _root = Path.Combine(StoragePathResolver.ResolveWritableRoot(configuration, environment), "wgcf-warp");
+        _hasDependencies = hasDependencies ?? (() => OperatingSystem.IsLinux() && File.Exists(_script)
+            && File.Exists("/usr/bin/python3") && File.Exists("/usr/local/bin/wgcf") && File.Exists("/usr/local/bin/wireproxy"));
+        _runCommand = runCommand;
     }
 
-    private bool HasDependencies => OperatingSystem.IsLinux() && File.Exists(_script)
-        && File.Exists("/usr/bin/python3") && File.Exists("/usr/local/bin/wgcf") && File.Exists("/usr/local/bin/wireproxy");
+    private bool HasDependencies => _hasDependencies();
 
     public async Task<WgcfEnvironmentDto> ListAsync(CancellationToken ct)
     {
@@ -95,27 +104,33 @@ public sealed class WgcfWarpService : BackgroundService
     public async Task<WgcfProfileDto> SetEnabledAsync(string profile, bool enabled, CancellationToken ct)
     {
         EnsureAvailable();
-        var entry = GetEntry(profile);
-        if (entry.Phase == "creating") throw new InvalidOperationException("档案正在创建，请等待完成");
-        await _toolLock.WaitAsync(ct);
+        // 状态读取与写回属于同一操作，固定先取状态锁再取工具锁，避免覆盖恢复请求。
+        await _stateLock.WaitAsync(ct);
         try
         {
-            await using var scope = _scopes.CreateAsyncScope();
-            var service = scope.ServiceProvider.GetRequiredService<ProxyManagementService>();
-            var proxy = await service.SetManagedWgcfEnabledAsync(profile, enabled, ct);
-            await CommandAsync(new[] { enabled ? "start" : "stop", profile }, ct);
-            await WaitRuntimeAsync(profile, enabled ? "listening" : "stopped", ct);
-            if (enabled) await service.TestAsync(proxy.Id, ct);
-            Persist(entry with { Phase = enabled ? "ready" : "stopped", Error = null });
+            var entry = GetEntry(profile);
+            if (entry.Phase == "creating") throw new InvalidOperationException("档案正在创建，请等待完成");
+            await _toolLock.WaitAsync(ct);
+            try
+            {
+                await using var scope = _scopes.CreateAsyncScope();
+                var service = scope.ServiceProvider.GetRequiredService<ProxyManagementService>();
+                var proxy = await service.SetManagedWgcfEnabledAsync(profile, enabled, ct);
+                await CommandAsync(new[] { enabled ? "start" : "stop", profile }, ct);
+                await WaitRuntimeAsync(profile, enabled ? "listening" : "stopped", ct);
+                if (enabled) await service.TestAsync(proxy.Id, ct);
+                Persist(entry with { Phase = enabled ? "ready" : "stopped", Error = null });
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // 拒绝占用出口的停用时不能更改原来的运行状态。
+                if (ex is ProxyInUseException) throw;
+                Persist(entry with { Phase = "failed", Error = "启停未确认完成，请核对状态后重试" });
+                throw new InvalidOperationException("启停未确认完成，请核对状态后重试");
+            }
+            finally { _toolLock.Release(); }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            // 拒绝占用出口的停用时不能更改原来的运行状态。
-            if (ex is ProxyInUseException) throw;
-            Persist(entry with { Phase = "failed", Error = "启停未确认完成，请核对状态后重试" });
-            throw new InvalidOperationException("启停未确认完成，请核对状态后重试");
-        }
-        finally { _toolLock.Release(); }
+        finally { _stateLock.Release(); }
         return (await ListAsync(ct)).Profiles.Single(x => x.Profile == profile);
     }
 
@@ -144,7 +159,7 @@ public sealed class WgcfWarpService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!HasDependencies) return;
+        if (!OperatingSystem.IsLinux() || !HasDependencies) return;
         try
         {
             Directory.CreateDirectory(_root);
@@ -186,6 +201,9 @@ public sealed class WgcfWarpService : BackgroundService
                 if (!_supervisorReady) throw new InvalidOperationException();
                 await CommandAsync(new[] { "provision", profile, "--accept-tos", "--name", entry.Name }, ct);
                 using var meta = ReadPrivateJson(Path.Combine(_root, profile, "meta.json"));
+                // provision 重试保留已有启停意图；网页恢复是显式启动操作，需要单独提交启动请求。
+                if (!Bool(meta.RootElement, "desired"))
+                    await CommandAsync(new[] { "start", profile }, ct);
                 using var auth = ReadPrivateJson(Path.Combine(_root, profile, "proxy-auth.json"));
                 await using var scope = _scopes.CreateAsyncScope();
                 var service = scope.ServiceProvider.GetRequiredService<ProxyManagementService>();
@@ -247,6 +265,11 @@ public sealed class WgcfWarpService : BackgroundService
 
     private async Task CommandAsync(IEnumerable<string> args, CancellationToken ct)
     {
+        if (_runCommand != null)
+        {
+            await _runCommand(args, ct);
+            return;
+        }
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(110));
         using var process = NewProcess(args);

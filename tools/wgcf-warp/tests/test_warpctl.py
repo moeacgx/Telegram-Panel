@@ -61,6 +61,22 @@ class ToolTests(Fixture):
         self.assertEqual("web-1", second["name"])
         self.assertEqual("网页出口", second["displayName"])
 
+    def test_repeated_provision_preserves_explicit_stop_and_materials(self):
+        self.provision(display_name="网页出口")
+        path = self.store.profile("web-1")
+        materials = {name: (path / name).read_bytes()
+                     for name in ("wireproxy.conf", "proxy-auth.json", "wgcf-account.toml")}
+        stopped = self.store.desired("web-1", False)
+        repeated = self.provision(display_name="网页出口")
+        self.assertFalse(repeated["desired"])
+        self.assertEqual(stopped["revision"], repeated["revision"])
+        self.assertEqual("1", (path / "registrations.txt").read_text())
+        for name, original in materials.items():
+            self.assertEqual(original, (path / name).read_bytes())
+        started = self.store.desired("web-1", True)
+        self.assertTrue(started["desired"])
+        self.assertNotEqual(stopped["revision"], started["revision"])
+
     def test_web_provision_requires_terms_before_materials_exist(self):
         with self.assertRaises(ctl.Failure):
             self.provision(accept_tos=False)

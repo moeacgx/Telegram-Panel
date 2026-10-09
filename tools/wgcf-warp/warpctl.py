@@ -245,7 +245,8 @@ class Store:
             if parser.get("Socks5", "BindAddress", fallback="") != f"127.0.0.1:{meta.get('port')}":
                 raise Failure("已有配置不是内置本机出口，请使用新的配置名")
         meta = read_json(path / "meta.json", {})
-        if not meta.get("desired") or not meta.get("revision"):
+        # 已有修订号代表操作者做过启停选择；重复配置不得撤销明确停止。
+        if not meta.get("revision"):
             return self.desired(name, True)
         return self.status(name)
 
