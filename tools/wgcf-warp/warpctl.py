@@ -170,6 +170,11 @@ class Store:
         meta = read_json(path / "meta.json", {})
         if meta.get("desired") or meta.get("binding"):
             raise Failure("启动或已关联面板的配置不能重新生成；请使用新配置名")
+        if meta.get("everStarted"):
+            runtime = read_json(path / "runtime.json", {})
+            if (runtime.get("state") != "stopped" or runtime.get("revision") != meta.get("revision")
+                    or time.time() - runtime.get("at", 0) >= 10):
+                raise Failure("运行器尚未确认本次停止请求，不能覆盖旧进程配置；请等待 status 显示 stopped")
         if not 1024 <= port <= 65535:
             raise Failure("监听端口必须介于 1024 和 65535")
         for other in self.root.glob("*/meta.json"):
@@ -217,6 +222,9 @@ class Store:
         if enabled and not meta.get("generated"):
             raise Failure("请先生成并验证 WireGuard 配置")
         meta["desired"] = enabled
+        meta["revision"] = secrets.token_hex(12)
+        if enabled:
+            meta["everStarted"] = True
         atomic_write(path / "meta.json", meta)
         return self.status(name)
 
@@ -225,10 +233,13 @@ class Store:
         meta = read_json(path / "meta.json", {})
         runtime = read_json(path / "runtime.json", {})
         fresh = time.time() - runtime.get("at", 0) < 10
+        state = runtime.get("state", "unknown") if fresh else "unknown"
+        if fresh and runtime.get("revision") != meta.get("revision"):
+            state = "pending"
         return {"profile": name, "registered": bool(self.account(path)),
                 "generated": bool(meta.get("generated")), "port": meta.get("port"),
                 "desired": bool(meta.get("desired")),
-                "runtime": runtime.get("state", "unknown") if fresh else "unknown",
+                "runtime": state,
                 "proxyId": meta.get("binding", {}).get("proxyId"),
                 "accountId": meta.get("binding", {}).get("accountId"),
                 "bound": bool(meta.get("binding", {}).get("bound")),
@@ -342,10 +353,13 @@ def bind(store, name, panel, account_id, host):
     proxy = panel.request("POST", f"/proxies/{proxy['id']}/test", {})
     if proxy.get("testStatus") != "ok" or not proxy.get("egressIp") or not proxy.get("isEnabled"):
         raise Failure("新出口未通过面板 WARP 检测，未修改账号绑定")
-    if proxy.get("isGlobal") or proxy.get("accountCount", 0) > (1 if old and old["id"] == proxy["id"] else 0):
-        raise Failure("代理被全局或其它账号使用，不能作为一对一出口")
     current = panel.account(account_id)
     current_id = (current.get("proxy") or {}).get("id", 0)
+    # /test 的 DTO 未加载账号导航且 isGlobal 为默认值，不能用于占用判定。
+    occupied = next((p for p in panel.request("GET", "/proxies") if p["id"] == proxy["id"]), None)
+    if (not occupied or occupied.get("isGlobal")
+            or occupied.get("accountCount", 0) > (1 if current_id == proxy["id"] else 0)):
+        raise Failure("代理被全局或其它账号使用，不能作为一对一出口")
     if current_id == proxy["id"]:
         state["bound"] = True
     else:
@@ -370,6 +384,7 @@ def reconcile_profiles(store, children, retries):
     for file in store.root.glob("*/meta.json"):
         name = file.parent.name
         path = None
+        meta = None
         try:
             path = store.profile(name)
             meta = read_json(file, {})
@@ -398,7 +413,7 @@ def reconcile_profiles(store, children, retries):
                             state = "listening"
                     except OSError:
                         pass
-            atomic_write(path / "runtime.json", {"state": state, "at": time.time()})
+            atomic_write(path / "runtime.json", {"state": state, "at": time.time(), "revision": meta.get("revision")})
         except (Failure, OSError, ValueError, KeyError, TypeError, AttributeError):
             # 一份档案损坏或无法启动不能终止其它出口；原始异常可能包含凭据，不记录。
             process = children.pop(name, None)
@@ -408,7 +423,8 @@ def reconcile_profiles(store, children, retries):
             retries[name] = time.monotonic() + 30
             if path:
                 with contextlib.suppress(OSError, Failure):
-                    atomic_write(path / "runtime.json", {"state": "failed", "at": time.time()})
+                    atomic_write(path / "runtime.json", {"state": "failed", "at": time.time(),
+                                 "revision": meta.get("revision") if isinstance(meta, dict) else None})
 
 
 def supervise(store):

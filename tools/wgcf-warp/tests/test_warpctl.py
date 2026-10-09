@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+PYTHON = getattr(sys, "_base_executable", sys.executable)
 sys.path.insert(0, str(ROOT))
 import warpctl as ctl
 
@@ -22,8 +23,8 @@ class Fixture(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.fake = str(ROOT / "tests" / "fake_cli.py")
-        self.store = ctl.Store(self.root / "data", [sys.executable, "-S", self.fake, "wgcf"],
-                               [sys.executable, "-S", self.fake, "wireproxy"], timeout=5)
+        self.store = ctl.Store(self.root / "data", [PYTHON, "-S", self.fake, "wgcf"],
+                               [PYTHON, "-S", self.fake, "wireproxy"], timeout=5)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -61,7 +62,8 @@ class ToolTests(Fixture):
         start = time.monotonic()
         with self.assertRaises(ctl.Failure):
             self.store.register("account-1", True)
-        self.assertLess(time.monotonic() - start, 2)
+        # Windows 进程创建/回收受本机安全软件影响；仍须远小于替身的 10 秒休眠。
+        self.assertLess(time.monotonic() - start, 5)
         with self.assertRaises(ctl.Failure):
             self.store.register("account-1", True)
         self.assertEqual("1", (path / "registrations.txt").read_text())
@@ -69,6 +71,7 @@ class ToolTests(Fixture):
     def test_generation_rejects_hooks_and_invalidates_previous_generation(self):
         path = self.prepared()
         self.store.desired("account-1", False)
+        ctl.reconcile_profiles(self.store, {}, {})
         ctl.atomic_write(path / "fake-mode.json", {"injection": True})
         with self.assertRaises(ctl.Failure):
             self.store.generate("account-1", 18081)
@@ -128,6 +131,42 @@ class ToolTests(Fixture):
         runtime = (path / "runtime.json").read_text()
         self.assertIn("failed", runtime)
         self.assertNotIn("FAKE_SECRET_TOKEN", runtime)
+
+    def test_generate_waits_for_current_stop_acknowledgement(self):
+        path = self.prepared()
+        original = (path / "wireproxy.conf").read_text()
+        self.store.desired("account-1", False)
+        ctl.atomic_write(path / "runtime.json", {"state": "stopped", "at": time.time(), "revision": "older-request"})
+        with self.assertRaises(ctl.Failure):
+            self.store.generate("account-1", 18082)
+        self.assertEqual(original, (path / "wireproxy.conf").read_text())
+        ctl.reconcile_profiles(self.store, {}, {})
+        self.store.generate("account-1", 18082)
+        self.assertNotEqual(original, (path / "wireproxy.conf").read_text())
+
+    def test_stop_generate_start_replaces_actual_child_after_acknowledgement(self):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        path = self.prepared(port=port)
+        children, retries = {}, {}
+        try:
+            ctl.reconcile_profiles(self.store, children, retries)
+            old_child = children["account-1"]
+            self.store.desired("account-1", False)
+            with self.assertRaises(ctl.Failure):
+                self.store.generate("account-1", port)
+            ctl.reconcile_profiles(self.store, children, retries)
+            self.assertIsNotNone(old_child.poll())
+            previous_auth = (path / "proxy-auth.json").read_text()
+            self.store.generate("account-1", port)
+            self.store.desired("account-1", True)
+            ctl.reconcile_profiles(self.store, children, retries)
+            self.assertNotEqual(old_child.pid, children["account-1"].pid)
+            self.assertNotEqual(previous_auth, (path / "proxy-auth.json").read_text())
+        finally:
+            for child in children.values():
+                ctl.stop_process(child)
 
     @unittest.skipIf(os.name == "nt", "运行器只支持 Linux；Windows 无 POSIX 信号，CI 执行此测试")
     def test_supervisor_start_stop_and_restart_restore_desired(self):
@@ -208,7 +247,9 @@ class PanelTests(Fixture):
                         self.send_error(503)
                         return
                 elif self.path == "/api/panel/proxies/9/test":
-                    value = dict(owner.proxies[0], testStatus="ok" if owner.test_ok else "failed", egressIp="192.0.2.1")
+                    # 复现真实 TestAsync 合同：不加载 Accounts，且 DTO 默认 isGlobal=false。
+                    value = dict(owner.proxies[0], testStatus="ok" if owner.test_ok else "failed",
+                                 egressIp="192.0.2.1", accountCount=0, isGlobal=False)
                 elif self.path == "/api/panel/accounts/1/proxy":
                     if owner.fail_bind:
                         value = {"success": 0, "failed": 1}
@@ -302,6 +343,19 @@ class PanelTests(Fixture):
         self.account["id"] = 2
         with self.assertRaises(ctl.Failure):
             ctl.bind(self.store, "account-1", self.panel, 2, "tg-wgcf-warp")
+
+    def test_test_dto_default_counts_cannot_hide_real_account_or_global_usage(self):
+        self.prepared()
+        self.test_ok = False
+        with self.assertRaises(ctl.Failure):
+            ctl.bind(self.store, "account-1", self.panel, 1, "tg-wgcf-warp")
+        self.test_ok = True
+        for account_count, is_global in ((1, False), (0, True)):
+            self.proxies[0].update(accountCount=account_count, isGlobal=is_global)
+            with self.assertRaises(ctl.Failure):
+                ctl.bind(self.store, "account-1", self.panel, 1, "tg-wgcf-warp")
+        self.assertEqual(7, self.account["proxy"]["id"])
+        self.assertFalse(any(p.endswith("/1/proxy") for _, p, _ in self.requests))
 
 
 if __name__ == "__main__":

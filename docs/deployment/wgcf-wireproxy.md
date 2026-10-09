@@ -52,6 +52,8 @@ docker compose -f tools/wgcf-warp/compose.yml exec wgcf-warp python /app/warpctl
 的 `runtime=listening` 仅表示本地进程和 TCP 监听，不代表 Cloudflare/WARP 已连通。
 `egressVerified` 固定为 false，真实出口必须通过下面的面板检测。容器重启后恢复已启动档案。
 配置生成会拒绝钩子、外部配置和按域名直连选项，所有目的流量均交由 WireGuard。
+已启动过的档案需要先 `stop`，等待运行器确认本次请求并显示 `stopped` 才能重新生成；
+快速连续执行 stop/generate/start 时，未确认的生成操作会被拒绝。
 
 ## 面板检测并逐账号绑定
 
