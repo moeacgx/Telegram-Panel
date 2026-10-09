@@ -79,6 +79,8 @@ public class OutboundProxyRepository : Repository<OutboundProxy>, IOutboundProxy
                 cancellationToken);
             if (proxy == null)
                 throw new KeyNotFoundException($"代理 {proxyId.Value} 不存在");
+            if (proxy.ManagedWgcfProfile != null)
+                throw new InvalidOperationException("受管 WireGuard 绑定必须通过代理管理业务锁校验，禁止仓储捷径写入");
         }
 
         var accounts = await _context.Accounts

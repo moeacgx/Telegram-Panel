@@ -60,6 +60,8 @@ public sealed partial class ProxyManagementService
                 throw new KeyNotFoundException(
                     "所选全局代理不存在或已停用，未修改全局代理配置");
             }
+            if (selectedProxy.ManagedWgcfProfile != null)
+                throw new InvalidOperationException("受管 WireGuard 出口仅允许绑定单个账号，不能作为全局代理");
             EnsureWireGuardWarpReadyForBinding(selectedProxy);
         }
 
@@ -301,6 +303,13 @@ public sealed partial class ProxyManagementService
                         cancellationToken)
                     ?? throw new KeyNotFoundException("所选代理不存在或已停用");
                 EnsureWireGuardWarpReadyForBinding(targetProxy);
+                if (targetProxy.ManagedWgcfProfile != null)
+                {
+                    if (ids.Length != 1 || IsEnabledGlobalProxy(targetProxy.Id)
+                        || await _db.Accounts.AnyAsync(
+                            account => account.ProxyId == targetProxy.Id && account.Id != ids[0], cancellationToken))
+                        throw new InvalidOperationException("受管 WireGuard 出口只能由一个账号独占，未修改任何绑定");
+                }
             }
 
             ProxyConnectionOptions? currentGlobalConnection = null;
@@ -335,11 +344,12 @@ public sealed partial class ProxyManagementService
             var found = accounts.Select(x => x.Id).ToHashSet();
             var results = new List<AccountProxyOperationResult>(ids.Length);
 
-            if (ids.Length == 1 && input.ExpectedProxyId.HasValue)
+            if (ids.Length == 1 && (input.ExpectedProxyId.HasValue || input.ExpectedUseGlobalProxy.HasValue))
             {
                 var account = accounts.FirstOrDefault();
                 var current = account?.ProxyId ?? 0;
-                if (current != input.ExpectedProxyId.Value)
+                if ((input.ExpectedProxyId.HasValue && current != input.ExpectedProxyId.Value)
+                    || (input.ExpectedUseGlobalProxy.HasValue && account?.UseGlobalProxy != input.ExpectedUseGlobalProxy.Value))
                     throw new ProxyBindingConflictException("账号代理绑定已变化，请刷新后重试");
             }
 
@@ -415,10 +425,12 @@ public sealed partial class ProxyManagementService
 
             try
             {
-                await CleanupReplacedWarpProxiesAsync(
-                    oldBindings.Select(x => x.Proxy.Id).Distinct(),
-                    targetProxyId,
-                    cancellationToken);
+                // 切换到共享运行器出口后保留旧官方 WARP，供操作者明确回滚或清理。
+                if (targetProxy?.ManagedWgcfProfile == null)
+                    await CleanupReplacedWarpProxiesAsync(
+                        oldBindings.Select(x => x.Proxy.Id).Distinct(),
+                        targetProxyId,
+                        cancellationToken);
             }
             catch (Exception cleanupError)
             {
@@ -456,6 +468,8 @@ public sealed partial class ProxyManagementService
                 .FirstOrDefaultAsync(x => x.Id == input.ProxyId && x.IsEnabled, cancellationToken);
             if (proxy == null)
                 throw new KeyNotFoundException("所选代理不存在或已停用");
+            if (proxy.ManagedWgcfProfile != null)
+                throw new InvalidOperationException("受管 WireGuard 只支持已入库账号单独绑定，不能用于导入或登录首次连接");
             EnsureWireGuardWarpReadyForBinding(proxy);
         }
         else if (strategy == "warp_per_account")

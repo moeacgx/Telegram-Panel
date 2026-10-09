@@ -796,6 +796,10 @@ namespace TelegramPanel.Data.Migrations
                         .HasMaxLength(2000)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ManagedWgcfProfile")
+                        .HasMaxLength(48)
+                        .HasColumnType("TEXT");
+
                     b.Property<int?>("LastLatencyMs")
                         .HasColumnType("INTEGER");
 
@@ -862,6 +866,9 @@ namespace TelegramPanel.Data.Migrations
                     b.HasIndex("TestStatus");
 
                     b.HasIndex("IsEnabled", "Kind");
+
+                    b.HasIndex("ManagedWgcfProfile")
+                        .IsUnique();
 
                     b.ToTable("OutboundProxies", null, t =>
                         {

@@ -164,6 +164,7 @@ public sealed partial class ProxyManagementService
             var boundAccounts = await _db.Accounts
                 .Where(x => x.ProxyId == proxy.Id)
                 .ToListAsync(cancellationToken);
+            RejectOrdinaryManagedWgcfMutation(proxy);
             var isGlobalProxy = IsEnabledGlobalProxy(proxy.Id);
             if (isGlobalProxy)
             {
@@ -332,6 +333,7 @@ public sealed partial class ProxyManagementService
 
             if (IsEnabledGlobalProxy(proxy.Id))
                 throw new ProxyInUseException("该代理正在作为账号全局代理使用，请先切换或关闭全局代理");
+            RejectOrdinaryManagedWgcfMutation(proxy);
             if (proxy.Accounts.Count > 0)
                 throw new ProxyInUseException($"代理仍被 {proxy.Accounts.Count} 个账号使用，请先切换账号代理");
 

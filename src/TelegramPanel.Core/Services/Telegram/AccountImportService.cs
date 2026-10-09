@@ -1272,6 +1272,8 @@ public class AccountImportService
                 cancellationToken: cancellationToken);
             if (proxy is not { IsEnabled: true })
                 throw new KeyNotFoundException("所选代理不存在或已停用");
+            if (proxy.ManagedWgcfProfile != null)
+                throw new InvalidOperationException("受管 WireGuard 只能由已入库账号单独绑定，导入首次连接不能使用");
             if (proxy.Kind == OutboundProxyKinds.Warp
                 && _temporaryWarpClaims.OwnsRequest(proxy.WarpProfile?.RequestId))
             {
