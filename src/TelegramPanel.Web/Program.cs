@@ -485,6 +485,8 @@ builder.Services.AddHostedService<AccountLoginProxyCleanupService>();
 builder.Services.AddSingleton<WarpMaintenanceState>();
 builder.Services.AddHostedService<WarpMaintenanceBackgroundService>();
 builder.Services.AddHostedService<ProxyEgressMaintenanceBackgroundService>();
+builder.Services.AddSingleton<WgcfWarpService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<WgcfWarpService>());
 builder.Services.AddScoped<AccountExportService>();
 builder.Services.AddScoped<DataSyncService>();
 builder.Services.AddScoped<UiPreferencesService>();
