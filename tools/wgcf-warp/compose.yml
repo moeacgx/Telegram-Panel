@@ -1,0 +1,34 @@
+name: telegram-panel-wgcf
+services:
+  wgcf-warp:
+    build: .
+    image: telegram-panel-wgcf:local
+    container_name: tg-wgcf-warp
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    # 只有共享 Docker 网络内可访问 SOCKS；不映射任何宿主机端口。
+    networks:
+      panel:
+        aliases: [tg-wgcf-warp]
+    volumes:
+      - profiles:/data
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 256
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+networks:
+  panel:
+    external: true
+    name: ${TP_WGCF_NETWORK:-telegram-panel_default}
+volumes:
+  profiles:
