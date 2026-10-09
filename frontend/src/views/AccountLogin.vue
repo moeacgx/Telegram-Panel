@@ -478,7 +478,7 @@ function selectedProxyPayload(): { proxyStrategy: AccountProxyStrategy; proxyId:
 }
 
 async function loadLoginProxyOptions() {
-  proxies.value = await panelApi.proxies()
+  proxies.value = (await panelApi.proxies()).filter((proxy) => !proxy.managedWgcfProfile)
   if (availableWarpPoolCount.value === 0 && proxyStrategy.value === 'warp_pool') {
     proxyStrategy.value = ''
     proxyId.value = null

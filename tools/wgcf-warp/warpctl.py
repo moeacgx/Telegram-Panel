@@ -5,6 +5,7 @@ import base64
 import configparser
 import contextlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -162,7 +163,9 @@ class Store:
         atomic_write(path / "meta.json", meta)
         return {"profile": name, "registered": True}
 
-    def generate(self, name, port):
+    def generate(self, name, port, bind_address="0.0.0.0"):
+        if bind_address not in ("0.0.0.0", "127.0.0.1"):
+            raise Failure("监听地址只允许 0.0.0.0 或 127.0.0.1")
         path = self.profile(name)
         account = self.account(path)
         if not account:
@@ -208,13 +211,81 @@ class Store:
                                                "AllowedIPs", "Endpoint", "PersistentKeepalive")}
         body = "\n".join("[" + section + "]\n" + "\n".join(f"{names[k]} = {v}" for k, v in parser[section].items())
                          for section in ("Interface", "Peer"))
-        body += f"\n[Socks5]\nBindAddress = 0.0.0.0:{port}\nUsername = {auth['username']}\nPassword = {auth['password']}\n"
+        body += f"\n[Socks5]\nBindAddress = {bind_address}:{port}\nUsername = {auth['username']}\nPassword = {auth['password']}\n"
         atomic_write(path / "wireproxy.conf", body)
         atomic_write(path / "proxy-auth.json", auth)
         run_private(self.wireproxy + ["-n", "-c", str(path / "wireproxy.conf")], self.timeout, path)
-        meta.update(port=port, generated=True, desired=False)
+        meta.update(port=port, bindAddress=bind_address, generated=True, desired=False)
         atomic_write(path / "meta.json", meta)
         return {"profile": name, "generated": True, "port": port}
+
+    def provision(self, name, accept_tos, display_name=None):
+        if not accept_tos:
+            raise Failure("注册要求管理员阅读 Cloudflare 条款后显式传入 --accept-tos")
+        if display_name is not None:
+            if (not isinstance(display_name, str) or not 1 <= len(display_name.strip()) <= 80
+                    or any(ord(value) < 32 or 127 <= ord(value) <= 159 for value in display_name)):
+                raise Failure("展示名称须为 1～80 个字符，不能包含控制字符")
+            display_name = display_name.strip()
+        path = self.profile(name, True)
+        meta = read_json(path / "meta.json", {})
+        if not isinstance(meta, dict):
+            raise Failure("档案元数据无效，请保留现场并核对")
+        if display_name is not None:
+            meta["displayName"] = display_name
+            atomic_write(path / "meta.json", meta)
+        self.register(name, True)
+        meta = read_json(path / "meta.json", {})
+        if not meta.get("generated"):
+            self.generate(name, self.available_port(path), bind_address="127.0.0.1")
+        else:
+            # 网页运行器只接受本机监听配置，禁止复用外部工具的公开监听端点。
+            parser = configparser.ConfigParser(interpolation=None, strict=True)
+            parser.read_string((path / "wireproxy.conf").read_text(encoding="utf-8"))
+            if parser.get("Socks5", "BindAddress", fallback="") != f"127.0.0.1:{meta.get('port')}":
+                raise Failure("已有配置不是内置本机出口，请使用新的配置名")
+        meta = read_json(path / "meta.json", {})
+        # 已有修订号代表操作者做过启停选择；重复配置不得撤销明确停止。
+        if not meta.get("revision"):
+            return self.desired(name, True)
+        return self.status(name)
+
+    def available_port(self, path):
+        occupied = set()
+        for file in self.root.glob("*/meta.json"):
+            if file.parent != path:
+                meta = read_json(file, {})
+                if not isinstance(meta, dict):
+                    raise Failure("已有档案元数据无效，无法安全分配监听端口")
+                port = meta.get("port")
+                if isinstance(port, int):
+                    occupied.add(port)
+        for port in range(21000, 30000):
+            if port in occupied:
+                continue
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                    probe.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+        raise Failure("内置出口端口范围 21000～29999 已无空闲端口")
+
+    def list_profiles(self):
+        result = []
+        for file in sorted(self.root.glob("*/meta.json")):
+            name = file.parent.name
+            if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,47}", name):
+                continue
+            try:
+                result.append(self.status(name))
+            except (Failure, OSError, ValueError, KeyError, TypeError, AttributeError):
+                result.append({"profile": name, "name": name, "displayName": name,
+                    "registered": False, "generated": False, "port": None, "desired": False,
+                    "runtime": "failed", "proxyId": None, "accountId": None, "bound": False,
+                    "egressVerified": False, "revision": None, "runtimeRevision": None,
+                    "runtimeFresh": False, "runtimeUpdatedAt": None})
+        return result
 
     def desired(self, name, enabled):
         path = self.profile(name)
@@ -232,18 +303,27 @@ class Store:
         path = self.profile(name)
         meta = read_json(path / "meta.json", {})
         runtime = read_json(path / "runtime.json", {})
-        fresh = time.time() - runtime.get("at", 0) < 10
+        if not isinstance(meta, dict) or not isinstance(runtime, dict):
+            raise Failure("档案状态结构无效，请保留现场并核对")
+        at = runtime.get("at")
+        valid_at = isinstance(at, (int, float)) and not isinstance(at, bool) and math.isfinite(at)
+        fresh = valid_at and 0 <= time.time() - at < 10
         state = runtime.get("state", "unknown") if fresh else "unknown"
+        if state not in ("unknown", "pending", "stopped", "backoff", "starting", "listening", "failed"):
+            state = "failed"
         if fresh and runtime.get("revision") != meta.get("revision"):
             state = "pending"
-        return {"profile": name, "registered": bool(self.account(path)),
+        return {"profile": name, "name": name, "displayName": meta.get("displayName") or name,
+                "registered": bool(self.account(path)),
                 "generated": bool(meta.get("generated")), "port": meta.get("port"),
                 "desired": bool(meta.get("desired")),
                 "runtime": state,
                 "proxyId": meta.get("binding", {}).get("proxyId"),
                 "accountId": meta.get("binding", {}).get("accountId"),
                 "bound": bool(meta.get("binding", {}).get("bound")),
-                "egressVerified": False}
+                "egressVerified": False,
+                "revision": meta.get("revision"), "runtimeRevision": runtime.get("revision"),
+                "runtimeFresh": fresh, "runtimeUpdatedAt": at if valid_at else None}
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -462,13 +542,17 @@ def main():
     parser.add_argument("--data", default="/data")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("serve")
-    for verb in ("register", "generate", "start", "status", "stop"):
+    commands.add_parser("list")
+    for verb in ("register", "generate", "start", "status", "stop", "provision"):
         command = commands.add_parser(verb)
         command.add_argument("profile")
-        if verb == "register":
+        if verb in ("register", "provision"):
             command.add_argument("--accept-tos", action="store_true")
+        if verb == "provision":
+            command.add_argument("--name")
         if verb == "generate":
             command.add_argument("--port", type=int, required=True)
+            command.add_argument("--bind-address", choices=("0.0.0.0", "127.0.0.1"), default="0.0.0.0")
     command = commands.add_parser("bind")
     command.add_argument("--accounts", required=True, help="数据库账号 ID，以逗号分隔；自动对应 account-ID 配置")
     command.add_argument("--panel-url", required=True)
@@ -484,12 +568,16 @@ def main():
         with lock(store.root / ".operations.lock"):
             if args.command == "register":
                 result = store.register(args.profile, args.accept_tos)
+            elif args.command == "provision":
+                result = store.provision(args.profile, args.accept_tos, args.name)
             elif args.command == "generate":
-                result = store.generate(args.profile, args.port)
+                result = store.generate(args.profile, args.port, args.bind_address)
             elif args.command in ("start", "stop"):
                 result = store.desired(args.profile, args.command == "start")
             elif args.command == "status":
                 result = store.status(args.profile)
+            elif args.command == "list":
+                result = store.list_profiles()
             else:
                 ids = [int(value) for value in args.accounts.split(",")]
                 if not 1 <= len(ids) <= 10 or len(set(ids)) != len(ids) or any(i <= 0 for i in ids):

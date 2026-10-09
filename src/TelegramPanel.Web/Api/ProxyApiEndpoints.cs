@@ -11,6 +11,7 @@ public static class ProxyApiEndpoints
 {
     public static RouteGroupBuilder MapProxyManagementApi(this RouteGroupBuilder group)
     {
+        group.MapWgcfWarpApi();
         group.MapGet("/network/egress", ProbePanelEgressAsync);
 
         group.MapGet("/proxies", ListAsync);
@@ -480,7 +481,8 @@ public static class ProxyApiEndpoints
                 new AccountProxyBindingInput(
                     request.Strategy ?? string.Empty,
                     request.ProxyId,
-                    request.ExpectedProxyId),
+                    request.ExpectedProxyId,
+                    ExpectedUseGlobalProxy: request.ExpectedUseGlobalProxy),
                 cancellationToken);
             return Results.Ok(result);
         }
@@ -660,7 +662,8 @@ public static class ProxyApiEndpoints
             isGlobal || (proxy.Accounts?.Count ?? 0) > 0,
             (proxy.Accounts?.Count ?? 0) + (isGlobal ? globalAccountCount : 0),
             proxy.CreatedAtUtc,
-            proxy.UpdatedAtUtc);
+            proxy.UpdatedAtUtc,
+            proxy.ManagedWgcfProfile);
 
     private static ProxyCategoryDto ToDto(ProxyCategory category) =>
         new(
@@ -727,7 +730,8 @@ public sealed record WarpCreateRequestDto(
 public sealed record AccountProxyBindingRequestDto(
     string? Strategy,
     int? ProxyId,
-    int? ExpectedProxyId);
+    int? ExpectedProxyId,
+    bool? ExpectedUseGlobalProxy = null);
 public sealed record BatchAccountProxyBindingRequestDto(
     IReadOnlyList<int>? AccountIds,
     string? Strategy,
@@ -779,7 +783,8 @@ public sealed record ProxyDto(
     bool IsInUse,
     int UsageCount,
     DateTime CreatedAtUtc,
-    DateTime UpdatedAtUtc);
+    DateTime UpdatedAtUtc,
+    string? ManagedWgcfProfile = null);
 
 public sealed record ProxyCategoryDto(
     int Id,

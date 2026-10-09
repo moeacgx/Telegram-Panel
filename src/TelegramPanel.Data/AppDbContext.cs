@@ -448,6 +448,8 @@ public class AppDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
             entity.Property(e => e.Kind).IsRequired().HasMaxLength(20).HasDefaultValue("manual");
+            entity.Property(e => e.ManagedWgcfProfile).HasMaxLength(48);
+            entity.HasIndex(e => e.ManagedWgcfProfile).IsUnique();
             entity.Property(e => e.Protocol).IsRequired().HasMaxLength(20);
             entity.Property(e => e.Host).IsRequired().HasMaxLength(255);
             entity.Property(e => e.Username).HasMaxLength(500);

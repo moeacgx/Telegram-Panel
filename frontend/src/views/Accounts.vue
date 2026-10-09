@@ -357,7 +357,7 @@
               :key="proxy.id"
               :value="proxy.id"
               :label="`${proxy.name} · ${proxy.protocol.toUpperCase()} · ${proxy.egressIp || `${proxy.host}:${proxy.port}`}`"
-              :disabled="!proxy.isEnabled"
+              :disabled="!proxy.isEnabled || (!!proxy.managedWgcfProfile && proxyDialog.accountIds.length !== 1)"
             />
           </el-select>
         </el-form-item>
@@ -903,6 +903,7 @@ const proxyDialog = reactive({
   strategy: '' as AccountProxyBatchStrategy | '',
   proxyId: null as number | null,
   expectedProxyId: null as number | null,
+  expectedUseGlobalProxy: null as boolean | null,
   proxyText: '',
 })
 const proxyDialogProxyCount = computed(() => countEffectiveProxyLines(proxyDialog.proxyText))
@@ -1552,6 +1553,7 @@ function openAccountProxy(accountIds: number[], row?: Row) {
   proxyDialog.accountIds = [...accountIds]
   proxyDialog.title = accountIds.length > 1 ? `批量切换代理（${accountIds.length} 个账号）` : `切换代理 - ${row ? accountLabel(row) : ''}`
   proxyDialog.expectedProxyId = row?.proxy?.id ?? 0
+  proxyDialog.expectedUseGlobalProxy = row?.useGlobalProxy ?? null
   proxyDialog.strategy = row
     ? row.proxy ? 'existing' : row.useGlobalProxy ? 'global' : 'direct'
     : ''
@@ -1571,6 +1573,7 @@ async function saveAccountProxy() {
   const strategy = proxyDialog.strategy
   const proxyId = proxyDialog.proxyId
   const expectedProxyId = proxyDialog.expectedProxyId
+  const expectedUseGlobalProxy = proxyDialog.expectedUseGlobalProxy
 
   if (!strategy) {
     ElMessage.warning('请先明确选择本次账号切换使用的代理方式')
@@ -1578,6 +1581,10 @@ async function saveAccountProxy() {
   }
   if (strategy === 'existing' && !proxyId) {
     ElMessage.warning('请选择要绑定的代理')
+    return
+  }
+  if (strategy === 'existing' && accountIds.length !== 1 && proxies.value.find((proxy) => proxy.id === proxyId)?.managedWgcfProfile) {
+    ElMessage.warning('轻量 WARP 出口只支持绑定单个已有账号')
     return
   }
   if (strategy === 'warp_per_account' && !warpAvailable.value) {
@@ -1617,6 +1624,7 @@ async function saveAccountProxy() {
       const result = await panelApi.setAccountProxy(accountIds[0], {
         ...payload,
         expectedProxyId,
+        expectedUseGlobalProxy,
       })
       if (operationToken !== accountProxyOperationToken) return
       const item = result.items[0]

@@ -439,3 +439,19 @@ Telegram 限流和 Session/代理状态。该功能不引入数据库迁移，�
 
 需要给外部系统调用时，优先使用模块的 `MapEndpoints` 明确设计鉴权、限流和响应模型，
 不要直接把管理 Cookie 接口暴露到公网。
+
+## 轻量 WARP 管理 API（v1.31.80）
+
+以下接口均位于已登录的 `/api/panel` 下，只用于管理页面，不接受或返回 WARP 私钥、注册
+Token、SOCKS 密码或上游原始输出。
+
+- `GET /proxies/wgcf`：返回环境是否可用及档案数组。档案包含 `profile`、`phase`、
+  `registered`、`generated`、`desired`、`runtime`、`proxyId`、`accountCount`、检测状态和
+  脱敏错误。`runtime=listening` 只代表本地监听，不能替代 `testStatus=ok`。
+- `POST /proxies/wgcf`：请求体为 `{ requestId, name, acceptTerms }`。`requestId` 为 UUID，
+  `acceptTerms` 必须为 `true`；返回已持久化的档案状态，后续以 GET 读取创建进度。同一 requestId 幂等。
+- `POST /proxies/wgcf/{profile}/resume`、`start`、`stop`、`test`：恢复失败档案、切换期望
+  启停或执行出口检测。停止被账号引用的出口返回冲突，调用方需先改账号路由。
+
+常规代理 DTO 新增可空 `managedWgcfProfile`。带该字段的代理只能通过上述专用接口维护，
+不能用常规代理编辑、删除、批量或全局代理 API 修改。

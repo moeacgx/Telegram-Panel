@@ -9,6 +9,7 @@ public class OutboundProxy
     public int? CategoryId { get; set; }
     public string Name { get; set; } = null!;
     public string Kind { get; set; } = "manual";
+    public string? ManagedWgcfProfile { get; set; }
     public string Protocol { get; set; } = "socks5";
     public string Host { get; set; } = null!;
     public int Port { get; set; }

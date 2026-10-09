@@ -14,6 +14,7 @@ public sealed partial class ProxyManagementService
         int? exceptId,
         CancellationToken cancellationToken)
     {
+        await ValidateUnmanagedEndpointAsync(input.Host!, input.Port, cancellationToken);
         var duplicate = await _db.OutboundProxies
             .AsNoTracking()
             .AnyAsync(

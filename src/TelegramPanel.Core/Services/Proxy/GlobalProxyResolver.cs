@@ -28,7 +28,12 @@ public sealed class GlobalProxyResolver
 
         var sourceMode = GlobalTelegramProxyConfiguration.GetSourceMode(_configuration);
         if (sourceMode == GlobalTelegramProxyConfiguration.ManualSourceMode)
-            return GlobalTelegramProxyConfiguration.Build(_configuration);
+        {
+            var manual = GlobalTelegramProxyConfiguration.Build(_configuration);
+            if (manual != null)
+                await ManagedWgcfProxyPolicy.EnsureUnmanagedEndpointAsync(_db, manual.Host, manual.Port, cancellationToken);
+            return manual;
+        }
         if (sourceMode != GlobalTelegramProxyConfiguration.ExistingSourceMode)
             throw new InvalidOperationException("Telegram 全局代理来源模式无效，已阻止降级为直连");
 
@@ -44,6 +49,8 @@ public sealed class GlobalProxyResolver
             throw new InvalidOperationException(
                 "Telegram 全局代理引用的已有代理不存在或已停用，已阻止降级为直连");
         }
+        if (proxy.ManagedWgcfProfile != null)
+            throw new InvalidOperationException("受管 WireGuard 不能作为全局代理，已阻止降级为直连");
         if (proxy.Kind == OutboundProxyKinds.WireGuardWarp
             && (proxy.TestStatus != "ok" || string.IsNullOrWhiteSpace(proxy.EgressIp)))
         {

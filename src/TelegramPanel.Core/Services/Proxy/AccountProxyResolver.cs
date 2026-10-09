@@ -49,6 +49,10 @@ public sealed class AccountProxyResolver : IAccountProxyResolver
         }
         if (account.Proxy is not { IsEnabled: true } proxy)
             throw new InvalidOperationException($"账号 {accountId} 绑定的代理不可用，已阻止降级为直连");
+        if (proxy.ManagedWgcfProfile != null
+            && await db.Accounts.AsNoTracking().AnyAsync(
+                other => other.ProxyId == proxy.Id && other.Id != accountId, cancellationToken))
+            throw new InvalidOperationException("受管 WireGuard 出口存在多个账号引用，已阻止连接或降级为直连");
 
         return new AccountProxyResolution(
             BuildConnectionOptions(proxy, $"tg_account_{accountId}"),

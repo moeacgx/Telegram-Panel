@@ -723,7 +723,7 @@ async function loadCategories() {
 }
 
 async function loadProxies() {
-  proxies.value = await panelApi.proxies()
+  proxies.value = (await panelApi.proxies()).filter((proxy) => !proxy.managedWgcfProfile)
 }
 
 async function loadWarpStatus() {

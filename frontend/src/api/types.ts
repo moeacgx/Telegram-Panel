@@ -57,6 +57,7 @@ export interface OutboundProxy {
   name: string
   kind: ProxyKind
   protocol: ProxyProtocol
+  managedWgcfProfile?: string | null
   host: string
   port: number
   username?: string | null
@@ -169,6 +170,33 @@ export interface CreateWarpProxyRequest {
   protocol?: WarpProxyProtocol | null
 }
 
+export interface WgcfProfile {
+  profile: string
+  name: string
+  phase: 'creating' | 'ready' | 'failed' | 'stopped' | 'starting'
+  registered: boolean
+  generated: boolean
+  desired: boolean
+  runtime: string
+  proxyId: number | null
+  accountCount: number
+  testStatus: string
+  egressIp: string | null
+  error: string | null
+}
+
+export interface WgcfRuntimeStatus {
+  available: boolean
+  reason: string | null
+  profiles: WgcfProfile[]
+}
+
+export interface CreateWgcfProfileRequest {
+  requestId: string
+  name: string
+  acceptTerms: boolean
+}
+
 export type AccountProxyStrategy = 'direct' | 'global' | 'existing' | 'warp_per_account' | 'warp_pool'
 
 export type AccountProxyBatchStrategy = AccountProxyStrategy | 'proxy_per_account'
@@ -181,6 +209,7 @@ export interface AccountProxyBindingRequest {
   strategy: AccountProxyBatchStrategy
   proxyId?: number | null
   expectedProxyId?: number | null
+  expectedUseGlobalProxy?: boolean | null
   proxyText?: string | null
 }
 

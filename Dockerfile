@@ -25,6 +25,12 @@ RUN apt-get update \
 RUN printf '{\n  "name": "telegram-panel-tdata-runtime",\n  "private": true,\n  "type": "module"\n}\n' > package.json \
     && npm install --omit=dev --no-audit --no-fund --loglevel=warn @mtcute/convert @mtcute/node
 
+FROM python:3.12.12-slim-bookworm AS wgcf-dependencies
+ARG TARGETARCH
+WORKDIR /build
+COPY tools/wgcf-warp/install.py tools/wgcf-warp/dependencies.json ./
+RUN python install.py "$TARGETARCH" /out
+
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
 WORKDIR /app
 
@@ -33,7 +39,7 @@ ENV TELEGRAM_PANEL_TDATA_RUNTIME_DIR=/app/tdata-runtime
 EXPOSE 5000
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # 持久化目录：/data（通过 docker-compose 挂载）
@@ -47,6 +53,7 @@ RUN mkdir -p /data /data/sessions /data/logs \
     && ln -s /data/appsettings.local.json /app/appsettings.local.json || true
 
 COPY --from=build /app/publish .
+COPY --from=wgcf-dependencies /out/ /usr/local/bin/
 COPY --from=tdata-runtime /usr/local /usr/local
 COPY --from=tdata-runtime /opt/telegram-panel-tdata-runtime /app/tdata-runtime
 COPY docker/entrypoint.sh /entrypoint.sh

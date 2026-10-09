@@ -93,6 +93,9 @@ import type {
   WarpMaintenanceBatchResult,
   WarpMaintenanceResult,
   WarpRuntimeStatus,
+  WgcfProfile,
+  WgcfRuntimeStatus,
+  CreateWgcfProfileRequest,
 } from './types'
 
 const PROXY_SAVE_TIMEOUT_MS = 120_000
@@ -130,6 +133,17 @@ export const panelApi = {
   importProxies: (payload: ProxyImportRequest) =>
     api.post<OutboundProxy[]>('/proxies/import', payload, { timeout: PROXY_IMPORT_TIMEOUT_MS }).then((r) => r.data),
   warpStatus: () => api.get<WarpRuntimeStatus>('/proxies/warp/status').then((r) => r.data),
+  wgcfStatus: () => api.get<WgcfRuntimeStatus>('/proxies/wgcf').then((r) => r.data),
+  createWgcfProfile: (payload: CreateWgcfProfileRequest) =>
+    api.post<WgcfProfile>('/proxies/wgcf', payload).then((r) => r.data),
+  resumeWgcfProfile: (profile: string) =>
+    api.post<WgcfProfile>(`/proxies/wgcf/${encodeURIComponent(profile)}/resume`, {}).then((r) => r.data),
+  startWgcfProfile: (profile: string) =>
+    api.post<WgcfProfile>(`/proxies/wgcf/${encodeURIComponent(profile)}/start`, {}).then((r) => r.data),
+  stopWgcfProfile: (profile: string) =>
+    api.post<WgcfProfile>(`/proxies/wgcf/${encodeURIComponent(profile)}/stop`, {}).then((r) => r.data),
+  testWgcfProfile: (profile: string) =>
+    api.post<WgcfProfile>(`/proxies/wgcf/${encodeURIComponent(profile)}/test`, {}, { timeout: 60_000 }).then((r) => r.data),
   createWarpProxies: (payload: CreateWarpProxyRequest) =>
     api.post<OutboundProxy>('/proxies/warp', payload, { timeout: WARP_OPERATION_TIMEOUT_MS }).then((r) => r.data),
   refreshWarpProxy: (id: number) =>

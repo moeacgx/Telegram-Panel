@@ -84,10 +84,14 @@ public sealed partial class ProxyManagementService
             .GroupBy(item => item.ConnectionKey)
             .Select(group => group.First())
             .ToArray();
+        foreach (var item in uniqueInputs)
+            await ValidateUnmanagedEndpointAsync(item.Input.Host!, item.Input.Port, cancellationToken);
         var probes = await ProbeImportInputsAsync(uniqueInputs, cancellationToken);
         ThrowIfProbeFailed(orderedInputs, probes);
 
         await using var mutationLease = await AcquireMutationLeaseAsync(cancellationToken);
+        foreach (var item in uniqueInputs)
+            await ValidateUnmanagedEndpointAsync(item.Input.Host!, item.Input.Port, cancellationToken);
         var existingManualProxies = await _db.OutboundProxies
             .Where(proxy => proxy.Kind == OutboundProxyKinds.Manual)
             .ToListAsync(cancellationToken);

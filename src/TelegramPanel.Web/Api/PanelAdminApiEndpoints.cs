@@ -2944,6 +2944,15 @@ public static class PanelAdminApiEndpoints
     {
         async Task ApplyAsync(CancellationToken applyCancellationToken)
         {
+            if (proxyManagement != null && nextEnabled
+                && nextSourceMode == GlobalTelegramProxyConfiguration.ManualSourceMode)
+            {
+                var nextProxy = root["Telegram"]?["Proxy"];
+                await proxyManagement.ValidateUnmanagedEndpointAsync(
+                    nextProxy?["Server"]?.GetValue<string>() ?? string.Empty,
+                    nextProxy?["Port"]?.GetValue<int>() ?? 0,
+                    applyCancellationToken);
+            }
             await SaveLocalRootAsync(
                 configuration,
                 environment,
