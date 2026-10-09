@@ -42,6 +42,107 @@ class Fixture(unittest.TestCase):
 
 
 class ToolTests(Fixture):
+    def provision(self, name="web-1", display_name=None, accept_tos=True):
+        self.assertTrue(callable(getattr(self.store, "provision", None)), "缺少网页幂等创建入口")
+        return self.store.provision(name, accept_tos, display_name)
+
+    def test_web_provision_reuses_identity_port_password_and_revision(self):
+        first = self.provision(display_name="网页出口")
+        path = self.store.profile("web-1")
+        original = (path / "wireproxy.conf").read_text()
+        second = self.provision(display_name="网页出口")
+        self.assertEqual(first["port"], second["port"])
+        self.assertEqual(first["revision"], second["revision"])
+        self.assertEqual("1", (path / "registrations.txt").read_text())
+        self.assertEqual(original, (path / "wireproxy.conf").read_text())
+        self.assertIn(f"BindAddress = 127.0.0.1:{first['port']}", original)
+        self.assertTrue(second["desired"])
+        self.assertFalse(second["egressVerified"])
+        self.assertEqual("web-1", second["name"])
+        self.assertEqual("网页出口", second["displayName"])
+
+    def test_web_provision_requires_terms_before_materials_exist(self):
+        with self.assertRaises(ctl.Failure):
+            self.provision(accept_tos=False)
+        self.assertFalse((self.store.root / "web-1").exists())
+
+    def test_web_display_name_validation_precedes_registration(self):
+        for value in ("a" * 81, "换行\n名称", "\x00", " \t "):
+            with self.assertRaises(ctl.Failure):
+                self.provision(display_name=value)
+        self.assertFalse((self.store.root / "web-1").exists())
+
+    def test_web_provision_skips_reserved_and_listening_ports(self):
+        self.prepared("reserved", 21000)
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 21001))
+            listener.listen()
+            result = self.provision()
+        self.assertGreaterEqual(result["port"], 21002)
+        self.assertLessEqual(result["port"], 29999)
+        other = self.provision("web-2")
+        self.assertNotEqual(result["port"], other["port"])
+
+    def test_web_provision_recovers_complete_partial_registration(self):
+        path = self.store.profile("web-1", True)
+        ctl.atomic_write(path / "fake-mode.json", {"partial": True})
+        with self.assertRaises(ctl.Failure):
+            self.provision()
+        ctl.atomic_write(path / "fake-mode.json", {})
+        result = self.provision()
+        self.assertTrue(result["generated"])
+        self.assertEqual("1", (path / "registrations.txt").read_text())
+
+    def test_web_provision_unknown_registration_does_not_retry(self):
+        path = self.store.profile("web-1", True)
+        ctl.atomic_write(path / "meta.json", {"registrationAttempted": True})
+        with self.assertRaises(ctl.Failure):
+            self.provision()
+        self.assertFalse((path / "registrations.txt").exists())
+
+    def test_web_provision_does_not_reuse_external_listening_configuration(self):
+        self.prepared("web-1", 18081)
+        original = (self.store.profile("web-1") / "wireproxy.conf").read_text()
+        with self.assertRaises(ctl.Failure):
+            self.provision()
+        self.assertEqual(original, (self.store.profile("web-1") / "wireproxy.conf").read_text())
+
+    def test_web_list_whitelists_materials_and_isolates_corrupt_profile(self):
+        self.provision(display_name="出口 A")
+        bad = self.store.profile("bad", True)
+        (bad / "meta.json").write_text("{invalid")
+        self.assertTrue(callable(getattr(self.store, "list_profiles", None)), "缺少网页档案列表入口")
+        items = self.store.list_profiles()
+        self.assertEqual(["bad", "web-1"], [item["profile"] for item in items])
+        self.assertEqual("failed", items[0]["runtime"])
+        report = json.dumps(items)
+        self.assertNotIn("FAKE_SECRET_TOKEN", report)
+        self.assertNotIn(ctl.read_json(self.store.profile("web-1") / "proxy-auth.json")["password"], report)
+
+    def test_runtime_freshness_and_revision_are_reported(self):
+        path = self.prepared()
+        meta = ctl.read_json(path / "meta.json")
+        ctl.atomic_write(path / "runtime.json", {"state": "listening", "at": time.time(), "revision": "older"})
+        result = self.store.status("account-1")
+        self.assertIn("runtimeFresh", result, "缺少运行状态时效字段")
+        self.assertTrue(result["runtimeFresh"])
+        self.assertEqual("pending", result["runtime"])
+        self.assertEqual(meta["revision"], result["revision"])
+        self.assertEqual("older", result["runtimeRevision"])
+        ctl.atomic_write(path / "runtime.json", {"state": "listening", "at": time.time() - 11,
+                                               "revision": meta["revision"]})
+        result = self.store.status("account-1")
+        self.assertFalse(result["runtimeFresh"])
+        self.assertEqual("unknown", result["runtime"])
+
+    def test_generate_rejects_arbitrary_bind_address_before_cli_runs(self):
+        self.store.register("account-1", True)
+        self.assertIn("bind_address", ctl.Store.generate.__code__.co_varnames, "缺少监听地址参数")
+        for value in ("192.0.2.1", "127.0.0.1\nPassword = injected", "::1"):
+            with self.assertRaises(ctl.Failure):
+                self.store.generate("account-1", 18081, bind_address=value)
+        self.assertFalse((self.store.profile("account-1") / "generated.conf").exists())
+
     def test_explicit_terms_required_without_registration(self):
         with self.assertRaises(ctl.Failure):
             self.store.register("account-1", False)
