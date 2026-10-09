@@ -5820,7 +5820,7 @@ public static class PanelAdminApiEndpoints
         return Results.Ok(new OperationResultDto(true, message));
     }
 
-    private static async Task<IResult> UploadTaskAvatarAssetAsync(
+    internal static async Task<IResult> UploadTaskAvatarAssetAsync(
         HttpRequest httpRequest,
         ImageAssetStorageService assetStorage,
         CancellationToken cancellationToken)
@@ -5840,14 +5840,22 @@ public static class PanelAdminApiEndpoints
         if (string.IsNullOrWhiteSpace(scopeId))
             scopeId = Guid.NewGuid().ToString("N");
 
-        var stored = await assetStorage.SaveAsync(
-            file.OpenReadStream(),
-            file.FileName,
-            $"task-assets/{scopeId}",
-            ImageAssetKind.Avatar,
-            cancellationToken);
+        try
+        {
+            await using var stream = file.OpenReadStream();
+            var stored = await assetStorage.SaveAsync(
+                stream,
+                file.FileName,
+                $"task-assets/{scopeId}",
+                ImageAssetKind.Avatar,
+                cancellationToken);
 
-        return Results.Ok(new TaskAssetUploadResultDto(stored.AssetPath, stored.FileName, scopeId));
+            return Results.Ok(new TaskAssetUploadResultDto(stored.AssetPath, stored.FileName, scopeId));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new OperationResultDto(false, ex.Message));
+        }
     }
 
     private static async Task<IResult> GetDataDictionariesAsync(

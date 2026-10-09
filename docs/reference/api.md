@@ -58,6 +58,18 @@ Vue 后台使用 `/api/panel` 下的管理接口。开启后台登录时，除�
 - `POST /api/panel/accounts/{id}/devices/{hash}/kick`：踢出指定非当前设备；`hash` 使用上述字符串原样放入 URL。
 - `POST /api/panel/accounts/{id}/devices/kick-all`：踢出所有其他设备并保留当前授权。
 
+### 图片上传格式限制
+
+自 v1.31.79 起，任务头像 `POST /api/panel/tasks/assets/avatar` 和图片字典上传使用
+宿主图片处理器时按文件内容拒绝 TIFF/BigTIFF，改名为 `.jpg` 或声明 `image/jpeg` 也不会放行。
+接口返回 HTTP 400、`success=false` 与中文转换提示，不持久化该图片文件。
+管理员鉴权和原 multipart 字段不变；JPEG、PNG、WebP 继续转换为 JPEG 保存，并保留原方向纠正。
+其他头像和 Telegram 图片预览调用同一处理器，其已有错误响应结构不变。
+
+成功判据为 TIFF 返回明确错误、PNG 等正常图片仍可保存；失败时核对真实编码和部署版本，
+不要通过修改文件扩展名重试。无需迁移；回滚应用会恢复 TIFF 解码，同时重新暴露对应风险。
+这是格式级缓解，不表示依赖的全部安全风险已解决。
+
 ### 手机号登录的人机验证失败
 
 适用于 v1.31.79 及后续版本，前置条件是管理员鉴权、有效 Telegram API 配置及显式登录代理选择。

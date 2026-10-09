@@ -21,6 +21,7 @@ public static class TelegramImageProcessor
         await fileStream.CopyToAsync(raw, cancellationToken);
         raw.Position = 0;
 
+        RejectTiffHeader(raw);
         using var image = await Image.LoadAsync(raw, cancellationToken);
         image.Mutate(x => x.AutoOrient());
         image.Mutate(x => x.Resize(new ResizeOptions
@@ -53,6 +54,7 @@ public static class TelegramImageProcessor
         await fileStream.CopyToAsync(raw, cancellationToken);
         raw.Position = 0;
 
+        RejectTiffHeader(raw);
         using var image = await Image.LoadAsync(raw, cancellationToken);
         image.Mutate(x => x.AutoOrient());
 
@@ -69,5 +71,19 @@ public static class TelegramImageProcessor
         await image.SaveAsJpegAsync(encoded, new JpegEncoder { Quality = 88 }, cancellationToken);
         encoded.Position = 0;
         return encoded;
+    }
+
+    private static void RejectTiffHeader(MemoryStream raw)
+    {
+        // 必须在图片解码器运行前按内容拒绝，不能信任文件名或 MIME。
+        var header = raw.GetBuffer().AsSpan(0, (int)Math.Min(raw.Length, 4));
+        if (header.Length == 4
+            && ((header[0] == 0x49 && header[1] == 0x49 && header[3] == 0
+                    && header[2] is 0x2A or 0x2B)
+                || (header[0] == 0x4D && header[1] == 0x4D && header[2] == 0
+                    && header[3] is 0x2A or 0x2B)))
+        {
+            throw new InvalidOperationException("暂不支持 TIFF/BigTIFF 图片，请先转换为 JPEG、PNG 或 WebP 后重试。");
+        }
     }
 }
