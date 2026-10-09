@@ -123,13 +123,22 @@ public sealed class WgcfWarpService : BackgroundService
     {
         EnsureAvailable();
         GetEntry(profile);
-        await using var scope = _scopes.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var proxyId = await db.OutboundProxies.Where(x => x.ManagedWgcfProfile == profile)
-            .Select(x => (int?)x.Id).SingleOrDefaultAsync(ct) ?? throw new InvalidOperationException("档案尚未生成代理");
-        if (ToDto(GetEntry(profile), null).Runtime != "listening")
-            throw new InvalidOperationException("出口尚未监听，不能执行检测");
-        await scope.ServiceProvider.GetRequiredService<ProxyManagementService>().TestAsync(proxyId, ct);
+        await _toolLock.WaitAsync(ct);
+        try
+        {
+            await using var scope = _scopes.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var proxy = await db.OutboundProxies.AsNoTracking()
+                .Where(x => x.ManagedWgcfProfile == profile)
+                .Select(x => new { x.Id, x.IsEnabled })
+                .SingleOrDefaultAsync(ct) ?? throw new InvalidOperationException("档案尚未生成代理");
+            if (!proxy.IsEnabled)
+                throw new InvalidOperationException("出口已停止，启动并确认监听后才能检测");
+            if (ToDto(GetEntry(profile), null).Runtime != "listening")
+                throw new InvalidOperationException("出口尚未监听，不能执行检测");
+            await scope.ServiceProvider.GetRequiredService<ProxyManagementService>().TestAsync(proxy.Id, ct);
+        }
+        finally { _toolLock.Release(); }
         return (await ListAsync(ct)).Profiles.Single(x => x.Profile == profile);
     }
 
@@ -183,6 +192,9 @@ public sealed class WgcfWarpService : BackgroundService
                 var proxy = await service.CreateManagedWgcfProxyAsync(profile, entry.Name,
                     meta.RootElement.GetProperty("port").GetInt32(),
                     auth.RootElement.GetProperty("username").GetString()!, auth.RootElement.GetProperty("password").GetString()!, ct);
+                // stop 会先关闭数据库路由，再确认运行器退出。恢复同一档案时必须重新启用
+                // 路由，不能仅让 wireproxy 监听后就标记为 ready。
+                proxy = await service.SetManagedWgcfEnabledAsync(profile, true, ct);
                 await WaitRuntimeAsync(profile, "listening", ct);
                 await service.TestAsync(proxy.Id, ct);
                 Persist(entry with { Phase = "ready", Error = null });

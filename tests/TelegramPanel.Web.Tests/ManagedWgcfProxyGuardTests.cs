@@ -122,6 +122,9 @@ public sealed class ManagedWgcfProxyGuardTests
         var stopped = await f.Service.SetManagedWgcfEnabledAsync("profile-one", false);
         Assert.False(stopped.IsEnabled);
         Assert.Equal("unknown", stopped.TestStatus);
+        var resumed = await f.Service.SetManagedWgcfEnabledAsync("profile-one", true);
+        Assert.True(resumed.IsEnabled);
+        Assert.Equal("unknown", resumed.TestStatus);
     }
 
     [Fact]
