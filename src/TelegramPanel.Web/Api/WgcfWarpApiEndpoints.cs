@@ -8,7 +8,9 @@ public static class WgcfWarpApiEndpoints
     {
         group.MapGet("/proxies/wgcf", (WgcfWarpService service, CancellationToken ct) => service.ListAsync(ct));
         group.MapPost("/proxies/wgcf", async (WgcfCreateRequest request, WgcfWarpService service, CancellationToken ct) =>
-            await HandleAsync(() => service.CreateAsync(request.RequestId, request.Name, request.AcceptTerms, ct), accepted: true));
+            // 请求已持久化并可由 GET 轮询恢复。返回 200 保持与 Vue/Axios 管理操作的
+            // 响应合同一致，避免 202 被中间层或客户端作为未完成重试。
+            await HandleAsync(() => service.CreateAsync(request.RequestId, request.Name, request.AcceptTerms, ct)));
         group.MapPost("/proxies/wgcf/{profile}/resume", async (string profile, WgcfWarpService service, CancellationToken ct) =>
             await HandleAsync(() => service.ResumeAsync(profile, ct), accepted: true));
         group.MapPost("/proxies/wgcf/{profile}/start", async (string profile, WgcfWarpService service, CancellationToken ct) =>

@@ -142,7 +142,10 @@ function canBind(profile: WgcfProfile) {
 
 function upsert(profile: WgcfProfile) {
   if (disposed || !status.value) return
-  status.value.profiles = [...profiles.value.filter((item) => item.profile !== profile.profile), profile]
+  status.value = {
+    ...status.value,
+    profiles: [...status.value.profiles.filter((item) => item.profile !== profile.profile), profile],
+  }
   emit('changed')
 }
 

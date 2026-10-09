@@ -131,6 +131,11 @@ test('同一档案的操作不会重复提交', async () => {
   assert.equal(state.busyProfiles.has('wgcf-one'), false)
 })
 
+test('创建或操作结果替换状态档案，而不写入只读派生列表', () => {
+  assert.match(component, /status\.value = \{[\s\S]*?profiles: \[\.\.\.status\.value\.profiles\.filter/)
+  assert.doesNotMatch(component, /status\.value\.profiles\s*=/)
+})
+
 test('受管轻量出口不允许选入普通代理批量操作', () => {
   const match = proxiesSource.match(/function isSelectableProxy\([^)]*\) \{[\s\S]*?\n\}/)
   assert.ok(match, '缺少受管出口批量操作保护')

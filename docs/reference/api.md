@@ -449,7 +449,7 @@ Token、SOCKS 密码或上游原始输出。
   `registered`、`generated`、`desired`、`runtime`、`proxyId`、`accountCount`、检测状态和
   脱敏错误。`runtime=listening` 只代表本地监听，不能替代 `testStatus=ok`。
 - `POST /proxies/wgcf`：请求体为 `{ requestId, name, acceptTerms }`。`requestId` 为 UUID，
-  `acceptTerms` 必须为 `true`；返回 202，后续以 GET 读取创建状态。同一 requestId 幂等。
+  `acceptTerms` 必须为 `true`；返回已持久化的档案状态，后续以 GET 读取创建进度。同一 requestId 幂等。
 - `POST /proxies/wgcf/{profile}/resume`、`start`、`stop`、`test`：恢复失败档案、切换期望
   启停或执行出口检测。停止被账号引用的出口返回冲突，调用方需先改账号路由。
 

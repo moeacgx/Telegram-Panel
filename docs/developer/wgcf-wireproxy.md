@@ -30,7 +30,8 @@ wgcf 2.3.0、wireproxy 1.1.3。它以 `/data/wgcf-warp`（或配置的持久根�
 子进程退出时以 TERM、超时、进程树清理的顺序结束监督器。依赖缺失会使专用 API 返回不可用，
 不能阻塞面板启动。
 
-`POST /api/panel/proxies/wgcf` 必须提供 UUID 请求标识、名称和条款接受标志，返回 202；同一
+`POST /api/panel/proxies/wgcf` 必须提供 UUID 请求标识、名称和条款接受标志，返回已持久化的
+档案状态；同一
 标识对应 `web-<uuid>`，后台 `provision` 只会注册、生成并开始期望运行一次。`GET` 返回白名单
 状态，绝不返回 Token、私钥、密码、配置或上游输出。`start`、`stop`、`test`、`resume` 也是
 专用端点。创建、检测和启停可超过常规 API 时限，因此页面只轮询状态，不以 HTTP 连接存活
