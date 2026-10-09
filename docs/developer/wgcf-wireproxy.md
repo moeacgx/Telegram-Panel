@@ -1,7 +1,8 @@
 # wgcf 共享运行器合同
 
 适用于 v1.31.80 的内置运行器和独立 `tools/wgcf-warp`；部署和成功判据见
-[运维步骤](../deployment/wgcf-wireproxy.md)。宿主 .NET、Vue、数据库和模块 ABI 不变。
+[运维步骤](../deployment/wgcf-wireproxy.md)。本版新增面板网页管理与宿主运行服务，数据库增加
+受管出口标识；模块 ABI 不变，数据库迁移与回滚约束见下文。
 
 ## 生命周期与安全边界
 
