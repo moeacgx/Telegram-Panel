@@ -39,11 +39,13 @@ nav:
   - 部署与运维:
       - 反向代理: deployment/reverse-proxy.md
       - Bot Webhook: deployment/bot-webhook.md
+      - 共享 WireGuard 运维工具: deployment/wgcf-wireproxy.md
   - 参考:
       - 配置与数据目录: reference/configuration.md
       - 数据库: reference/database.md
       - API: reference/api.md
   - 开发:
+      - wgcf 共享运行器合同: developer/wgcf-wireproxy.md
       - 模块开发: developer/modules.md
       - 在线模块仓库维护: developer/module-repositories.md
       - 群组管理员移除: developer/group-admin-removal.md
