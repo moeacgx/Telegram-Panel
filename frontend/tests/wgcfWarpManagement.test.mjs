@@ -141,8 +141,24 @@ test('已持久化的同一请求也会关闭创建对话框', async () => {
   assert.equal(state.createDialog.running, false)
 })
 
+test('创建响应早于首次状态读取时仍会收口对话框', async () => {
+  let complete
+  const state = setup({ createWgcfProfile: () => new Promise((resolve) => { complete = resolve }) })
+  state.openCreate()
+  state.createDialog.name = '出口'
+  state.createDialog.acceptTerms = true
+  const pending = state.createProfile()
+  // 模拟请求已经发出后，首轮状态读取尚未落地的窗口。
+  state.status.value = null
+  complete(profile())
+  await pending
+  assert.equal(state.createDialog.visible, false)
+  assert.equal(state.profiles.value[0].profile, 'wgcf-one')
+})
+
 test('创建或操作结果替换状态档案，而不写入只读派生列表', () => {
-  assert.match(component, /status\.value = \{[\s\S]*?profiles: \[\.\.\.status\.value\.profiles\.filter/)
+  assert.match(component, /const current = status\.value \?\? \{ available: true, reason: null, profiles: \[\] \}/)
+  assert.match(component, /status\.value = \{[\s\S]*?profiles: \[\.\.\.current\.profiles\.filter/)
   assert.doesNotMatch(component, /status\.value\.profiles\s*=/)
 })
 
