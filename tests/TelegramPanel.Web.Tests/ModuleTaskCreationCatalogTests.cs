@@ -117,6 +117,7 @@ public sealed class ModuleTaskCreationCatalogTests
         Assert.Contains(BatchTaskTypes.ChannelGroupPublicize, creatableTypes);
         Assert.Contains(BatchTaskTypes.AutoChangeLoginEmail, creatableTypes);
         Assert.DoesNotContain(BatchTaskTypes.ChannelInviteUsers, creatableTypes);
+        Assert.DoesNotContain(BatchTaskTypes.UserJoinSubscribe, creatableTypes);
         Assert.DoesNotContain(BatchTaskTypes.BotSetAdmins, creatableTypes);
     }
 

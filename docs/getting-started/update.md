@@ -6,6 +6,20 @@
 
 Cloudflare R2 预签名 `PUT` URL 若返回 `Missing x-amz-content-sha256`，升级到包含该修复的版本后重试；面板会对 R2 上传自动发送 `x-amz-content-sha256: UNSIGNED-PAYLOAD`。
 
+## 账号加群和订阅后台入口修复
+
+v1.31.79 修复账号列表提交加群、订阅或启用 Bot 时出现
+“该任务类型未开放标准创建入口”的问题，退群、退订和停用 Bot 共用此修复。
+升级时同时更新后端与前端资源，无需新增数据库迁移。登录管理员账号后，在账号列表
+选择账号，打开相应批量操作，填写目标并完成风控确认和执行确认；成功判据是返回后台
+任务编号，并能在任务中心看到对应账号数与目标数的任务。任务创建成功不代表 Telegram
+操作已成功，需继续检查任务进度与失败详情。
+
+若仍出现原提示，先强制刷新页面，确认请求使用
+`/api/panel/accounts/chat-membership/tasks`；若任务已经创建但失败，检查账号 Session、
+代理与目标权限。回滚时恢复之前的完整镜像或更新包，现有任务数据无需清理，
+但旧版账号操作入口会恢复该已知错误。
+
 ## 升级到 1.31.76 的持久模块任务合同
 
 需要使用 `IModulePersistentTaskExecutionHost.DeferAsync`、`CompleteAsync` 或 `IModuleTaskLifecycleHandler.CommitUpsertAsync` 的外部模块，宿主最低版本为 `1.31.76`。升级前备份主数据库和模块数据目录；启动后确认迁移 `20260826093000_AddBatchTaskNextEligibleAt` 已应用，数据库存在 `IX_BatchTasks_ExecutionKind_Status_NextEligibleAtUtc`，任务中心可创建对应模块任务，延后任务在 `nextEligibleAtUtc` 到期前保持等待且不占执行槽。新建任务应直接返回 `pending`，若出现 `initializing_failed` 或 `updating_failed`，检查模块生命周期处理器日志后删除失败记录并重建任务。
