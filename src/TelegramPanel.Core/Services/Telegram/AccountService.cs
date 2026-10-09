@@ -135,7 +135,11 @@ public class AccountService : IAccountService
             }
 
             var hint = BuildFriendlyStartLoginError(ex);
-            _logger.LogWarning(ex, "StartLogin failed for phone {Phone} (accountId={AccountId}): {Hint}", normalizedPhone, accountId, hint);
+            if (TelegramLoginChallenge.IsRequired(ex.Message))
+                // 不附带原始异常，避免人机验证挑战串进入宿主日志。
+                _logger.LogWarning("StartLogin requires official verification (accountId={AccountId}): {Hint}", accountId, hint);
+            else
+                _logger.LogWarning(ex, "StartLogin failed for phone {Phone} (accountId={AccountId}): {Hint}", normalizedPhone, accountId, hint);
             return new LoginResult(false, null, hint);
         }
 
@@ -319,6 +323,9 @@ public class AccountService : IAccountService
     private static string BuildFriendlyStartLoginError(Exception ex)
     {
         var msg = ex.Message ?? string.Empty;
+
+        if (TelegramLoginChallenge.IsRequired(msg))
+            return $"发送验证码失败：{TelegramLoginChallenge.Message}";
 
         if (ex is FormatException
             || msg.Contains("hex", StringComparison.OrdinalIgnoreCase)

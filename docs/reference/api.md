@@ -58,6 +58,18 @@ Vue 后台使用 `/api/panel` 下的管理接口。开启后台登录时，除�
 - `POST /api/panel/accounts/{id}/devices/{hash}/kick`：踢出指定非当前设备；`hash` 使用上述字符串原样放入 URL。
 - `POST /api/panel/accounts/{id}/devices/kick-all`：踢出所有其他设备并保留当前授权。
 
+### 手机号登录的人机验证失败
+
+适用于 v1.31.79 及后续版本，前置条件是管理员鉴权、有效 Telegram API 配置及显式登录代理选择。
+`POST /api/panel/accounts/login/start` 收到 Telegram 的 `RECAPTCHA_CHECK_*` 时，沿用登录失败合同：
+HTTP `400`，`success=false`、`nextStep=null`、`account=null`，`message` 返回中文人机验证说明。
+客户端不得把此响应当作验证码已发送或可继续输入验证码，也不得自动循环重发。
+
+响应与登录相关宿主日志不包含原始挑战串；临时客户端和登录代理资源继续走既有失败清理流程。
+接口没有新增挑战提交字段或自动解题能力。用户需在官方 Telegram 客户端中按提示正常完成验证；
+最终登录是否放行由 Telegram 决定。验收和问题排查见[常见问题](../getting-started/faq.md)。
+此改动不改变 DTO、数据库或配置；回滚应用仅恢复旧错误提示与日志行为。
+
 ### 登录邮箱持久化与核验
 
 适用版本：v1.31.78 及后续版本，需要管理员鉴权与数据库迁移

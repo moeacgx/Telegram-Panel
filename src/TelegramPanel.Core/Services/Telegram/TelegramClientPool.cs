@@ -556,6 +556,13 @@ public class TelegramClientPool : ITelegramClientPool, IDisposable
             if (message.Length == 0)
                 return;
 
+            if (TelegramLoginChallenge.IsRequired(message))
+            {
+                // SDK 的 RpcError trace 也包含挑战串，不能只脱敏上层登录异常。
+                _logger.LogWarning("WTelegram({Level}): {Message}", level, TelegramLoginChallenge.Message);
+                return;
+            }
+
             if (message.Contains("FLOOD_WAIT", StringComparison.OrdinalIgnoreCase)
                 || message.Contains("RpcError", StringComparison.OrdinalIgnoreCase))
             {
