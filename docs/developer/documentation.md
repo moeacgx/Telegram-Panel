@@ -48,6 +48,22 @@ uv run mkdocs build
 
 ## 近期功能文档对照
 
+### 图片解码前的 TIFF 限制（v1.31.79）
+
+宿主 `TelegramImageProcessor` 的头像和普通图片入口在 `Image.LoadAsync` 前检查真实文件头，
+拒绝大小端 TIFF（42）和 BigTIFF（43），不依赖扩展名或 MIME。拒绝时抛出带中文提示的
+`InvalidOperationException`，任务头像上传和图片字典上传返回 400；其他宿主调用沿用已有
+失败处理。JPEG、PNG、WebP、EXIF 自动方向纠正、缩放和 JPEG 输出保持原行为。
+头像、图片资产及 Telegram 图片文档预览复用此边界；外部模块自行调用解码器不在此保证范围内。
+
+此限制用于阻断宿主 TIFF 解码入口，包括 CCITT 越界写和 BigTIFF 目录循环风险，
+不代表修复 ImageSharp 的全部安全公告。当前仍固定上一版依赖 3.1.12；上游 3.2.0 已回移
+相关修复并要求构建许可证，后续升级必须满足许可和兼容性要求，不得绕过许可检查。
+验收运行 `TelegramImageProcessorTests`：正常未压缩 TIFF 被拒绝、四种文件头均被两个入口拒绝、
+伪装为 JPEG 的任务头像返回 400 且不写入图片文件，常用格式及 EXIF 方向继续正确。
+只用正常小图和短文件头测试，不运行致命越界或耗时型漏洞样本。
+本次无数据库迁移；回滚应用会重新开放 TIFF 解码风险，已有 JPEG 资产无需转换。
+
 ### 手机号登录的人机验证诊断（v1.31.79）
 
 前置条件：当前宿主使用 WTelegramClient 4.4.8。其 `Login` 流程没有 reCAPTCHA 交互步骤；

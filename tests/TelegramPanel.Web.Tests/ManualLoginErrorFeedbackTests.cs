@@ -96,7 +96,9 @@ public sealed class ManualLoginErrorFeedbackTests
         }
         finally
         {
-            Directory.Delete(sessionsPath);
+            // 仅清理本测试创建的 GUID 临时目录，避免目录不存在或残留文件遮蔽原断言。
+            if (Directory.Exists(sessionsPath))
+                Directory.Delete(sessionsPath, recursive: true);
         }
     }
 
