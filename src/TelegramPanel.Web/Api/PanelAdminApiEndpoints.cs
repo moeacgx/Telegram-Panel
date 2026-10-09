@@ -100,6 +100,7 @@ public static class PanelAdminApiEndpoints
         secured.MapGet("/accounts/{id:int}/channels", GetAccountChannelsAsync);
         secured.MapGet("/accounts/{id:int}/groups", GetAccountGroupsAsync);
         secured.MapPost("/accounts/chat-membership", ChangeChatMembershipAsync);
+        secured.MapPost("/accounts/chat-membership/tasks", CreateChatMembershipTaskAsync);
         secured.MapPost("/accounts/chat-membership/risk-check", CheckChatMembershipRiskAsync);
         secured.MapPost("/accounts/{id:int}/profile", UpdateProfileAsync).DisableAntiforgery();
         secured.MapPost("/accounts/batch/profile", BatchUpdateProfileAsync);
@@ -840,6 +841,53 @@ public static class PanelAdminApiEndpoints
             .Select(ToDto)
             .ToList();
         return Results.Ok(memberships);
+    }
+
+    internal static async Task<IResult> CreateChatMembershipTaskAsync(
+        ChatMembershipRequestDto request,
+        BatchTaskManagementService tasks,
+        CancellationToken cancellationToken)
+    {
+        var ids = NormalizeIds(request.AccountIds);
+        if (ids.Count == 0)
+            return Results.BadRequest(new OperationResultDto(false, "请先选择账号"));
+
+        var links = (request.Links ?? Array.Empty<string>())
+            .SelectMany(x => (x ?? string.Empty).Split(new[] { "\r\n", "\n", "\r", ",", " " }, StringSplitOptions.RemoveEmptyEntries))
+            .Select(x => x.Trim())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (links.Count == 0)
+            return Results.BadRequest(new OperationResultDto(false, "请填写链接或用户名"));
+
+        var operation = (request.Operation ?? string.Empty).Trim().ToLowerInvariant();
+        if (operation is not (UserJoinSubscribeOperations.Join or UserJoinSubscribeOperations.Leave))
+            return Results.BadRequest(new OperationResultDto(false, "操作类型无效"));
+
+        var total = (long)ids.Count * links.Count;
+        if (total > int.MaxValue)
+            return Results.BadRequest(new OperationResultDto(false, "任务操作数量过多"));
+
+        var config = new UserJoinSubscribeTaskConfig
+        {
+            AccountIds = ids.ToList(),
+            Links = links,
+            Operation = operation,
+            TreatNoBotSuffixAsBot = request.TreatNoBotSuffixAsBot == true,
+            DelayMs = Math.Clamp(request.DelayMs ?? 2000, 0, 60000)
+        };
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var task = await tasks.CreateTaskAsync(new BatchTask
+        {
+            TaskType = BatchTaskTypes.UserJoinSubscribe,
+            OwnerModuleId = "builtin.tasks",
+            ExecutionKind = ModuleTaskExecutionKinds.Batch,
+            Total = (int)total,
+            Config = JsonSerializer.Serialize(config)
+        });
+        return Results.Ok(ToDto(task));
     }
 
     private static async Task<IResult> ChangeChatMembershipAsync(
@@ -5772,7 +5820,7 @@ public static class PanelAdminApiEndpoints
         return Results.Ok(new OperationResultDto(true, message));
     }
 
-    private static async Task<IResult> UploadTaskAvatarAssetAsync(
+    internal static async Task<IResult> UploadTaskAvatarAssetAsync(
         HttpRequest httpRequest,
         ImageAssetStorageService assetStorage,
         CancellationToken cancellationToken)
@@ -5792,14 +5840,22 @@ public static class PanelAdminApiEndpoints
         if (string.IsNullOrWhiteSpace(scopeId))
             scopeId = Guid.NewGuid().ToString("N");
 
-        var stored = await assetStorage.SaveAsync(
-            file.OpenReadStream(),
-            file.FileName,
-            $"task-assets/{scopeId}",
-            ImageAssetKind.Avatar,
-            cancellationToken);
+        try
+        {
+            await using var stream = file.OpenReadStream();
+            var stored = await assetStorage.SaveAsync(
+                stream,
+                file.FileName,
+                $"task-assets/{scopeId}",
+                ImageAssetKind.Avatar,
+                cancellationToken);
 
-        return Results.Ok(new TaskAssetUploadResultDto(stored.AssetPath, stored.FileName, scopeId));
+            return Results.Ok(new TaskAssetUploadResultDto(stored.AssetPath, stored.FileName, scopeId));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new OperationResultDto(false, ex.Message));
+        }
     }
 
     private static async Task<IResult> GetDataDictionariesAsync(

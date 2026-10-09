@@ -58,6 +58,30 @@ Vue 后台使用 `/api/panel` 下的管理接口。开启后台登录时，除�
 - `POST /api/panel/accounts/{id}/devices/{hash}/kick`：踢出指定非当前设备；`hash` 使用上述字符串原样放入 URL。
 - `POST /api/panel/accounts/{id}/devices/kick-all`：踢出所有其他设备并保留当前授权。
 
+### 图片上传格式限制
+
+自 v1.31.79 起，任务头像 `POST /api/panel/tasks/assets/avatar` 和图片字典上传使用
+宿主图片处理器时按文件内容拒绝 TIFF/BigTIFF，改名为 `.jpg` 或声明 `image/jpeg` 也不会放行。
+接口返回 HTTP 400、`success=false` 与中文转换提示，不持久化该图片文件。
+管理员鉴权和原 multipart 字段不变；JPEG、PNG、WebP 继续转换为 JPEG 保存，并保留原方向纠正。
+其他头像和 Telegram 图片预览调用同一处理器，其已有错误响应结构不变。
+
+成功判据为 TIFF 返回明确错误、PNG 等正常图片仍可保存；失败时核对真实编码和部署版本，
+不要通过修改文件扩展名重试。无需迁移；回滚应用会恢复 TIFF 解码，同时重新暴露对应风险。
+这是格式级缓解，不表示依赖的全部安全风险已解决。
+
+### 手机号登录的人机验证失败
+
+适用于 v1.31.79 及后续版本，前置条件是管理员鉴权、有效 Telegram API 配置及显式登录代理选择。
+`POST /api/panel/accounts/login/start` 收到 Telegram 的 `RECAPTCHA_CHECK_*` 时，沿用登录失败合同：
+HTTP `400`，`success=false`、`nextStep=null`、`account=null`，`message` 返回中文人机验证说明。
+客户端不得把此响应当作验证码已发送或可继续输入验证码，也不得自动循环重发。
+
+响应与登录相关宿主日志不包含原始挑战串；临时客户端和登录代理资源继续走既有失败清理流程。
+接口没有新增挑战提交字段或自动解题能力。用户需在官方 Telegram 客户端中按提示正常完成验证；
+最终登录是否放行由 Telegram 决定。验收和问题排查见[常见问题](../getting-started/faq.md)。
+此改动不改变 DTO、数据库或配置；回滚应用仅恢复旧错误提示与日志行为。
+
 ### 登录邮箱持久化与核验
 
 适用版本：v1.31.78 及后续版本，需要管理员鉴权与数据库迁移
@@ -83,6 +107,24 @@ Vue 后台使用 `/api/panel` 下的管理接口。开启后台登录时，除�
 验收时检查发送、确认、再次查询及重启后的展示，并覆盖掩码不一致、无邮箱、查询失败和旧账号无缓存。
 失败先检查数据库迁移、Session、出口与验证码确认结果；回滚前备份数据库，旧程序会忽略新增记录，
 不得手动删除新增表或迁移历史。完整约束见[账号详情密码与登录邮箱合同](../developer/documentation.md)。
+
+### 账号加群、订阅和 Bot 后台任务
+
+自 v1.31.79 起，管理员通过
+`POST /api/panel/accounts/chat-membership/tasks` 提交账号列表中的后台操作。
+请求包含 `accountIds`（数据库主键数组）、`operation`（`join` 或 `leave`）、
+`links`（目标数组）、可选 `treatNoBotSuffixAsBot` 和 `delayMs`。
+服务端过滤非正账号编号并去重，目标按换行、空格和英文逗号拆分后忽略大小写去重；
+操作间隔默认 2000 毫秒，限制为 0～60000 毫秒。无账号、无目标或操作类型无效返回 400，
+不会写入任务。成功返回普通 `BatchTaskDto`，其 `taskType=user_join_subscribe`、
+`ownerModuleId=builtin.tasks`、`executionKind=batch`、`status=pending`，
+`total` 为规范化后的账号数乘目标数；执行结果在任务中心查看。
+
+该接口沿用面板管理员鉴权，不接受调用方指定所有者、任务类型或运行态。
+账号页面仍先执行风控检查和用户确认；`POST /api/panel/tasks` 保持标准创建目录限制，
+不会因该专用入口而开放 `user_join_subscribe`。若仍提示“未开放标准创建入口”，
+检查浏览器是否加载旧版前端以及请求是否仍指向 `/tasks`。无需数据库迁移；
+回滚时前后端一起恢复旧版，已创建任务配置仍可读取，但旧版入口会恢复原错误。
 
 ### 账号编号
 

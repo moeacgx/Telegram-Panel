@@ -1,0 +1,6 @@
+__pycache__/
+*.toml
+*.conf
+*.secret.json
+panel-auth.json
+profiles/

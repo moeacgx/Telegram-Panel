@@ -48,6 +48,43 @@ uv run mkdocs build
 
 ## 近期功能文档对照
 
+### 图片解码前的 TIFF 限制（v1.31.79）
+
+宿主 `TelegramImageProcessor` 的头像和普通图片入口在 `Image.LoadAsync` 前检查真实文件头，
+拒绝大小端 TIFF（42）和 BigTIFF（43），不依赖扩展名或 MIME。拒绝时抛出带中文提示的
+`InvalidOperationException`，任务头像上传和图片字典上传返回 400；其他宿主调用沿用已有
+失败处理。JPEG、PNG、WebP、EXIF 自动方向纠正、缩放和 JPEG 输出保持原行为。
+头像、图片资产及 Telegram 图片文档预览复用此边界；外部模块自行调用解码器不在此保证范围内。
+
+此限制用于阻断宿主 TIFF 解码入口，包括 CCITT 越界写和 BigTIFF 目录循环风险，
+不代表修复 ImageSharp 的全部安全公告。当前仍固定上一版依赖 3.1.12；上游 3.2.0 已回移
+相关修复并要求构建许可证，后续升级必须满足许可和兼容性要求，不得绕过许可检查。
+验收运行 `TelegramImageProcessorTests`：正常未压缩 TIFF 被拒绝、四种文件头均被两个入口拒绝、
+伪装为 JPEG 的任务头像返回 400 且不写入图片文件，常用格式及 EXIF 方向继续正确。
+只用正常小图和短文件头测试，不运行致命越界或耗时型漏洞样本。
+本次无数据库迁移；回滚应用会重新开放 TIFF 解码风险，已有 JPEG 资产无需转换。
+
+### 手机号登录的人机验证诊断（v1.31.79）
+
+前置条件：当前宿主使用 WTelegramClient 4.4.8。其 `Login` 流程没有 reCAPTCHA 交互步骤；
+SDK 的 `InvokeWithReCaptcha` 文档标记为仅供官方客户端使用。Telegram 返回
+`RECAPTCHA_CHECK_<action>__<key>` 时，面板只能解释限制，不能仅凭错误中的 `signup`
+推断账号未注册，也不得伪装官方客户端或自动解题。
+
+`TelegramLoginChallenge` 统一识别错误前缀并提供中文说明。`AccountService` 返回
+`LoginResult(false, null, message)`，不记录原始异常；`TelegramClientPool` 同时过滤 SDK 的
+原始日志，避免 `RpcError` trace 泄漏挑战串。原有登录失败、取消、临时 Session 和 WARP
+清理流程不变，其他错误保持既有诊断内容；没有数据库迁移、配置或 API 字段变化。
+
+验收需运行 `ManualLoginErrorFeedbackTests` 和 `ManualLoginProxyRoutingTests`：覆盖注册/登录
+挑战、截断的挑战、原始日志过滤、普通限流错误，以及代理资源清理。挑战失败不应重试或进入
+验证码步骤。真实账号是否能在官方验证后登录必须单独验收，不能用离线测试声明已解除限制。
+失败时核对部署版本和错误类型，回滚仅需恢复旧应用；旧版会恢复原始提示和日志。
+
+本次还将 ImageSharp 从浮动 `3.*` 固定为上一版本实际使用的 `3.1.12`，防止全新还原意外
+升级到要求额外构建许可证的 `3.2.0`。这不是依赖安全升级；现有 NuGet 安全公告仍需独立处理。
+后续升级必须先确认许可与兼容性，不能跳过依赖自身的许可校验。
+
 当前最近一批改动的文档落点如下，后续开发按同一规则维护：
 
 - WARP 默认协议、HTTP/SOCKS5 选择、资源限制模板、数量上限和轻量出口巡检配置：`README.zh-CN.md`、`.env.example`、`docker-compose.yml`、`docker-compose.warp.yml`、`docs/guides/proxy-management.md`；实现合同和模块影响见 `docs/developer/modules.md`。

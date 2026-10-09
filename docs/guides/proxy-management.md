@@ -93,6 +93,11 @@ Cloudflare Trace，也不会刷新 IP、国家/地区、城市或 ISP 快照。�
 
 ## 外部 WireGuard WARP 多出口
 
+计划 v1.31.79 附带可选的 [共享 WireGuard 运维工具](../deployment/wgcf-wireproxy.md)，
+运营者可在明确接受 Cloudflare 条款后，通过命令注册独立 WARP 材料、在一个共享容器
+运行多个用户态 WireGuard 出口，并调用既有面板 API 检测和绑定。该工具仍属于面板外
+运维通道，没有新增面板内注册页面；真实注册和 Telegram 路径需要另行验收。
+
 这是当前版本支持的轻量多出口路径：面板不尝试在宿主机创建 WireGuard 接口、不写入
 `wg-quick` 配置、不复制或改写 Cloudflare WARP 私钥，也不验证“只改 PrivateKey 就能生成
 新 Cloudflare peer”这类假设。Cloudflare 官方 Linux 文档只说明 WARP 客户端可以把隧道协议

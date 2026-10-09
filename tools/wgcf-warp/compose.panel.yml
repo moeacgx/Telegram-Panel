@@ -1,0 +1,8 @@
+# 仅需要自动绑定时叠加；文件由运营者保存在仓库外，属主 10001，权限 0400。
+services:
+  wgcf-warp:
+    volumes:
+      - type: bind
+        source: ${TP_WGCF_PANEL_CREDENTIALS:?请指定仓库外的凭据 JSON 文件}
+        target: /run/secrets/panel-auth.json
+        read_only: true

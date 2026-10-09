@@ -1,0 +1,29 @@
+name: Wgcf 运维工具验证
+on:
+  pull_request:
+    paths:
+      - tools/wgcf-warp/**
+      - .github/workflows/wgcf-tool.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 失败恢复和本地模拟 API 测试
+        run: timeout 60s python -m unittest discover -s tools/wgcf-warp/tests -v
+      - name: 构建固定依赖镜像
+        run: docker build --build-arg TARGETARCH=amd64 -t wgcf-tool-test tools/wgcf-warp
+      - name: 无注册启动与真实二进制配置校验
+        run: |
+          docker run --rm --entrypoint wgcf wgcf-tool-test --help
+          docker run --rm --entrypoint wireproxy wgcf-tool-test --version
+          docker run --rm --cap-drop ALL --security-opt no-new-privileges --entrypoint python -v "$PWD/tools/wgcf-warp/tests:/tests:ro" wgcf-tool-test /tests/smoke_config.py

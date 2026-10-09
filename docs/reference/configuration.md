@@ -314,6 +314,22 @@ https://bucket.example.com/telegram-panel/tp-{timestamp}.zip?X-Amz-Signature=...
 
 ## 外部 WireGuard WARP 端点
 
+计划 v1.31.79 提供可选独立工具 `tools/wgcf-warp`，由共享 userspace wireproxy 容器管理
+多份独立配置，通过既有 `wireguard_warp` API 接入。它不改变面板主容器配置，不读取
+`Proxy__Warp__*`。完整前置、条款选择、恢复和回滚见
+[共享 WireGuard 运维工具](../deployment/wgcf-wireproxy.md)。
+
+- `TP_WGCF_NETWORK`：工具加入的现有 Docker 网络，默认 `telegram-panel_default`。
+- `TP_WGCF_PANEL_CREDENTIALS`：仅叠加 `compose.panel.yml` 时需要，指向仓库外管理员
+  凭据 JSON；只读挂载到 `/run/secrets/panel-auth.json`，不会复制到档案卷。
+- 档案卷：每 profile 保存 `wgcf-account.toml`、生成的配置、`proxy-auth.json`、
+  `meta.json` 和 `runtime.json`；包含密钥，必须按私有凭据备份，不加入 Git。
+- `meta.json` 记录注册尝试、期望启停、监听端口、原代理 ID 和恢复标识；`runtime.json`
+  只记录进程/监听状态和时间。`status` 不报告实网连通性，出口仍以面板检测为准。
+
+工具默认资源限制为共享 512 MiB 内存、1 CPU、256 PIDs；没有配置数量与账号容量的换算保证。
+失败排查先看运行器状态和面板检测，注册结果不明确时停止自动重试；回滚保留卷并恢复账号路由。
+
 外部 WireGuard WARP 不需要新增环境变量。运营方在面板外负责 WARP/WireGuard 注册、
 `wg` 接口、路由和 HTTP/SOCKS 监听，面板只保存该监听的代理记录。代理类型保存为
 `wireguard_warp`，协议只能是 `http` 或 `socks5`；批量导入可使用
