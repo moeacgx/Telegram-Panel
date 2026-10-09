@@ -98,6 +98,8 @@
       </div>
     </el-card>
 
+    <WgcfWarpPanel @changed="loadProxies(false)" />
+
     <el-dialog
       v-model="globalProxyDialog.visible"
       title="账号全局代理设置"
@@ -339,7 +341,7 @@
         class="proxy-table"
         @selection-change="onProxySelectionChange"
       >
-        <el-table-column type="selection" width="46" :reserve-selection="true" />
+        <el-table-column type="selection" width="46" :reserve-selection="true" :selectable="isSelectableProxy" />
         <el-table-column label="名称" min-width="150">
           <template #default="{ row }">
             <div class="cell-main">{{ row.name }}</div>
@@ -444,7 +446,7 @@
         </el-table-column>
         <el-table-column label="操作" width="158" fixed="right">
           <template #default="{ row }">
-            <div class="row-actions">
+            <div v-if="!row.managedWgcfProfile" class="row-actions">
               <el-tooltip content="检测出口 IP（不重启）" placement="top">
                 <el-button
                   link
@@ -489,6 +491,7 @@
                 />
               </el-tooltip>
             </div>
+            <el-tag v-else size="small" effect="plain">轻量 WARP 受管</el-tag>
           </template>
         </el-table-column>
         <template #empty>
@@ -834,6 +837,7 @@ import {
   VideoPlay,
 } from '@element-plus/icons-vue'
 import { panelApi } from '@/api/panel'
+import WgcfWarpPanel from '@/components/WgcfWarpPanel.vue'
 import type {
   GlobalProxySettings,
   NetworkEgress,
@@ -992,7 +996,7 @@ const filteredProxies = computed(() => proxies.value.filter((proxy) => {
   return true
 }))
 const globalProxyGroups = computed(() => ([
-  { kind: 'wireguard_warp' as const, label: '外部 WireGuard WARP', items: proxies.value.filter((proxy) => proxy.kind === 'wireguard_warp') },
+  { kind: 'wireguard_warp' as const, label: '外部 WireGuard WARP', items: proxies.value.filter((proxy) => proxy.kind === 'wireguard_warp' && !proxy.managedWgcfProfile) },
   { kind: 'manual' as const, label: '普通代理', items: proxies.value.filter((proxy) => proxy.kind === 'manual') },
   { kind: 'resin' as const, label: 'Resin 动态代理', items: proxies.value.filter((proxy) => proxy.kind === 'resin') },
   { kind: 'warp' as const, label: '受管 WARP', items: proxies.value.filter((proxy) => proxy.kind === 'warp') },
@@ -1189,8 +1193,12 @@ function categoryProxyCount(category: ProxyCategory) {
   return category.proxyCount ?? proxies.value.filter((proxy) => proxy.category?.id === category.id).length
 }
 
+function isSelectableProxy(proxy: OutboundProxy) {
+  return !proxy.managedWgcfProfile
+}
+
 function onProxySelectionChange(rows: OutboundProxy[]) {
-  selectedProxies.value = rows
+  selectedProxies.value = rows.filter(isSelectableProxy)
 }
 
 function egressLocation(egress?: NetworkEgress | null) {
@@ -1380,6 +1388,7 @@ async function saveBatchCategory() {
 
 async function removeSelectedProxies() {
   if (batchDeleting.value || selectedProxies.value.length === 0) return
+  if (selectedProxies.value.some((proxy) => !isSelectableProxy(proxy))) return
   const selected = [...selectedProxies.value]
   const proxyIds = selected.map((proxy) => proxy.id)
   try {
@@ -1550,6 +1559,10 @@ async function saveGlobalProxy() {
         ElMessage.warning('请选择一个已有代理')
         return
       }
+      if (selected.managedWgcfProfile) {
+        ElMessage.warning('轻量 WARP 出口只支持绑定单个已有账号')
+        return
+      }
       if (!selected.isEnabled) {
         ElMessage.warning('所选代理已停用，请先启用或选择其他代理')
         return
@@ -1629,7 +1642,7 @@ function closeProxyDialog() {
 }
 
 function openEdit(proxy: OutboundProxy) {
-  if (proxyDialog.saving) return
+  if (proxyDialog.saving || proxy.managedWgcfProfile) return
   proxySaveOperationToken += 1
   proxyDialog.id = proxy.id
   proxyDialog.hasPassword = Boolean(proxy.hasPassword)
@@ -1755,7 +1768,7 @@ async function testProxy(proxy: OutboundProxy) {
 }
 
 async function removeProxy(proxy: OutboundProxy) {
-  if (deletingIds.has(proxy.id)) return
+  if (deletingIds.has(proxy.id) || proxy.managedWgcfProfile) return
   try {
     await ElMessageBox.confirm(
       `确定删除代理“${proxy.name}”吗？已绑定账号需要先切换为直连或其他代理。`,
