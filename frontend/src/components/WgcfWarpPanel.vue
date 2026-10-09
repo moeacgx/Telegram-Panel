@@ -183,14 +183,13 @@ async function createProfile() {
   createDialog.error = ''
   try {
     const profile = await panelApi.createWgcfProfile(payload)
-    if (disposed) return
     upsert(profile)
     createDialog.visible = false
     ElMessage.success('出口创建已提交')
   } catch (error) {
-    if (!disposed) createDialog.error = errorMessage(error)
+    createDialog.error = errorMessage(error)
   } finally {
-    if (!disposed) createDialog.running = false
+    createDialog.running = false
   }
 }
 

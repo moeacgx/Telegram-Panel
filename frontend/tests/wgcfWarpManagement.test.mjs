@@ -131,6 +131,16 @@ test('同一档案的操作不会重复提交', async () => {
   assert.equal(state.busyProfiles.has('wgcf-one'), false)
 })
 
+test('已持久化的同一请求也会关闭创建对话框', async () => {
+  const state = setup({ createWgcfProfile: async () => profile() })
+  state.openCreate()
+  state.createDialog.name = '出口'
+  state.createDialog.acceptTerms = true
+  await state.createProfile()
+  assert.equal(state.createDialog.visible, false)
+  assert.equal(state.createDialog.running, false)
+})
+
 test('创建或操作结果替换状态档案，而不写入只读派生列表', () => {
   assert.match(component, /status\.value = \{[\s\S]*?profiles: \[\.\.\.status\.value\.profiles\.filter/)
   assert.doesNotMatch(component, /status\.value\.profiles\s*=/)
