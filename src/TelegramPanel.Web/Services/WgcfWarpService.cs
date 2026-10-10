@@ -41,6 +41,7 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
     private readonly TemporaryWarpClaimStore _claims;
     private readonly ConcurrentDictionary<string, string> _queueTokens = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _pendingTemporary = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, TemporaryWarpClaimStore.ManagedProfileClaim> _queuedClaims = new(StringComparer.Ordinal);
 
     public WgcfWarpService(IServiceScopeFactory scopes, IConfiguration configuration,
         IWebHostEnvironment environment, ILogger<WgcfWarpService> logger)
@@ -138,6 +139,8 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         try
         {
             await EnsureUnboundAsync(profile, cancellationToken);
+            proxy = await scope.ServiceProvider.GetRequiredService<AppDbContext>().OutboundProxies.AsNoTracking()
+                .SingleAsync(x => x.Id == proxyId, cancellationToken);
             var entry = GetEntry(profile);
             if (entry.Temporary) throw new InvalidOperationException("临时出口只能通过原创建流程恢复");
             if (entry.Phase != "ready" || ToDto(entry, proxy).Runtime != "listening" || !proxy.IsEnabled
@@ -155,8 +158,10 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
             .Where(x => x.Id == proxyId).Select(x => x.ManagedWgcfProfile).SingleOrDefaultAsync(cancellationToken);
         if (profile == null) return;
         RejectForeignClaim(profile, claimToken);
+        using var claim = _claims.OwnsManagedProfile(profile, claimToken)
+            ? null : _claims.ClaimManagedProfile(profile);
         await EnsureUnboundAsync(profile, cancellationToken);
-        await RequestStopAsync(profile, claimToken);
+        await RequestStopAsync(profile, claim?.Token ?? claimToken);
     }
 
     private void RejectForeignClaim(string profile, string? token = null)
@@ -258,12 +263,25 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         try
         {
             var entry = GetEntry(profile);
+            if (entry.Temporary)
+            {
+                await using var scope = _scopes.CreateAsyncScope();
+                if (!await scope.ServiceProvider.GetRequiredService<AppDbContext>().OutboundProxies
+                    .AnyAsync(x => x.ManagedWgcfProfile == profile && x.Accounts.Any(), ct))
+                    throw new InvalidOperationException("临时出口请通过原账号创建流程重试");
+            }
             RejectForeignClaim(profile);
-            if (entry.Temporary) throw new InvalidOperationException("临时出口请通过原账号创建流程重试");
             if (entry.Phase != "creating")
             {
-                Persist(entry with { Phase = "creating", Error = null, StopRequested = false });
-                _queue.Writer.TryWrite(profile);
+                var claim = _claims.ClaimManagedProfile(profile);
+                try
+                {
+                    Persist(entry with { Phase = "creating", Error = null, StopRequested = false });
+                    _queueTokens[profile] = claim.Token;
+                    _queuedClaims[profile] = claim;
+                    _queue.Writer.TryWrite(profile);
+                }
+                catch { claim.Dispose(); throw; }
             }
         }
         finally { _stateLock.Release(); }
@@ -280,16 +298,23 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
             var entry = GetEntry(profile);
             RejectForeignClaim(profile);
             if (entry.Phase == "creating") throw new InvalidOperationException("档案正在创建，请等待完成");
+            using var claim = _claims.ClaimManagedProfile(profile);
             await _toolLock.WaitAsync(ct);
             try
             {
                 await using var scope = _scopes.CreateAsyncScope();
                 var service = scope.ServiceProvider.GetRequiredService<ProxyManagementService>();
-                var proxy = await service.SetManagedWgcfEnabledAsync(profile, enabled, ct);
+                var proxy = await service.SetManagedWgcfEnabledAsync(profile, enabled, ct, claim.Token);
                 await CommandAsync(new[] { enabled ? "start" : "stop", profile }, ct);
                 await WaitRuntimeAsync(profile, enabled ? "listening" : "stopped", ct);
                 if (enabled) await service.TestAsync(proxy.Id, ct);
-                Persist(entry with { Phase = enabled ? "ready" : "stopped", Error = null });
+                PersistState(entry with
+                {
+                    Phase = enabled ? "ready" : "stopped",
+                    Error = null,
+                    // 公开启用是新的明确意图，清除之前持久化的停止请求。
+                    StopRequested = !enabled
+                }, preserveStopRequested: false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -309,6 +334,7 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         EnsureAvailable();
         GetEntry(profile);
         RejectForeignClaim(profile);
+        using var claim = _claims.ClaimManagedProfile(profile);
         await _toolLock.WaitAsync(ct);
         try
         {
@@ -423,6 +449,7 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
             {
                 _queueTokens.TryRemove(profile, out _);
                 _pendingTemporary.TryRemove(profile, out _);
+                if (_queuedClaims.TryRemove(profile, out var claim)) claim.Dispose();
                 _toolLock.Release();
             }
         }
@@ -520,23 +547,26 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         }
     }
 
-    private void Persist(Entry entry)
+    private void Persist(Entry entry) => PersistState(entry, preserveStopRequested: true);
+
+    private void PersistState(Entry entry, bool preserveStopRequested)
     {
         lock (_persistLock)
         {
-        if (entry.Phase is "ready" or "failed" && _entries.TryGetValue(entry.Profile, out var current)
-            && current.StopRequested)
-            entry = entry with { StopRequested = true };
-        var target = Path.Combine(_root, "web-requests", entry.Profile + ".json");
-        var temp = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-        {
-            if (OperatingSystem.IsLinux()) File.SetUnixFileMode(temp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-            JsonSerializer.Serialize(stream, entry);
-            stream.Flush(flushToDisk: true);
-        }
-        File.Move(temp, target, overwrite: true);
-        _entries[entry.Profile] = entry;
+            if (preserveStopRequested && entry.Phase is "ready" or "failed"
+                && _entries.TryGetValue(entry.Profile, out var current)
+                && current.StopRequested)
+                entry = entry with { StopRequested = true };
+            var target = Path.Combine(_root, "web-requests", entry.Profile + ".json");
+            var temp = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                if (OperatingSystem.IsLinux()) File.SetUnixFileMode(temp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                JsonSerializer.Serialize(stream, entry);
+                stream.Flush(flushToDisk: true);
+            }
+            File.Move(temp, target, overwrite: true);
+            _entries[entry.Profile] = entry;
         }
     }
 

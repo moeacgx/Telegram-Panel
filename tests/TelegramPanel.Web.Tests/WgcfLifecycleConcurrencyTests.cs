@@ -23,6 +23,82 @@ namespace TelegramPanel.Web.Tests;
 public sealed class WgcfLifecycleConcurrencyTests
 {
     [Fact]
+    public async Task 公开停止等待工具时独占出口并拒绝首次连接租约()
+    {
+        await using var f = await Fixture.CreateAsync();
+        await using (var scope = f.Provider.CreateAsyncScope())
+            await scope.ServiceProvider.GetRequiredService<ProxyManagementService>().TestAsync((await f.ProxyAsync()).Id);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var toolLock = f.Field<SemaphoreSlim>("_toolLock");
+        await toolLock.WaitAsync(timeout.Token);
+        var stop = f.Service.SetEnabledAsync(f.Profile, false, timeout.Token);
+        try
+        {
+            var proxyId = (await f.ProxyAsync()).Id;
+            await Assert.ThrowsAsync<InvalidOperationException>(() => f.Service.AcquireAsync(proxyId));
+        }
+        finally { toolLock.Release(); }
+        await stop;
+        Assert.False((await f.ProxyAsync()).IsEnabled);
+    }
+
+    [Fact]
+    public async Task 公开恢复排队直到检测完成持续独占出口()
+    {
+        await using var f = await Fixture.CreateAsync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await f.Service.ResumeAsync(f.Profile, timeout.Token);
+        var claims = f.Provider.GetRequiredService<TemporaryWarpClaimStore>();
+        Assert.True(claims.IsManagedProfileClaimed(f.Profile));
+        var proxyId = (await f.ProxyAsync()).Id;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Service.AcquireAsync(proxyId));
+        var worker = f.ProcessQueueAsync(timeout.Token);
+        try
+        {
+            while (f.PersistedPhase() == "creating") await Task.Delay(10, timeout.Token);
+            Assert.Equal("ready", f.PersistedPhase());
+            Assert.False(claims.IsManagedProfileClaimed(f.Profile));
+        }
+        finally
+        {
+            timeout.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => worker);
+        }
+    }
+
+    [Fact]
+    public async Task 已完成账号绑定的内部档案允许恢复并保留原请求归属()
+    {
+        const string request = "telegram-panel.internal.binding.fixture.account.1";
+        await using var f = await Fixture.CreateAsync(request);
+        await using (var scope = f.Provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.Accounts.Add(new Account
+            {
+                Phone = "8613800000000", SessionPath = "sessions/fixture.session", ApiId = 123,
+                ApiHash = "0123456789abcdef0123456789abcdef", ProxyId = (await f.ProxyAsync()).Id
+            });
+            await db.SaveChangesAsync();
+        }
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await f.Service.ResumeAsync(f.Profile, timeout.Token);
+        var worker = f.ProcessQueueAsync(timeout.Token);
+        try
+        {
+            while (f.PersistedPhase() == "creating") await Task.Delay(10, timeout.Token);
+            Assert.Equal("ready", f.PersistedPhase());
+            Assert.True(f.PersistedTemporary());
+            Assert.Equal(request, f.PersistedRequestId());
+        }
+        finally
+        {
+            timeout.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => worker);
+        }
+    }
+
+    [Fact]
     public async Task 首连租约拒绝外部启停恢复检测且释放后恢复操作()
     {
         await using var f = await Fixture.CreateAsync();
@@ -77,6 +153,9 @@ public sealed class WgcfLifecycleConcurrencyTests
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => provision);
         Assert.Equal("stopped", f.PersistedPhase());
+        // 停止任务仍在队列中时，不能因首连租约已释放而重复创建同一临时档案。
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            f.Service.ProvisionAsync("并发验收出口", request, true));
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var worker = f.ProcessQueueAsync(timeout.Token);
         try
@@ -90,6 +169,16 @@ public sealed class WgcfLifecycleConcurrencyTests
             timeout.Cancel();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => worker);
         }
+    }
+
+    [Fact]
+    public async Task 重新启用已停止档案会清除旧停止意图()
+    {
+        await using var f = await Fixture.CreateAsync();
+        await f.Service.SetEnabledAsync(f.Profile, false, default);
+        Assert.True(f.PersistedStopRequested());
+        await f.Service.SetEnabledAsync(f.Profile, true, default);
+        Assert.False(f.PersistedStopRequested());
     }
 
     [Fact]
@@ -286,6 +375,24 @@ public sealed class WgcfLifecycleConcurrencyTests
         {
             using var json = JsonDocument.Parse(File.ReadAllText(Path.Combine(Root, "web-requests", Profile + ".json")));
             return json.RootElement.GetProperty("Phase").GetString()!;
+        }
+
+        public bool PersistedTemporary()
+        {
+            using var json = JsonDocument.Parse(File.ReadAllText(Path.Combine(Root, "web-requests", Profile + ".json")));
+            return json.RootElement.GetProperty("Temporary").GetBoolean();
+        }
+
+        public string? PersistedRequestId()
+        {
+            using var json = JsonDocument.Parse(File.ReadAllText(Path.Combine(Root, "web-requests", Profile + ".json")));
+            return json.RootElement.GetProperty("RequestId").GetString();
+        }
+
+        public bool PersistedStopRequested()
+        {
+            using var json = JsonDocument.Parse(File.ReadAllText(Path.Combine(Root, "web-requests", Profile + ".json")));
+            return json.RootElement.GetProperty("StopRequested").GetBoolean();
         }
 
         public void WriteRuntime(bool desired)
