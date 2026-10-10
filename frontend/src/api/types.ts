@@ -124,6 +124,7 @@ export interface WgcfProfile {
   runtime: string
   proxyId: number | null
   accountCount: number
+  poolEligible: boolean
   testStatus: string
   egressIp: string | null
   error: string | null

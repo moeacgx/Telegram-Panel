@@ -67,7 +67,7 @@ export function wgcfRuntimeLabel(runtime: string) {
 /** 页面只统计可独占领取的轻量出口，实际领取仍由后端原子租约复核。 */
 export function countAvailableWgcfPool(proxies: OutboundProxy[], status: WgcfRuntimeStatus | null): number {
   if (!status?.available) return 0
-  const readyProfiles = new Set(status.profiles.filter((profile) => profile.phase === 'ready'
+  const readyProfiles = new Set(status.profiles.filter((profile) => profile.poolEligible === true && profile.phase === 'ready'
     && profile.desired && profile.runtime === 'listening' && profile.testStatus === 'ok'
     && !!profile.egressIp && profile.accountCount === 0).map((profile) => profile.profile))
   return proxies.filter((proxy) => !!proxy.managedWgcfProfile && readyProfiles.has(proxy.managedWgcfProfile)

@@ -11,7 +11,7 @@ const js = ts.transpileModule(utility, { compilerOptions: { module: ts.ModuleKin
 const { mergeProxyRows, countAvailableWgcfPool } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`)
 
 const profile = (extra = {}) => ({ profile: 'web-one', name: '独立出口', phase: 'ready', registered: true,
-  generated: true, desired: true, runtime: 'listening', proxyId: 12, accountCount: 0,
+  generated: true, desired: true, runtime: 'listening', proxyId: 12, accountCount: 0, poolEligible: true,
   testStatus: 'ok', egressIp: '1.2.3.4', error: null, ...extra })
 const proxy = (extra = {}) => ({ id: 12, name: '独立出口', kind: 'wireguard_warp', protocol: 'socks5',
   managedWgcfProfile: 'web-one', host: '127.0.0.1', port: 1080, isEnabled: true, testStatus: 'ok',
@@ -79,10 +79,22 @@ test('轻量池只计算可独占的健康空闲出口，拒绝旧容器与占�
   for (const extra of [{ managedWgcfProfile: null, kind: 'warp' }, { isEnabled: false }, { testStatus: 'failed' }, { egressIp: null }, { accountCount: 1 }, { usageCount: 1 }, { isGlobal: true }]) {
     assert.equal(countAvailableWgcfPool([proxy(extra)], status), 0)
   }
-  for (const extra of [{ phase: 'failed' }, { desired: false }, { runtime: 'stopped' }, { accountCount: 1 }]) {
+  for (const extra of [{ phase: 'failed' }, { desired: false }, { runtime: 'stopped' }, { accountCount: 1 }, { poolEligible: false }, { poolEligible: undefined }]) {
     assert.equal(countAvailableWgcfPool([proxy()], { ...status, profiles: [profile(extra)] }), 0)
   }
   assert.equal(countAvailableWgcfPool([proxy()], { ...status, available: false }), 0)
+})
+
+test('临时或已占用档案由运行器标记不可领取，健康快照也不计入空闲池', () => {
+  const proxies = [proxy(), proxy({ id: 13, managedWgcfProfile: 'web-two' }), proxy({ id: 14, managedWgcfProfile: 'web-three' })]
+  const status = { available: true, reason: null, profiles: [
+    profile({ poolEligible: false }),
+    profile({ profile: 'web-two', proxyId: 13, poolEligible: false }),
+    profile({ profile: 'web-three', proxyId: 14 }),
+  ] }
+  assert.equal(countAvailableWgcfPool(proxies, status), 1)
+  status.profiles[2].poolEligible = false
+  assert.equal(countAvailableWgcfPool(proxies, status), 0)
 })
 
 test('无独立轻量列表，统一表的动作调用档案控制器且待生成行不可批量编辑', () => {
