@@ -8,7 +8,7 @@ const typesSource = await readFile(new URL('../src/api/types.ts', import.meta.ur
 
 test('WARP 页面明确区分读取状态、检测出口和重启恢复', () => {
   assert.match(proxiesSource, />刷新页面状态</)
-  assert.match(proxiesSource, />\s*立即刷新全部 WARP\s*</)
+  assert.match(proxiesSource, />\s*立即刷新旧版 WARP\s*</)
   assert.match(proxiesSource, /content="检测出口 IP（不重启）"/)
   assert.match(proxiesSource, /content="重启并恢复此 WARP"/)
 })

@@ -89,7 +89,6 @@ import type {
   ProxyImportRequest,
   SaveOutboundProxyRequest,
   TextPreset,
-  CreateWarpProxyRequest,
   WarpMaintenanceBatchResult,
   WarpMaintenanceResult,
   WarpRuntimeStatus,
@@ -144,8 +143,6 @@ export const panelApi = {
     api.post<WgcfProfile>(`/proxies/wgcf/${encodeURIComponent(profile)}/stop`, {}).then((r) => r.data),
   testWgcfProfile: (profile: string) =>
     api.post<WgcfProfile>(`/proxies/wgcf/${encodeURIComponent(profile)}/test`, {}, { timeout: 60_000 }).then((r) => r.data),
-  createWarpProxies: (payload: CreateWarpProxyRequest) =>
-    api.post<OutboundProxy>('/proxies/warp', payload, { timeout: WARP_OPERATION_TIMEOUT_MS }).then((r) => r.data),
   refreshWarpProxy: (id: number) =>
     api.post<WarpMaintenanceResult>(`/proxies/${id}/warp/refresh`, {}, { timeout: WARP_OPERATION_TIMEOUT_MS }).then((r) => r.data),
   refreshAllWarpProxies: () =>
@@ -269,6 +266,8 @@ export const panelApi = {
     sessionString: string
     categoryId?: number | null
     proxyStrategy: AccountImportProxyStrategy
+    acceptWarpTerms?: boolean
+    warpRequestId?: string | null
     proxyId?: number | null
     deviceProfileKey?: string | null
   }) =>
@@ -277,6 +276,8 @@ export const panelApi = {
     phone: string
     loginId?: number
     proxyStrategy: AccountProxyStrategy
+    acceptWarpTerms?: boolean
+    warpRequestId?: string | null
     proxyId?: number | null
     deviceProfileKey?: string | null
   }) =>
@@ -284,6 +285,8 @@ export const panelApi = {
   startAccountQrLogin: (payload: {
     loginId?: number
     proxyStrategy: AccountProxyStrategy
+    acceptWarpTerms?: boolean
+    warpRequestId?: string | null
     proxyId?: number | null
     deviceProfileKey?: string | null
   }) =>

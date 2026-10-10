@@ -64,7 +64,11 @@
         将按当前账号绑定数自动选择已有 WARP；不会创建新容器。当前已启用 {{ availableWarpPoolCount }} 个 WARP。
       </div>
       <div v-else-if="proxyStrategy === 'warp_per_account'" class="proxy-route-notice warning">
-        将为每个成功导入账号创建并绑定一个新的受管 WARP；单次最多 {{ WARP_PER_ACCOUNT_IMPORT_LIMIT }} 个账号，失败会在账号首次连接前停止。
+        将为每个成功导入账号创建并绑定一个轻量 WARP；单次最多 {{ WARP_PER_ACCOUNT_IMPORT_LIMIT }} 个账号，失败会在账号首次连接前停止。
+      </div>
+      <div v-if="proxyStrategy === 'warp_per_account'" class="proxy-route-notice warning">
+        <el-checkbox v-model="acceptWarpTerms" :disabled="busy">我已阅读并接受</el-checkbox>
+        <a href="https://www.cloudflare.com/application/terms/" target="_blank" rel="noopener noreferrer">Cloudflare WARP 条款</a>
       </div>
       <div v-else-if="proxyStrategy === 'proxy_per_account'" class="proxy-route-notice warning">
         批量代理一对一仅适用于 Zip 导入；Session 文件和 StringSession 导入在此模式下不可用。
@@ -379,7 +383,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import type { UploadFile } from 'element-plus'
 import { ElMessage } from 'element-plus'
@@ -396,7 +400,7 @@ import type {
   ImportResult,
   OutboundProxy,
   TelegramDeviceProfile,
-  WarpRuntimeStatus,
+  WgcfRuntimeStatus,
   ZipImportProxyStrategy,
 } from '@/api/types'
 import { formatTime } from '@/utils/format'
@@ -428,11 +432,19 @@ const proxyId = ref<number | null>(null)
 const telegramApiChecked = ref(false)
 const telegramApiConfigured = ref(true)
 const effectiveApiId = ref('')
-const warpStatus = ref<WarpRuntimeStatus | null>(null)
+const warpStatus = ref<WgcfRuntimeStatus | null>(null)
+const acceptWarpTerms = ref(false)
+const warpRequestId = ref('')
+const warpRequestKind = ref('')
 const importCategoryId = ref<number | null>(null)
 const deviceProfiles = ref<TelegramDeviceProfile[]>([])
 const deviceProfileKey = ref('')
 let importOperationToken = 0
+
+watch([proxyStrategy, zipFile, sessionFiles, sessionString, importCategoryId, deviceProfileKey], () => {
+  if (!busy.value) warpRequestId.value = ''
+}, { deep: true, flush: 'sync' })
+watch(proxyStrategy, () => { acceptWarpTerms.value = false }, { flush: 'sync' })
 
 const busy = computed(() => importingZip.value || importingSessions.value || importingString.value)
 const shouldBlockApiImport = computed(() => telegramApiChecked.value && !telegramApiConfigured.value)
@@ -442,9 +454,7 @@ const availableWarpPoolCount = computed(() => proxies.value.filter(
     && proxy.warpRuntimeStatus === 'active',
 ).length)
 const warpCreateAvailable = computed(() => Boolean(
-  warpStatus.value?.platformSupported
-    && warpStatus.value.enabled
-    && warpStatus.value.dockerAvailable,
+  warpStatus.value?.available,
 ))
 const isPerAccountProxyBatch = computed(() => proxyStrategy.value === 'proxy_per_account')
 const perAccountProxyCount = computed(() => countEffectiveProxyLines(perAccountProxyText.value))
@@ -453,7 +463,7 @@ const proxySelectionInvalid = computed(() =>
   !proxyStrategy.value
   || (proxyStrategy.value === 'existing' && !proxyId.value)
   || (proxyStrategy.value === 'warp_pool' && availableWarpPoolCount.value === 0)
-  || (proxyStrategy.value === 'warp_per_account' && !warpCreateAvailable.value)
+  || (proxyStrategy.value === 'warp_per_account' && (!warpCreateAvailable.value || !acceptWarpTerms.value))
   || (isPerAccountProxyBatch.value
     && (perAccountProxyCount.value === 0 || perAccountProxyLimitExceeded.value)),
 )
@@ -539,10 +549,18 @@ function ensureProxySelected(allowPerAccountBatch = false) {
     ElMessage.warning(proxyStrategy.value === 'warp_pool'
       ? '没有可自动分配的已有 WARP，请先在代理管理中准备并启用 WARP'
       : proxyStrategy.value === 'warp_per_account'
-        ? warpStatus.value?.error || '当前环境无法创建 WARP，请先确认受管 WARP 运行环境'
+        ? !acceptWarpTerms.value ? '请先阅读并接受 Cloudflare WARP 条款' : warpStatus.value?.reason || '当前环境无法创建轻量 WARP'
         : '请选择已有代理')
   }
   return false
+}
+
+function ensureWarpRequestId(kind: 'zip' | 'session-files' | 'string-session') {
+  if (warpRequestKind.value !== kind) {
+    warpRequestKind.value = kind
+    warpRequestId.value = ''
+  }
+  return warpRequestId.value ||= crypto.randomUUID()
 }
 
 function appendProxyFields(
@@ -551,6 +569,11 @@ function appendProxyFields(
   selectedProxyId: number | null,
 ) {
   form.append('proxyStrategy', strategy)
+  if (strategy === 'warp_per_account') {
+    ensureWarpRequestId('session-files')
+    form.append('acceptWarpTerms', String(acceptWarpTerms.value))
+    form.append('warpRequestId', warpRequestId.value)
+  }
   if (strategy === 'existing' && selectedProxyId) {
     form.append('proxyId', String(selectedProxyId))
   }
@@ -563,6 +586,11 @@ function appendZipProxyFields(
   selectedProxyText: string,
 ) {
   form.append('proxyStrategy', strategy)
+  if (strategy === 'warp_per_account') {
+    ensureWarpRequestId('zip')
+    form.append('acceptWarpTerms', String(acceptWarpTerms.value))
+    form.append('warpRequestId', warpRequestId.value)
+  }
   if (strategy === 'proxy_per_account') {
     form.append('proxyText', selectedProxyText)
   } else if (strategy === 'existing' && selectedProxyId) {
@@ -667,10 +695,13 @@ async function importStringSession() {
   const selectedProxyId = proxyId.value
   const operationToken = ++importOperationToken
   importingString.value = true
+  if (selectedStrategy === 'warp_per_account') ensureWarpRequestId('string-session')
   try {
     const response = await panelApi.importAccountsStringSession({
       sessionString: selectedSessionString,
       proxyStrategy: selectedStrategy,
+      acceptWarpTerms: selectedStrategy === 'warp_per_account' && acceptWarpTerms.value,
+      warpRequestId: selectedStrategy === 'warp_per_account' ? warpRequestId.value : null,
       proxyId: selectedStrategy === 'existing' ? selectedProxyId : null,
       categoryId: importCategoryId.value,
       deviceProfileKey: deviceProfileKey.value || null,
@@ -686,6 +717,7 @@ async function importStringSession() {
 }
 
 function applyImportResponse(response: ImportAccountsResponse) {
+  warpRequestId.value = ''
   importResults.value = response.results
   mergeImportedAccounts(response.accounts)
 
@@ -728,7 +760,7 @@ async function loadProxies() {
 
 async function loadWarpStatus() {
   try {
-    warpStatus.value = await panelApi.warpStatus()
+    warpStatus.value = await panelApi.wgcfStatus()
   } catch {
     warpStatus.value = null
   }
