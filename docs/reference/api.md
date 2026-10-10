@@ -459,6 +459,8 @@ Token、SOCKS 密码或上游原始输出。
 
 账号登录（手机和二维码）、导入（表单或 StringSession）及单/批账号代理绑定的
 `warp_per_account` 新增 `acceptWarpTerms` 与可选 `warpRequestId`，前者必须显式为 `true`。
+`warpRequestId` 省略时由服务端生成；提供时必须为非零 UUID，空字符串、空白和非法值返回 400。
+登录清理失败会保留会话占用供后台重试；取消或重置返回明确失败，不能视为出口已停止。
 旧 `POST /proxies/warp` 请求改为 `{name, requestId, acceptWarpTerms, protocol:"socks5"}`，
 返回档案而非代理 DTO，通过 `GET /proxies/wgcf` 等待完成。旧容器维护接口仍可使用。
 首次连接期间的出口不可由其它流程绑定、恢复或启停；内部归属 token 不接受公开提交。

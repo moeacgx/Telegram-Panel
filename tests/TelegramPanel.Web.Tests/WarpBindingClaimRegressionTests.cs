@@ -44,14 +44,51 @@ public sealed class WarpBindingClaimRegressionTests
     }
 
     [Fact]
-    public async Task 未接受条款和不可用服务均拒绝轻量创建且不创建Docker资源()
+    public async Task 未接受条款拒绝轻量创建且不产生代理资源()
     {
         await using var f = await Fixture.CreateAsync();
         await Assert.ThrowsAsync<ArgumentException>(() => f.Service.BindAccountsAsync(new[] { f.Account.Id }, new("warp_per_account")));
         Assert.Equal(0, f.Provisioner.ProvisionCalls);
         Assert.Empty(await f.Db.OutboundProxies.ToListAsync());
-        await Assert.ThrowsAsync<ArgumentException>(() => f.Service.CreateWarpAsync("test", "request", protocol: "http", acceptTerms: true));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("invalid-request")]
+    [InlineData("00000000-0000-0000-0000-000000000000")]
+    [InlineData("00000000000000000000000000000000")]
+    [InlineData("telegram-panel.internal.account.1.request")]
+    public async Task 绑定拒绝非空UUID以外的显式请求标识且不创建出口(string requestId)
+    {
+        await using var f = await Fixture.CreateAsync();
+        var input = new AccountProxyBindingInput("warp_per_account", AcceptWarpTerms: true, WarpRequestId: requestId);
+
+        var validationError = await Assert.ThrowsAsync<ArgumentException>(() => f.Service.ValidateBindingInputAsync(input));
+        Assert.Contains("UUID", validationError.Message);
+        await Assert.ThrowsAsync<ArgumentException>(() => f.Service.BindAccountsAsync(new[] { f.Account.Id }, input));
+
         Assert.Equal(0, f.Provisioner.ProvisionCalls);
+        Assert.Empty(await f.Db.OutboundProxies.ToListAsync());
+        Assert.Null((await f.Db.Accounts.AsNoTracking().SingleAsync()).ProxyId);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("dd752f71-9b90-49dd-bd35-e9ee75883431")]
+    [InlineData("dd752f719b9049ddbd35e9ee75883431")]
+    public async Task 绑定接受缺省或有效UUID并创建独立出口(string? requestId)
+    {
+        await using var f = await Fixture.CreateAsync();
+        var input = new AccountProxyBindingInput("warp_per_account", AcceptWarpTerms: true, WarpRequestId: requestId);
+
+        await f.Service.ValidateBindingInputAsync(input);
+        var result = await f.Service.BindAccountsAsync(new[] { f.Account.Id }, input);
+
+        Assert.Equal(1, result.Success);
+        Assert.Equal(1, f.Provisioner.ProvisionCalls);
+        Assert.Equal((await f.Db.OutboundProxies.SingleAsync()).Id,
+            (await f.Db.Accounts.AsNoTracking().SingleAsync()).ProxyId);
     }
 
     [Fact]

@@ -465,6 +465,10 @@ public sealed partial class ProxyManagementService
         AccountProxyBindingInput input,
         CancellationToken cancellationToken = default)
     {
+        if (input.WarpRequestId != null
+            && (!Guid.TryParse(input.WarpRequestId, out var requestUuid) || requestUuid == Guid.Empty))
+            throw new ArgumentException("轻量 WARP 请求标识必须是有效 UUID");
+
         var strategy = NormalizeStrategy(input.Strategy);
         if (strategy == "global")
         {

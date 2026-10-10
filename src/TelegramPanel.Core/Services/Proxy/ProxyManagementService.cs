@@ -430,20 +430,6 @@ public sealed partial class ProxyManagementService
         ?? throw new InvalidOperationException(
             "Telegram 全局代理尚未配置，已阻止降级为直连");
 
-    public async Task<OutboundProxy> CreateWarpAsync(
-        string? name,
-        string? requestId,
-        CancellationToken cancellationToken = default,
-        string? protocol = null,
-        bool acceptTerms = false)
-    {
-        if (!string.IsNullOrWhiteSpace(protocol) && protocol != OutboundProxyProtocols.Socks5)
-            throw new ArgumentException("轻量 WARP 仅支持 SOCKS5 协议", nameof(protocol));
-        using var lease = await CreateManagedWarpLeaseAsync(
-            NormalizeName(name, "WARP"), requestId ?? Guid.NewGuid().ToString("N"), acceptTerms, cancellationToken);
-        return lease.Proxy;
-    }
-
     public async Task<ManagedWarpProxyLease> CreateManagedWarpLeaseAsync(
         string name, string requestId, bool acceptTerms, CancellationToken cancellationToken = default)
     {

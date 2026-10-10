@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Reflection;
@@ -12,6 +13,7 @@ using TelegramPanel.Data;
 using TelegramPanel.Data.Entities;
 using TelegramPanel.Data.Repositories;
 using TelegramPanel.Web.Services;
+using TelegramPanel.Web.Api;
 using WTelegram;
 using Xunit;
 
@@ -19,6 +21,124 @@ namespace TelegramPanel.Web.Tests;
 
 public sealed class ManualLoginProxyRoutingTests
 {
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("not-a-uuid")]
+    [InlineData("00000000-0000-0000-0000-000000000000")]
+    public async Task 登录拒绝显式传入无效轻量请求标识(string requestId)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await Assert.ThrowsAsync<ArgumentException>(() => fixture.Coordinator.PrepareAsync(
+            1920, "warp_per_account", null, acceptWarpTerms: true, warpRequestId: requestId));
+        Assert.Empty(fixture.ManagedWarp.Requests);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("eb7b9ed1-054e-4a9e-9392-f984873772ab")]
+    public async Task 登录允许省略或有效轻量请求标识(string? requestId)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await fixture.Coordinator.PrepareAsync(1920, "warp_per_account", null,
+            acceptWarpTerms: true, warpRequestId: requestId);
+        await fixture.Coordinator.AbandonAsync(1920);
+    }
+
+    [Theory]
+    [InlineData("CancelAccountQrLoginAsync")]
+    [InlineData("ResetAccountLoginAsync")]
+    public async Task 登录取消和重置清理失败返回结构化错误并可重试(string endpoint)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await fixture.Coordinator.PrepareAsync(1921, "warp_per_account", null, acceptWarpTerms: true);
+        fixture.ManagedWarp.StopError = new IOException("模拟停止失败");
+        var response = await InvokeApiAsync(endpoint, new AccountLoginSessionRequestDto(1921),
+            fixture.AccountService, fixture.Coordinator);
+        Assert.Equal(400, ((IStatusCodeHttpResult)response).StatusCode);
+        var result = Assert.IsType<OperationResultDto>(((IValueHttpResult)response).Value);
+        Assert.False(result.Success);
+        Assert.Equal("LOGIN_CLEANUP_PENDING", result.Code);
+        Assert.Contains("重试", result.Message);
+        Assert.True(fixture.Coordinator.HasState(1921));
+        Assert.Equal(0, fixture.ManagedWarp.ReleaseCount);
+        fixture.ManagedWarp.StopError = null;
+        var retry = await InvokeApiAsync(endpoint, new AccountLoginSessionRequestDto(1921),
+            fixture.AccountService, fixture.Coordinator);
+        Assert.True(Assert.IsType<OperationResultDto>(((IValueHttpResult)retry).Value).Success);
+        Assert.False(fixture.Coordinator.HasState(1921));
+        Assert.Equal(1, fixture.ManagedWarp.ReleaseCount);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("signup")]
+    public async Task 手机登录失败清理异常保留原始错误及重试会话(string? nextStep)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await fixture.Coordinator.PrepareAsync(1922, "warp_per_account", null, acceptWarpTerms: true);
+        fixture.ManagedWarp.StopError = new IOException("模拟停止失败");
+        var response = await InvokeApiAsync("BuildLoginResponseAsync", 1922,
+            new LoginResult(false, nextStep, "原始登录错误"), fixture.AccountService,
+            fixture.AccountManagement, fixture.Coordinator, fixture.Configuration, null, CancellationToken.None);
+        var result = Assert.IsType<AccountLoginResponseDto>(((IValueHttpResult)response).Value);
+        Assert.False(result.Success);
+        Assert.Equal(1922, result.LoginId);
+        Assert.Contains("原始登录错误", result.Message);
+        Assert.Contains("清理未完成", result.Message);
+        Assert.True(fixture.Coordinator.HasState(1922));
+        fixture.ManagedWarp.StopError = null;
+        await fixture.Coordinator.AbandonAsync(1922);
+    }
+
+    [Theory]
+    [InlineData("failed")]
+    [InlineData("expired")]
+    public async Task 二维码失败清理异常保留原始错误(string status)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await fixture.Coordinator.PrepareAsync(1923, "warp_per_account", null, acceptWarpTerms: true);
+        fixture.ManagedWarp.StopError = new IOException("模拟停止失败");
+        var response = await InvokeApiAsync("BuildQrLoginResponseAsync",
+            new QrLoginResult(false, 1923, status, "原始二维码错误"), fixture.AccountService,
+            fixture.AccountManagement, fixture.Coordinator, fixture.Configuration, null, CancellationToken.None);
+        var result = Assert.IsType<AccountQrLoginResponseDto>(((IValueHttpResult)response).Value);
+        Assert.Equal(status, result.Status);
+        Assert.Contains("原始二维码错误", result.Message);
+        Assert.Contains("清理未完成", result.Message);
+        Assert.True(fixture.Coordinator.HasState(1923));
+        fixture.ManagedWarp.StopError = null;
+        await fixture.Coordinator.AbandonAsync(1923);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task 绑定失败清理异常不会覆盖保存账号错误(bool qr)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await fixture.Coordinator.PrepareAsync(1924, "warp_per_account", null, acceptWarpTerms: true);
+        fixture.ManagedWarp.StopError = new IOException("模拟停止失败");
+        var account = new AccountInfo { ApiId = 123, ApiHash = "0123456789abcdef0123456789abcdef" };
+        var response = qr
+            ? await InvokeApiAsync("BuildQrLoginResponseAsync", new QrLoginResult(true, 1924, "authorized", null, Account: account),
+                fixture.AccountService, fixture.AccountManagement, fixture.Coordinator, fixture.Configuration, null, CancellationToken.None)
+            : await InvokeApiAsync("BuildLoginResponseAsync", 1924, new LoginResult(true, null, null, account),
+                fixture.AccountService, fixture.AccountManagement, fixture.Coordinator, fixture.Configuration, null, CancellationToken.None);
+        var message = qr
+            ? Assert.IsType<AccountQrLoginResponseDto>(((IValueHttpResult)response).Value).Message
+            : Assert.IsType<AccountLoginResponseDto>(((IValueHttpResult)response).Value).Message;
+        Assert.Contains("手机号无效", message);
+        Assert.Contains("清理未完成", message);
+        Assert.True(fixture.Coordinator.HasState(1924));
+        fixture.ManagedWarp.StopError = null;
+        await fixture.Coordinator.AbandonAsync(1924);
+    }
+
+    private static Task<IResult> InvokeApiAsync(string name, params object?[] arguments)
+        => (Task<IResult>)typeof(PanelAdminApiEndpoints).GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic)!
+            .Invoke(null, arguments)!;
+
     [Fact]
     public void 准备完成登记失败时仍占有登录ID直到资源释放()
     {
@@ -933,7 +1053,9 @@ public sealed class ManualLoginProxyRoutingTests
             AccountLoginProxyCoordinator coordinator,
             StubClientPool clientPool,
             TemporaryWarpClaimStore temporaryWarpClaims,
-            StubManagedWarpProvisioner managedWarp)
+            StubManagedWarpProvisioner managedWarp,
+            IAccountService accountService,
+            AccountManagementService accountManagement)
         {
             _connection = connection;
             Db = db;
@@ -943,6 +1065,8 @@ public sealed class ManualLoginProxyRoutingTests
             ClientPool = clientPool;
             TemporaryWarpClaims = temporaryWarpClaims;
             ManagedWarp = managedWarp;
+            AccountService = accountService;
+            AccountManagement = accountManagement;
         }
 
         public AppDbContext Db { get; }
@@ -952,6 +1076,8 @@ public sealed class ManualLoginProxyRoutingTests
         public StubClientPool ClientPool { get; }
         public TemporaryWarpClaimStore TemporaryWarpClaims { get; }
         public StubManagedWarpProvisioner ManagedWarp { get; }
+        public IAccountService AccountService { get; }
+        public AccountManagementService AccountManagement { get; }
 
         public static async Task<Fixture> CreateAsync(
             IEnumerable<KeyValuePair<string, string?>>? values = null)
@@ -1018,7 +1144,9 @@ public sealed class ManualLoginProxyRoutingTests
                 coordinator,
                 pool,
                 temporaryWarpClaims,
-                managedWarp);
+                managedWarp,
+                accountService,
+                accountManagement);
         }
 
         public async Task<OutboundProxy> AddProxyAsync(string kind)

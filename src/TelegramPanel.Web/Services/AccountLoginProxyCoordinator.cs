@@ -567,7 +567,7 @@ public sealed class AccountLoginProxyCoordinator
     {
         if (loginId <= 0)
             throw new ArgumentOutOfRangeException(nameof(loginId));
-        if (!string.IsNullOrWhiteSpace(warpRequestId)
+        if (warpRequestId != null
             && (!Guid.TryParse(warpRequestId, out var requestUuid) || requestUuid == Guid.Empty))
             throw new ArgumentException("轻量 WARP 请求标识必须是有效 UUID");
 

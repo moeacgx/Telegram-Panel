@@ -2095,13 +2095,13 @@ public static class PanelAdminApiEndpoints
         catch (Exception ex)
         {
             reuseLease?.Dispose();
-            if (!reuseLoginId)
-                await loginProxy.AbandonAsync(loginId, CancellationToken.None);
+            var message = !reuseLoginId
+                ? await PreserveLoginFailureAsync(loginProxy, loginId, ex.Message) : ex.Message;
             return Results.BadRequest(new AccountLoginResponseDto(
                 false,
                 loginId,
                 null,
-                ex.Message,
+                message,
                 null));
         }
 
@@ -2118,20 +2118,20 @@ public static class PanelAdminApiEndpoints
         catch (Exception ex) when (IsLoginProxyInputError(ex))
         {
             reuseLease?.Dispose();
-            if (!reuseLoginId)
-                await loginProxy.AbandonAsync(loginId, CancellationToken.None);
+            var message = !reuseLoginId
+                ? await PreserveLoginFailureAsync(loginProxy, loginId, ex.Message) : ex.Message;
             return Results.BadRequest(new AccountLoginResponseDto(
                 false,
                 loginId,
                 null,
-                ex.Message,
+                message,
                 null));
         }
         catch
         {
             reuseLease?.Dispose();
             if (!reuseLoginId)
-                await loginProxy.AbandonAsync(loginId, CancellationToken.None);
+                await TryAbandonLoginAsync(loginProxy, loginId);
             throw;
         }
 
@@ -2241,7 +2241,7 @@ public static class PanelAdminApiEndpoints
         {
             reuseLease?.Dispose();
             if (!reuseLoginId)
-                await loginProxy.AbandonAsync(loginId, CancellationToken.None);
+                await TryAbandonLoginAsync(loginProxy, loginId);
             throw;
         }
 
@@ -2325,7 +2325,9 @@ public static class PanelAdminApiEndpoints
                     $"旧二维码登录客户端无法安全停止，已保留冻结路由：{ex.Message}"));
             }
 
-            await loginProxy.AbandonAsync(request.LoginId, CancellationToken.None);
+            if (!await TryAbandonLoginAsync(loginProxy, request.LoginId))
+                return Results.BadRequest(new OperationResultDto(false,
+                    "登录临时出口清理未完成，已保留冻结状态，请重试取消", "LOGIN_CLEANUP_PENDING"));
         }
 
         return Results.Ok(new OperationResultDto(true, "扫码登录会话已取消"));
@@ -2431,7 +2433,9 @@ public static class PanelAdminApiEndpoints
                     $"旧登录客户端无法安全停止，已保留冻结路由：{ex.Message}"));
             }
 
-            await loginProxy.AbandonAsync(request.LoginId, CancellationToken.None);
+            if (!await TryAbandonLoginAsync(loginProxy, request.LoginId))
+                return Results.BadRequest(new OperationResultDto(false,
+                    "登录临时出口清理未完成，已保留冻结状态，请重试释放", "LOGIN_CLEANUP_PENDING"));
         }
 
         return Results.Ok(new OperationResultDto(true, "登录会话已释放"));
@@ -7216,6 +7220,25 @@ public static class PanelAdminApiEndpoints
             result.ProxyName,
             result.ProxyEgressIp);
 
+    private static async Task<bool> TryAbandonLoginAsync(AccountLoginProxyCoordinator loginProxy, int loginId)
+    {
+        try
+        {
+            await loginProxy.AbandonAsync(loginId, CancellationToken.None);
+            return true;
+        }
+        catch
+        {
+            // 协调器保留冻结状态与租约，清理失败不能覆盖原登录错误。
+            return false;
+        }
+    }
+
+    private static async Task<string> PreserveLoginFailureAsync(
+        AccountLoginProxyCoordinator loginProxy, int loginId, string message)
+        => await TryAbandonLoginAsync(loginProxy, loginId)
+            ? message : $"{message}；登录临时出口清理未完成，已保留冻结状态，请重试取消或释放";
+
     private static async Task<IResult> BuildLoginResponseAsync(
         int loginId,
         LoginResult result,
@@ -7258,7 +7281,8 @@ public static class PanelAdminApiEndpoints
             }
             catch (Exception ex)
             {
-                await loginProxy.AbandonAsync(loginId, CancellationToken.None);
+                var message = await PreserveLoginFailureAsync(loginProxy, loginId,
+                    $"Telegram 登录成功，但代理绑定失败，账号已保持停用：{ex.Message}");
                 try
                 {
                     await accountService.ReleaseClientAsync(loginId);
@@ -7274,7 +7298,7 @@ public static class PanelAdminApiEndpoints
                     false,
                     loginId,
                     null,
-                    $"Telegram 登录成功，但代理绑定失败，账号已保持停用：{ex.Message}",
+                    message,
                     account == null ? null : ToDto(account)));
             }
 
@@ -7319,12 +7343,12 @@ public static class PanelAdminApiEndpoints
                 // 仍需继续回收登录代理资源。
             }
 
-            await loginProxy.AbandonAsync(loginId, CancellationToken.None);
+            var cleaned = await TryAbandonLoginAsync(loginProxy, loginId);
             return Results.Ok(new AccountLoginResponseDto(
                 false,
-                0,
+                cleaned ? 0 : loginId,
                 result.NextStep,
-                result.Message,
+                cleaned ? result.Message : $"{result.Message}；登录临时出口清理未完成，已保留冻结状态，请重试取消或释放",
                 null));
         }
 
@@ -7339,7 +7363,8 @@ public static class PanelAdminApiEndpoints
                 // 忽略释放失败
             }
 
-            await loginProxy.AbandonAsync(loginId, CancellationToken.None);
+            var message = await PreserveLoginFailureAsync(loginProxy, loginId, result.Message ?? "登录失败");
+            return Results.BadRequest(new AccountLoginResponseDto(false, loginId, null, message, null));
         }
 
         return Results.BadRequest(new AccountLoginResponseDto(false, loginId, null, result.Message ?? "登录失败", null));
@@ -7388,7 +7413,8 @@ public static class PanelAdminApiEndpoints
             }
             catch (Exception ex)
             {
-                await loginProxy.AbandonAsync(result.LoginId, CancellationToken.None);
+                var message = await PreserveLoginFailureAsync(loginProxy, result.LoginId,
+                    $"Telegram 登录成功，但代理绑定失败，账号已保持停用：{ex.Message}");
                 try
                 {
                     await accountService.ReleaseCompletedQrLoginAsync(result.LoginId);
@@ -7404,7 +7430,7 @@ public static class PanelAdminApiEndpoints
                     false,
                     result.LoginId,
                     "failed",
-                    $"Telegram 登录成功，但代理绑定失败，账号已保持停用：{ex.Message}",
+                    message,
                     null,
                     result.ExpiresAtUtc,
                     account == null ? null : ToDto(account)));
@@ -7432,14 +7458,16 @@ public static class PanelAdminApiEndpoints
                 ToDto(account)));
         }
 
+        var failureMessage = result.Message;
         if (result.Status is "failed" or "expired")
-            await loginProxy.AbandonAsync(result.LoginId, CancellationToken.None);
+            failureMessage = await PreserveLoginFailureAsync(loginProxy, result.LoginId,
+                result.Message ?? "扫码登录失败");
 
         return Results.Ok(new AccountQrLoginResponseDto(
             false,
             result.LoginId,
             result.Status,
-            result.Message,
+            failureMessage,
             result.QrLoginUrl,
             result.ExpiresAtUtc,
             null));
