@@ -14,7 +14,10 @@ namespace TelegramPanel.Web.Services;
 
 public sealed record WgcfProfileDto(string Profile, string Name, string Phase, bool Registered,
     bool Generated, bool Desired, string Runtime, int? ProxyId, int AccountCount,
-    string TestStatus, string? EgressIp, string? Error);
+    string TestStatus, string? EgressIp, string? Error)
+{
+    public bool PoolEligible { get; init; }
+}
 public sealed record WgcfEnvironmentDto(bool Available, string? Reason, IReadOnlyList<WgcfProfileDto> Profiles);
 
 /// <summary>在主容器内托管轻量出口；注册材料仅保存在私有持久目录。</summary>
@@ -27,6 +30,7 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         public bool StopRequested { get; init; }
     }
     private readonly IServiceScopeFactory _scopes;
+    private readonly IConfiguration _configuration;
     private readonly ILogger<WgcfWarpService> _logger;
     private readonly string _root;
     private readonly string _script = Path.Combine(AppContext.BaseDirectory, "wgcf-warp", "warpctl.py");
@@ -52,6 +56,7 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         Func<bool>? hasDependencies, Func<IEnumerable<string>, CancellationToken, Task>? runCommand)
     {
         _scopes = scopes;
+        _configuration = configuration;
         _logger = logger;
         _root = Path.Combine(StoragePathResolver.ResolveWritableRoot(configuration, environment), "wgcf-warp");
         _hasDependencies = hasDependencies ?? (() => OperatingSystem.IsLinux() && File.Exists(_script)
@@ -139,13 +144,13 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         try
         {
             await EnsureUnboundAsync(profile, cancellationToken);
-            proxy = await scope.ServiceProvider.GetRequiredService<AppDbContext>().OutboundProxies.AsNoTracking()
+            proxy = await scope.ServiceProvider.GetRequiredService<AppDbContext>().OutboundProxies.AsNoTracking().Include(x => x.Accounts)
                 .SingleAsync(x => x.Id == proxyId, cancellationToken);
             var entry = GetEntry(profile);
             if (entry.Temporary) throw new InvalidOperationException("临时出口只能通过原创建流程恢复");
-            if (entry.Phase != "ready" || ToDto(entry, proxy).Runtime != "listening" || !proxy.IsEnabled
-                || proxy.TestStatus != "ok" || string.IsNullOrWhiteSpace(proxy.EgressIp))
-                throw new InvalidOperationException("轻量出口尚未就绪");
+            // 取得租约后按展示相同的资格复核，仅排除本次持有的 claim。
+            if (!ToDto(entry, proxy, claim.Token).PoolEligible)
+                throw new InvalidOperationException("轻量出口已被占用或尚未就绪");
             return new ManagedWarpProxyLease(proxy, claim.Token, claim);
         }
         catch { claim.Dispose(); throw; }
@@ -596,7 +601,7 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         }
     }
 
-    private WgcfProfileDto ToDto(Entry entry, TelegramPanel.Data.Entities.OutboundProxy? proxy)
+    private WgcfProfileDto ToDto(Entry entry, TelegramPanel.Data.Entities.OutboundProxy? proxy, string? claimToken = null)
     {
         var registered = false;
         var generated = false;
@@ -613,8 +618,21 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         }
         catch (Exception ex) when (ex is IOException or JsonException or InvalidOperationException) { }
         return new(entry.Profile, entry.Name, entry.Phase, registered, generated, desired, runtime,
-            proxy?.Id, proxy?.Accounts.Count ?? 0, proxy?.TestStatus ?? "unknown", proxy?.EgressIp, entry.Error);
+            proxy?.Id, proxy?.Accounts.Count ?? 0, proxy?.TestStatus ?? "unknown", proxy?.EgressIp, entry.Error)
+        {
+            PoolEligible = IsPoolEligible(entry.Temporary, entry.StopRequested,
+                _claims.IsManagedProfileClaimed(entry.Profile) && !_claims.OwnsManagedProfile(entry.Profile, claimToken),
+                entry.Phase, desired, runtime, proxy,
+                proxy != null && GlobalTelegramProxyConfiguration.GetSelectedProxyId(_configuration) == proxy.Id)
+        };
     }
+
+    // 这是展示时的可领取快照；首次连接仍须通过 AcquireAsync 原子取得租约。
+    internal static bool IsPoolEligible(bool temporary, bool stopRequested, bool claimed,
+        string phase, bool desired, string runtime, OutboundProxy? proxy, bool globallySelected = false) =>
+        !globallySelected && !temporary && !stopRequested && !claimed && phase == "ready" && desired && runtime == "listening"
+        && proxy is { IsEnabled: true, TestStatus: "ok" }
+        && !string.IsNullOrWhiteSpace(proxy.EgressIp) && proxy.Accounts.Count == 0;
 
     private Entry GetEntry(string profile) => _entries.TryGetValue(profile, out var entry)
         ? entry : throw new KeyNotFoundException("轻量出口档案不存在");

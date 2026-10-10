@@ -6,7 +6,7 @@ const viewSource = await readFile(new URL('../src/views/Proxies.vue', import.met
 const apiSource = await readFile(new URL('../src/api/panel.ts', import.meta.url), 'utf8')
 const typesSource = await readFile(new URL('../src/api/types.ts', import.meta.url), 'utf8')
 
-test('全局代理支持从已有普通代理、Resin、受管 WARP 和外部 WireGuard WARP 中选择', () => {
+test('全局代理只支持普通代理、Resin 和外部 WireGuard WARP', () => {
   assert.match(typesSource, /sourceMode: GlobalProxySourceMode/)
   assert.match(typesSource, /proxyId\?: number \| null/)
   assert.match(viewSource, /value="existing">从已有代理选择/)
@@ -14,7 +14,7 @@ test('全局代理支持从已有普通代理、Resin、受管 WARP 和外部 Wi
   assert.match(viewSource, /kind: 'wireguard_warp'.*label: '外部 WireGuard WARP'/s)
   assert.match(viewSource, /kind: 'manual'.*label: '普通代理'/s)
   assert.match(viewSource, /kind: 'resin'.*label: 'Resin 动态代理'/s)
-  assert.match(viewSource, /kind: 'warp'.*label: '受管 WARP'/s)
+  assert.doesNotMatch(viewSource, /kind: 'warp'.*label: '受管 WARP'/s)
   assert.doesNotMatch(viewSource, /openWarpCreateForGlobal\(\)/)
   assert.match(viewSource, /kind: 'wireguard_warp'[^\n]*!proxy\.managedWgcfProfile/)
   assert.match(viewSource, /openProxyCreateForGlobal\('wireguard_warp'\)/)

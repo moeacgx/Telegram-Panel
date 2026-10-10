@@ -1,66 +1,4 @@
 <template>
-  <section class="wgcf-panel" aria-label="轻量 WARP 出口">
-    <header class="wgcf-header">
-      <div class="wgcf-heading">
-        <h2>轻量 WARP</h2>
-        <el-tag :type="status?.available && !loadError ? 'success' : 'info'" size="small">
-          {{ status?.available && !loadError ? '可用' : loading ? '读取中' : '不可用' }}
-        </el-tag>
-      </div>
-      <div class="wgcf-actions">
-        <el-tooltip content="刷新轻量 WARP 状态" placement="top">
-          <el-button circle :icon="Refresh" :loading="loading" aria-label="刷新轻量 WARP 状态" @click="loadStatus" />
-        </el-tooltip>
-      </div>
-    </header>
-    <div v-if="loadError || status?.reason" class="wgcf-error" role="status">{{ loadError || status?.reason }}</div>
-    <el-table :data="profiles" row-key="profile" class="wgcf-table" stripe>
-      <el-table-column label="出口" min-width="150">
-        <template #default="{ row }">
-          <strong>{{ row.name }}</strong>
-          <div class="wgcf-meta">{{ row.proxyId ? `代理 #${row.proxyId}` : '尚未生成代理' }}</div>
-        </template>
-      </el-table-column>
-      <el-table-column label="运行状态" min-width="145">
-        <template #default="{ row }">
-          <el-tag :type="row.phase === 'failed' ? 'danger' : row.phase === 'ready' ? 'success' : 'info'" size="small">{{ phaseLabel(row) }}</el-tag>
-          <div class="wgcf-meta">{{ runtimeLabel(row.runtime) }} · {{ row.desired ? '期望运行' : '期望停止' }}</div>
-        </template>
-      </el-table-column>
-      <el-table-column label="联网检测" min-width="165">
-        <template #default="{ row }">
-          <div>{{ row.egressIp || '出口未检测' }}</div>
-          <div class="wgcf-meta">{{ row.testStatus === 'ok' ? 'WARP 检测通过' : row.testStatus === 'failed' ? '检测失败' : '尚未通过检测' }}</div>
-          <div v-if="row.error" class="wgcf-row-error">{{ row.error }}</div>
-        </template>
-      </el-table-column>
-      <el-table-column label="绑定账号" width="95" align="center">
-        <template #default="{ row }">{{ row.accountCount }}</template>
-      </el-table-column>
-      <el-table-column label="操作" width="158" fixed="right">
-        <template #default="{ row }">
-          <div class="wgcf-row-actions">
-            <el-tooltip v-if="row.phase === 'failed'" content="继续创建此出口" placement="top">
-              <el-button link type="warning" :icon="RefreshRight" :loading="busyProfiles.has(row.profile)" :disabled="operationUnavailable(row)" aria-label="继续创建此出口" @click="operate(row, 'resume')" />
-            </el-tooltip>
-            <el-tooltip v-else-if="!row.desired" content="启动出口" placement="top">
-              <el-button link type="success" :icon="VideoPlay" :loading="busyProfiles.has(row.profile)" :disabled="operationUnavailable(row) || !row.generated || row.phase === 'creating'" aria-label="启动出口" @click="operate(row, 'start')" />
-            </el-tooltip>
-            <el-tooltip v-else :content="row.accountCount > 0 ? '请先在账号页面切换已绑定账号的代理' : '停止出口'" placement="top">
-              <el-button link type="warning" :icon="SwitchButton" :loading="busyProfiles.has(row.profile)" :disabled="operationUnavailable(row) || row.accountCount > 0 || row.phase === 'creating'" aria-label="停止出口" @click="operate(row, 'stop')" />
-            </el-tooltip>
-            <el-tooltip content="检测 WARP 出口" placement="top">
-              <el-button link type="primary" :icon="Connection" :disabled="operationUnavailable(row) || !row.desired || row.runtime !== 'listening' || row.phase !== 'ready'" aria-label="检测 WARP 出口" @click="operate(row, 'test')" />
-            </el-tooltip>
-            <el-tooltip content="绑定单个账号" placement="top">
-              <el-button link type="primary" :icon="User" :disabled="!canBind(row)" aria-label="绑定单个账号" @click="openBind(row)" />
-            </el-tooltip>
-          </div>
-        </template>
-      </el-table-column>
-      <template #empty><el-empty description="暂无轻量 WARP 出口" :image-size="48" /></template>
-    </el-table>
-
     <el-dialog v-model="createDialog.visible" title="一键创建 WARP" width="min(480px, calc(100vw - 24px))"
       :before-close="beforeCreateClose" :close-on-click-modal="!createDialog.running" :close-on-press-escape="!createDialog.running" :show-close="!createDialog.running">
       <el-form label-position="top" :disabled="createDialog.running">
@@ -95,17 +33,15 @@
         <el-button type="primary" :loading="bindDialog.running" :disabled="!selectedAccount || !bindDialog.profile || !canBind(bindDialog.profile)" @click="bindAccount">绑定</el-button>
       </template>
     </el-dialog>
-  </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Connection, Refresh, RefreshRight, SwitchButton, User, VideoPlay } from '@element-plus/icons-vue'
 import { panelApi } from '@/api/panel'
 import type { AccountListItem, WgcfProfile, WgcfRuntimeStatus } from '@/api/types'
 
-const emit = defineEmits<{ changed: []; availability: [available: boolean] }>()
+const emit = defineEmits<{ changed: []; state: [status: WgcfRuntimeStatus | null, error: string] }>()
 const status = ref<WgcfRuntimeStatus | null>(null)
 const profiles = computed(() => status.value?.profiles ?? [])
 const loading = ref(false)
@@ -115,19 +51,12 @@ const createDialog = reactive({ visible: false, running: false, name: '', reques
 const bindDialog = reactive({ visible: false, running: false, searching: false, profile: null as WgcfProfile | null, accountId: null as number | null, accounts: [] as AccountListItem[], error: '' })
 const selectedAccount = computed(() => bindDialog.accounts.find((account) => account.id === bindDialog.accountId))
 let searchToken = 0
+let profileRevision = 0
 let disposed = false
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : '操作失败，请重试'
-}
-
-function phaseLabel(profile: WgcfProfile) {
-  return { creating: '创建中', ready: '已就绪', failed: '创建失败', stopped: '已停止', starting: '启动中' }[profile.phase] || '未知状态'
-}
-
-function runtimeLabel(runtime: string) {
-  return ({ listening: '进程监听中', stopped: '进程已停止', starting: '进程启动中', failed: '进程异常', pending: '等待执行', unknown: '进程状态未知' } as Record<string, string>)[runtime] || '进程状态未知'
 }
 
 function operationUnavailable(profile: WgcfProfile) {
@@ -136,34 +65,46 @@ function operationUnavailable(profile: WgcfProfile) {
 
 function canBind(profile: WgcfProfile) {
   return !operationUnavailable(profile) && profile.phase === 'ready' && profile.desired && profile.runtime === 'listening'
-    && profile.testStatus === 'ok' && !!profile.egressIp && !!profile.proxyId
+    && profile.testStatus === 'ok' && !!profile.egressIp && !!profile.proxyId && profile.accountCount === 0
+}
+
+function canOperate(profile: WgcfProfile, action: 'start' | 'stop' | 'resume' | 'test') {
+  if (operationUnavailable(profile)) return false
+  if (action === 'resume') return profile.phase === 'failed'
+  if (action === 'start') return !profile.desired && profile.generated && profile.phase !== 'creating'
+  if (action === 'stop') return profile.desired && profile.accountCount === 0 && profile.phase !== 'creating'
+  return profile.desired && profile.runtime === 'listening' && profile.phase === 'ready'
 }
 
 function upsert(profile: WgcfProfile) {
   if (disposed) return
+  profileRevision++
   const current = status.value ?? { available: true, reason: null, profiles: [] }
   status.value = {
     ...current,
     profiles: [...current.profiles.filter((item) => item.profile !== profile.profile), profile],
   }
+  emit('state', status.value, loadError.value)
   emit('changed')
 }
 
 async function loadStatus() {
   if (loading.value || disposed) return
   loading.value = true
+  const revision = profileRevision
   try {
     const next = await panelApi.wgcfStatus()
-    if (disposed) return
+    // 轮询开始后的操作响应优先，避免旧快照抹掉刚创建或恢复的出口。
+    if (disposed || revision !== profileRevision) return
     const changed = JSON.stringify(status.value?.profiles) !== JSON.stringify(next.profiles)
     status.value = next
     loadError.value = ''
-    emit('availability', next.available)
+    emit('state', next, '')
     if (changed) emit('changed')
   } catch (error) {
     if (!disposed) {
       loadError.value = errorMessage(error)
-      emit('availability', false)
+      emit('state', status.value, loadError.value)
     }
   } finally {
     if (!disposed) loading.value = false
@@ -175,7 +116,7 @@ function openCreate() {
   Object.assign(createDialog, { visible: true, name: '', requestId: crypto.randomUUID(), acceptTerms: false, submittedName: null, error: '' })
 }
 
-defineExpose({ openCreate })
+defineExpose({ openCreate, loadStatus, operate, openBind, canBind, operationUnavailable, busyProfiles })
 
 function beforeCreateClose(done: () => void) {
   if (!createDialog.running) done()
@@ -200,7 +141,7 @@ async function createProfile() {
 }
 
 async function operate(profile: WgcfProfile, action: 'start' | 'stop' | 'resume' | 'test') {
-  if (operationUnavailable(profile) || (action === 'stop' && profile.accountCount > 0)) return
+  if (!canOperate(profile, action)) return
   busyProfiles.add(profile.profile)
   try {
     const actions = { start: panelApi.startWgcfProfile, stop: panelApi.stopWgcfProfile, resume: panelApi.resumeWgcfProfile, test: panelApi.testWgcfProfile }
@@ -289,17 +230,10 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.wgcf-panel { margin-top: 20px; padding: 16px 0; border-top: 1px solid var(--el-border-color-light); border-bottom: 1px solid var(--el-border-color-light); }
-.wgcf-header, .wgcf-heading, .wgcf-actions, .wgcf-row-actions { display: flex; align-items: center; gap: 10px; }
-.wgcf-header { justify-content: space-between; flex-wrap: wrap; margin-bottom: 12px; }
-.wgcf-heading h2 { margin: 0; font-size: 17px; font-weight: 600; }
 .wgcf-meta { color: var(--el-text-color-secondary); font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
 .wgcf-error, .wgcf-row-error { color: var(--el-color-danger); font-size: 13px; overflow-wrap: anywhere; }
 .wgcf-error { margin: 10px 0; }
-.wgcf-table { width: 100%; }
-.wgcf-row-actions { justify-content: flex-end; gap: 6px; min-height: 32px; }
-.wgcf-row-actions :deep(.el-button + .el-button) { margin-left: 0; }
 .wgcf-terms { color: var(--el-color-primary); font-size: 14px; margin-left: 8px; overflow-wrap: anywhere; }
 .wgcf-full { width: 100%; }
-@media (max-width: 600px) { .wgcf-header { gap: 12px; } .wgcf-terms { display: block; margin-left: 0; } }
+@media (max-width: 600px) { .wgcf-terms { display: block; margin-left: 0; } }
 </style>

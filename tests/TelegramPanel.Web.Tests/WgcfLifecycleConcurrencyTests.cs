@@ -12,6 +12,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 using TelegramPanel.Core.Interfaces;
 using TelegramPanel.Core.Models;
 using TelegramPanel.Core.Services.Proxy;
+using TelegramPanel.Core.Services;
+using TelegramPanel.Core.Services.Telegram;
+using TelegramPanel.Data.Repositories;
 using TelegramPanel.Data;
 using TelegramPanel.Data.Entities;
 using TelegramPanel.Web.Services;
@@ -22,6 +25,77 @@ namespace TelegramPanel.Web.Tests;
 
 public sealed class WgcfLifecycleConcurrencyTests
 {
+    [Theory]
+    [InlineData("stopRequested")]
+    [InlineData("undesired")]
+    [InlineData("global")]
+    public async Task 领取复核拒绝失效首选并释放占用且池继续下一出口(string scenario)
+    {
+        await using var f = await Fixture.CreateAsync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var first = await f.ProxyAsync();
+        await using var scope = f.Provider.CreateAsyncScope();
+        var management = scope.ServiceProvider.GetRequiredService<ProxyManagementService>();
+        await management.TestAsync(first.Id, timeout.Token);
+        var next = await f.AddReadyCandidateAsync(timeout.Token);
+        if (scenario == "stopRequested") f.PersistPhase("ready", stopRequested: true);
+        if (scenario == "undesired") f.WriteRuntime(false, runtime: "listening");
+        if (scenario == "global") f.SelectGlobal(first.Id, "true");
+
+        var state = (await f.Service.ListAsync(timeout.Token)).Profiles.Single(x => x.ProxyId == first.Id);
+        Assert.Equal("ready", state.Phase);
+        Assert.Equal("listening", state.Runtime);
+        Assert.False(state.PoolEligible);
+        Assert.True((await f.Service.ListAsync(timeout.Token)).Profiles.Single(x => x.ProxyId == next.Id).PoolEligible);
+        var claims = f.Provider.GetRequiredService<TemporaryWarpClaimStore>();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Service.AcquireAsync(first.Id, timeout.Token));
+        Assert.False(claims.IsManagedProfileClaimed(f.Profile));
+        // 再次取得同一 claim 证明失败路径没有遗留占用。
+        using (claims.ClaimManagedProfile(f.Profile)) { }
+
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var pool = new EmptyPool();
+        var accountManagement = new AccountManagementService(new AccountRepository(db),
+            new ChannelRepository(db), new GroupRepository(db), pool, f.Configuration,
+            NullLogger<AccountManagementService>.Instance, management, new SessionPathResolver(f.Configuration));
+        var accountService = new AccountService(pool, NullLogger<AccountService>.Instance, f.Configuration);
+        var coordinator = new AccountLoginProxyCoordinator(new AccountLoginProxyStateStore(), management,
+            accountManagement, accountService, claims, f.Configuration,
+            NullLogger<AccountLoginProxyCoordinator>.Instance, f.Service);
+        var prepared = await coordinator.PrepareAsync(123, "warp_pool", null, timeout.Token);
+        using (prepared.ManagedWarpLease)
+        {
+            Assert.Equal(next.Id, prepared.Binding.ProxyId);
+            Assert.False(claims.IsManagedProfileClaimed(f.Profile));
+            Assert.True(claims.IsManagedProfileClaimed(next.ManagedWgcfProfile!));
+        }
+        Assert.False(claims.IsManagedProfileClaimed(next.ManagedWgcfProfile!));
+    }
+
+    [Theory]
+    [InlineData("true", false)]
+    [InlineData(null, false)]
+    [InlineData("false", true)]
+    public async Task 全局选择资格遵循显式禁用和缺省启用语义(string? enabled, bool eligible)
+    {
+        await using var f = await Fixture.CreateAsync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var proxy = await f.ProxyAsync();
+        await using var scope = f.Provider.CreateAsyncScope();
+        await scope.ServiceProvider.GetRequiredService<ProxyManagementService>().TestAsync(proxy.Id, timeout.Token);
+        f.SelectGlobal(proxy.Id, enabled);
+        Assert.Equal(eligible, (await f.Service.ListAsync(timeout.Token)).Profiles.Single().PoolEligible);
+        if (eligible)
+        {
+            using var lease = await f.Service.AcquireAsync(proxy.Id, timeout.Token);
+            Assert.Equal(proxy.Id, lease.Proxy.Id);
+            Assert.False((await f.Service.ListAsync(timeout.Token)).Profiles.Single().PoolEligible);
+        }
+        else
+            await Assert.ThrowsAsync<InvalidOperationException>(() => f.Service.AcquireAsync(proxy.Id, timeout.Token));
+        Assert.False(f.Provider.GetRequiredService<TemporaryWarpClaimStore>().IsManagedProfileClaimed(f.Profile));
+    }
+
     [Fact]
     public async Task 未启动的运行器释放时清理排队恢复占用()
     {
@@ -379,6 +453,7 @@ public sealed class WgcfLifecycleConcurrencyTests
         public string Profile { get; private set; } = string.Empty;
         public ServiceProvider Provider { get; private set; } = null!;
         public WgcfWarpService Service { get; private set; } = null!;
+        public IConfiguration Configuration { get; private set; } = null!;
         public List<string> Commands { get; } = new();
         private string Root => Path.Combine(_directory, "wgcf-warp");
 
@@ -390,6 +465,7 @@ public sealed class WgcfLifecycleConcurrencyTests
             {
                 ["Storage:RootPath"] = f._directory
             }).Build();
+            f.Configuration = config;
             var services = new ServiceCollection();
             services.AddSingleton<TemporaryWarpClaimStore>();
             services.AddDbContext<AppDbContext>(options => options.UseSqlite(
@@ -399,7 +475,6 @@ public sealed class WgcfLifecycleConcurrencyTests
                 var db = provider.GetRequiredService<AppDbContext>();
                 var probe = new Probe();
                 return new ProxyManagementService(db, new EmptyPool(), probe,
-                    new WarpContainerManager(db, config, probe, NullLogger<WarpContainerManager>.Instance),
                     NullLogger<ProxyManagementService>.Instance, config,
                     provider.GetRequiredService<TemporaryWarpClaimStore>());
             });
@@ -443,10 +518,11 @@ public sealed class WgcfLifecycleConcurrencyTests
 
         public T Field<T>(string name) => (T)typeof(WgcfWarpService).GetField(name, PrivateInstance)!.GetValue(Service)!;
 
-        public void PersistPhase(string phase)
+        public void PersistPhase(string phase, bool stopRequested = false, string? profile = null)
         {
             var entryType = typeof(WgcfWarpService).GetNestedType("Entry", BindingFlags.NonPublic)!;
-            var entry = Activator.CreateInstance(entryType, Profile, "并发验收出口", phase, null)!;
+            var entry = Activator.CreateInstance(entryType, profile ?? Profile, "并发验收出口", phase, null)!;
+            entryType.GetProperty("StopRequested")!.SetValue(entry, stopRequested);
             typeof(WgcfWarpService).GetMethod("Persist", PrivateInstance)!.Invoke(Service, new[] { entry });
         }
 
@@ -474,17 +550,39 @@ public sealed class WgcfLifecycleConcurrencyTests
             return json.RootElement.GetProperty("StopRequested").GetBoolean();
         }
 
-        public void WriteRuntime(bool desired)
+        public void WriteRuntime(bool desired, string? runtime = null, string? profile = null, int port = 18081)
         {
-            File.WriteAllText(Path.Combine(Root, Profile, "meta.json"), JsonSerializer.Serialize(new
+            File.WriteAllText(Path.Combine(Root, profile ?? Profile, "meta.json"), JsonSerializer.Serialize(new
             {
-                registered = true, generated = true, desired, port = 18081, revision = "fixture-revision"
+                registered = true, generated = true, desired, port, revision = "fixture-revision"
             }));
-            File.WriteAllText(Path.Combine(Root, Profile, "runtime.json"), JsonSerializer.Serialize(new
+            File.WriteAllText(Path.Combine(Root, profile ?? Profile, "runtime.json"), JsonSerializer.Serialize(new
             {
                 at = DateTimeOffset.UtcNow.ToUnixTimeSeconds(), revision = "fixture-revision",
-                state = desired ? "listening" : "stopped"
+                state = runtime ?? (desired ? "listening" : "stopped")
             }));
+        }
+
+        public void SelectGlobal(int proxyId, string? enabled)
+        {
+            Configuration["Telegram:Proxy:SourceMode"] = "existing";
+            Configuration["Telegram:Proxy:ProxyId"] = proxyId.ToString();
+            Configuration["Telegram:Proxy:Enabled"] = enabled;
+        }
+
+        public async Task<OutboundProxy> AddReadyCandidateAsync(CancellationToken ct)
+        {
+            var profile = (await Service.CreateAsync(Guid.NewGuid().ToString(), "后续可领取出口", true, ct)).Profile;
+            Assert.True(Field<Channel<string>>("_queue").Reader.TryRead(out _));
+            Directory.CreateDirectory(Path.Combine(Root, profile));
+            WriteRuntime(true, profile: profile, port: 18082);
+            PersistPhase("ready", profile: profile);
+            await using var scope = Provider.CreateAsyncScope();
+            var management = scope.ServiceProvider.GetRequiredService<ProxyManagementService>();
+            var proxy = await management.CreateManagedWgcfProxyAsync(profile, "后续可领取出口", 18082,
+                "fixture", "fixture-secret", ct);
+            await management.TestAsync(proxy.Id, ct);
+            return proxy;
         }
 
         public Task ProcessQueueAsync(CancellationToken ct) =>
@@ -512,7 +610,7 @@ public sealed class WgcfLifecycleConcurrencyTests
         public async Task<OutboundProxy> ProxyAsync()
         {
             await using var scope = Provider.CreateAsyncScope();
-            return await scope.ServiceProvider.GetRequiredService<AppDbContext>().OutboundProxies.AsNoTracking().SingleAsync();
+            return await scope.ServiceProvider.GetRequiredService<AppDbContext>().OutboundProxies.AsNoTracking().SingleAsync(x => x.ManagedWgcfProfile == Profile);
         }
 
         public async ValueTask DisposeAsync()

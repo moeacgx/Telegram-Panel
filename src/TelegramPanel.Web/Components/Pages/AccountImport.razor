@@ -5,6 +5,7 @@
 @inject AccountTelegramToolsService AccountTelegramTools
 @inject TelegramPanel.Core.Services.AccountRiskService RiskService
 @inject TelegramPanel.Core.Services.Proxy.ProxyManagementService ProxyManagement
+@inject TelegramPanel.Web.Services.WgcfWarpService WgcfWarp
 @inject IConfiguration Configuration
 @inject TelegramApiProfilePool ApiProfilePool
 @inject ISnackbar Snackbar
@@ -47,7 +48,7 @@
         {
             <MudSelect T="int?" @bind-Value="selectedProxyId" Label="选择已有代理" Variant="Variant.Outlined"
                        Dense="true" Clearable="true" Disabled="@Busy" Class="mt-3">
-                @foreach (var proxy in proxyOptions)
+                @foreach (var proxy in ExistingProxyOptions)
                 {
                     <MudSelectItem T="int?" Value="@((int?)proxy.Id)">
                         @FormatProxyOption(proxy)
@@ -55,7 +56,7 @@
                 }
             </MudSelect>
 
-            @if (proxyOptions.Count == 0)
+            @if (!ExistingProxyOptions.Any())
             {
                 <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-3">
                     当前没有已启用代理，请先到新版【代理管理】新增代理。
@@ -90,7 +91,7 @@
         else if (proxyStrategy == "warp_pool")
         {
             <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-3">
-                将按当前账号绑定数自动选择已有 WARP；不会创建新容器。当前已启用 @WarpPoolCount 个 WARP。
+                将独占分配一个已就绪的空闲轻量 WARP。当前有 @WarpPoolCount 个空闲出口。
             </MudAlert>
         }
         else if (proxyStrategy == "warp_per_account")
@@ -98,6 +99,7 @@
             <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-3">
                 将为每个成功导入账号创建并绑定一个新的受管 WARP；单次最多 @AccountImportService.MaxWarpPerAccountImportCount 个账号，失败会在首次连接前停止。
             </MudAlert>
+            <MudCheckBox T="bool" @bind-Value="acceptWarpTerms" Disabled="@Busy" Label="我已阅读并接受 Cloudflare WARP 条款" />
         }
     </MudCardContent>
 </MudCard>
@@ -356,13 +358,15 @@
     private string proxyStrategy = "";
     private int? selectedProxyId;
     private List<OutboundProxy> proxyOptions = new();
-    private int WarpPoolCount => proxyOptions.Count(x =>
-        x.IsEnabled
-        && x.Kind == OutboundProxyKinds.Warp
-        && x.WarpProfile?.Status == "active");
+    private IEnumerable<OutboundProxy> ExistingProxyOptions => proxyOptions.Where(x =>
+        x.IsEnabled && x.Kind != OutboundProxyKinds.Warp && x.ManagedWgcfProfile == null);
+    private WgcfEnvironmentDto? warpEnvironment;
+    private int WarpPoolCount => LegacyWarpPoolSelection.Count(
+        proxyOptions, warpEnvironment, GlobalTelegramProxyConfiguration.GetSelectedProxyId(Configuration));
 
 
     private bool WarpCreateAvailable { get; set; }
+    private bool acceptWarpTerms;
     private bool GlobalProxyConfigured
     {
         get
@@ -382,9 +386,9 @@
         string.IsNullOrWhiteSpace(proxyStrategy)
         || (proxyStrategy == "existing"
             && (selectedProxyId is not > 0
-                || proxyOptions.All(x => x.Id != selectedProxyId.Value)))
+                || ExistingProxyOptions.All(x => x.Id != selectedProxyId.Value)))
         || (proxyStrategy == "warp_pool" && WarpPoolCount == 0)
-        || (proxyStrategy == "warp_per_account" && !WarpCreateAvailable)
+        || (proxyStrategy == "warp_per_account" && (!WarpCreateAvailable || !acceptWarpTerms))
         || (proxyStrategy == "global" && !GlobalProxyConfigured);
 
     private List<ImportResult> importResults = new();
@@ -402,11 +406,10 @@
     protected override async Task OnInitializedAsync()
     {
         var proxiesTask = ProxyManagement.ListAsync(_pageCts.Token);
-        var warpStatusTask = ProxyManagement.GetWarpStatusAsync(_pageCts.Token);
         try
         {
             proxyOptions = (await proxiesTask)
-                .Where(x => x.IsEnabled)
+                .Where(x => x.IsEnabled && x.Kind != OutboundProxyKinds.Warp)
                 .OrderByDescending(x => x.Id)
                 .ToList();
         }
@@ -421,8 +424,8 @@
 
         try
         {
-            var warpStatus = await warpStatusTask;
-            WarpCreateAvailable = warpStatus.PlatformSupported && warpStatus.Enabled && warpStatus.DockerAvailable;
+            warpEnvironment = await WgcfWarp.ListAsync(_pageCts.Token);
+            WarpCreateAvailable = warpEnvironment.Available;
         }
         catch (OperationCanceledException) when (_pageCts.IsCancellationRequested)
         {
@@ -491,7 +494,7 @@
                 return true;
             case "existing":
                 if (selectedProxyId is not > 0
-                    || proxyOptions.All(x => x.Id != selectedProxyId.Value))
+                    || ExistingProxyOptions.All(x => x.Id != selectedProxyId.Value))
                 {
                     Snackbar.Add("请选择一个已启用的代理", Severity.Warning);
                     return false;
@@ -512,7 +515,12 @@
                     Snackbar.Add("当前环境无法创建 WARP，请先确认受管 WARP 运行环境", Severity.Error);
                     return false;
                 }
-                binding = new AccountProxyBindingInput("warp_per_account");
+                if (!acceptWarpTerms)
+                {
+                    Snackbar.Add("请先阅读并接受 Cloudflare WARP 条款", Severity.Warning);
+                    return false;
+                }
+                binding = new AccountProxyBindingInput("warp_per_account", AcceptWarpTerms: true);
                 return true;
             default:
                 Snackbar.Add("请先明确选择导入账号首次连接使用的代理方式", Severity.Warning);

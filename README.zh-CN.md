@@ -31,6 +31,7 @@ Telegram Panel 用于在单个 Web 面板中统一管理和运营多个 Telegram
 
 - 📥 **账号接入**：支持 Telethon / TData / StringSession 导入，Telethon / TData 导出，手机号验证码、二维码和 2FA 登录；导出独立 Session 会沿用当前 Telegram 授权的设备指纹。
 - 🌐 **账号级代理**：支持 HTTP、SOCKS5、MTProxy、Resin 和受管 WARP，覆盖账号绑定、批量绑定、分类、使用状态筛选，以及出口 IP、地区、城市和 ISP 检测。
+- 🪶 **轻量 WARP**：一键创建 wgcf＋wireproxy 出口并在统一代理列表管理，每个出口一个进程、一个账号，无需独立容器或 Docker Socket。v1.31.82 升级前需先完成[旧容器账号迁移](docs/deployment/wgcf-wireproxy.md)。
 - 🔒 **安全首连**：导入和登录会在第一条 Telegram 请求前选择并冻结出口，避免先直连再切换 IP。
 - 🛡️ **账号维护**：支持状态检测、瞬时连接恢复、安全废号清理、查看在线设备、按精确授权哈希踢出设备、踢出其他设备、二级密码与找回邮箱管理。
 - 👥 **频道、群组和 Bot**：支持创建、同步、分类、邀请、管理员设置、公开化、退出、解散和链接导出。

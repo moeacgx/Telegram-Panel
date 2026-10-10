@@ -3,6 +3,7 @@
 @inject AccountManagementService AccountManagement
 @inject TelegramPanel.Core.Services.Proxy.ProxyManagementService ProxyManagement
 @inject TelegramPanel.Web.Services.AccountLoginProxyCoordinator LoginProxy
+@inject TelegramPanel.Web.Services.WgcfWarpService WgcfWarp
 @inject IConfiguration Configuration
 @inject TelegramApiProfilePool ApiProfilePool
 @inject ISnackbar Snackbar
@@ -32,7 +33,7 @@
             </MudRadio>
             <MudRadio T="string" Value="@("warp_pool")" Color="Color.Primary"
                       Disabled="@(logging || ProxyRouteLocked || WarpPoolCount == 0)">
-                自动分配已有 WARP
+                自动分配空闲 WARP
             </MudRadio>
             <MudRadio T="string" Value="@("global")" Color="Color.Warning" Disabled="@(logging || ProxyRouteLocked)">
                 全局设置
@@ -46,7 +47,7 @@
         {
             <MudSelect T="int?" @bind-Value="selectedProxyId" Label="选择已有代理" Variant="Variant.Outlined"
                        Dense="true" Clearable="true" Disabled="@(logging || ProxyRouteLocked)" Class="mt-3">
-                @foreach (var proxy in proxyOptions)
+                @foreach (var proxy in ExistingProxyOptions)
                 {
                     <MudSelectItem T="int?" Value="@((int?)proxy.Id)">
                         @FormatProxyOption(proxy)
@@ -54,10 +55,10 @@
                 }
             </MudSelect>
 
-            @if (proxyOptions.Count == 0)
+            @if (!ExistingProxyOptions.Any())
             {
                 <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-3">
-                    当前没有已启用代理，请先到新版【代理管理】新增代理，或准备并启用已有 WARP。
+                    当前没有已启用普通代理，请先到新版【代理管理】新增代理，或选择自动分配空闲 WARP。
                 </MudAlert>
             }
         }
@@ -89,7 +90,7 @@
         else if (proxyStrategy == "warp_pool")
         {
             <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-3">
-                将按当前账号绑定数自动选择已有 WARP；不会创建新容器。当前已启用 @WarpPoolCount 个 WARP。
+                将独占分配一个已就绪的空闲轻量 WARP。当前有 @WarpPoolCount 个空闲出口。
             </MudAlert>
         }
     </MudCardContent>
@@ -211,11 +212,11 @@
     private string proxyStrategy = "";
     private int? selectedProxyId;
     private List<OutboundProxy> proxyOptions = new();
-    private int WarpPoolCount => proxyOptions.Count(x =>
-        x.IsEnabled
-        && x.Kind == OutboundProxyKinds.Warp
-        && x.WarpProfile?.DesiredEnabled == true
-        && x.WarpProfile?.Status == "active");
+    private IEnumerable<OutboundProxy> ExistingProxyOptions => proxyOptions.Where(x =>
+        x.IsEnabled && x.Kind != OutboundProxyKinds.Warp && x.ManagedWgcfProfile == null);
+    private WgcfEnvironmentDto? warpEnvironment;
+    private int WarpPoolCount => LegacyWarpPoolSelection.Count(
+        proxyOptions, warpEnvironment, GlobalTelegramProxyConfiguration.GetSelectedProxyId(Configuration));
     private readonly CancellationTokenSource _pageCts = new();
 
     private string? username = "";
@@ -248,7 +249,7 @@
         string.IsNullOrWhiteSpace(proxyStrategy)
         || (proxyStrategy == "existing"
             && (selectedProxyId is not > 0
-                || proxyOptions.All(x => x.Id != selectedProxyId.Value)))
+                || ExistingProxyOptions.All(x => x.Id != selectedProxyId.Value)))
         || (proxyStrategy == "warp_pool" && WarpPoolCount == 0)
         || (proxyStrategy == "global" && !GlobalProxyConfigured);
 
@@ -259,7 +260,7 @@
         try
         {
             proxyOptions = (await proxiesTask)
-                .Where(x => x.IsEnabled)
+                .Where(x => x.IsEnabled && x.Kind != OutboundProxyKinds.Warp)
                 .OrderByDescending(x => x.Id)
                 .ToList();
         }
@@ -270,6 +271,19 @@
         catch (Exception ex)
         {
             Snackbar.Add($"加载代理列表失败：{ex.Message}", Severity.Warning);
+        }
+
+        try
+        {
+            warpEnvironment = await WgcfWarp.ListAsync(_pageCts.Token);
+        }
+        catch (OperationCanceledException) when (_pageCts.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"加载轻量 WARP 状态失败：{ex.Message}", Severity.Warning);
         }
 
 
@@ -336,7 +350,7 @@
                 return true;
             case "existing":
                 if (selectedProxyId is not > 0
-                    || proxyOptions.All(x => x.Id != selectedProxyId.Value))
+                    || ExistingProxyOptions.All(x => x.Id != selectedProxyId.Value))
                 {
                     Snackbar.Add("请选择一个已启用的代理", Severity.Warning);
                     return false;
@@ -346,7 +360,7 @@
             case "warp_pool":
                 if (WarpPoolCount == 0)
                 {
-                    Snackbar.Add("没有可自动分配的已有 WARP，请先在代理管理中准备并启用 WARP", Severity.Error);
+                    Snackbar.Add("没有可自动分配的空闲轻量 WARP，请先在代理管理中创建并检测出口", Severity.Error);
                     return false;
                 }
                 return true;

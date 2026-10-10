@@ -14,8 +14,10 @@ namespace TelegramPanel.Web.Tests;
 
 public sealed class ProxyEgressMaintenanceTests
 {
-    [Fact]
-    public async Task 巡检只刷新启用的普通和Resin代理并使用轻量健康探针()
+    [Theory]
+    [InlineData("ok")]
+    [InlineData("fail")]
+    public async Task 巡检只刷新启用的普通和Resin代理并使用轻量健康探针(string managedTestStatus)
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
@@ -32,7 +34,11 @@ public sealed class ProxyEgressMaintenanceTests
         var warp = NewProxy("warp", OutboundProxyKinds.Warp, 1083);
         var mtProxy = NewProxy("mtproxy", OutboundProxyKinds.Manual, 1084);
         mtProxy.Protocol = OutboundProxyProtocols.MtProto;
-        db.OutboundProxies.AddRange(manual, resin, disabled, warp, mtProxy);
+        var managedWgcf = NewProxy("managed-wgcf", OutboundProxyKinds.WireGuardWarp, 1085);
+        managedWgcf.ManagedWgcfProfile = "web-managed-probe";
+        managedWgcf.TestStatus = managedTestStatus;
+        managedWgcf.EgressIp = "203.0.113.7";
+        db.OutboundProxies.AddRange(manual, resin, disabled, warp, mtProxy, managedWgcf);
         await db.SaveChangesAsync();
 
         var probe = new RecordingHealthProbeService();
@@ -41,11 +47,6 @@ public sealed class ProxyEgressMaintenanceTests
             db,
             new EmptyClientPool(),
             probe,
-            new WarpContainerManager(
-                db,
-                configuration,
-                probe,
-                NullLogger<WarpContainerManager>.Instance),
             NullLogger<ProxyManagementService>.Instance,
             configuration);
 
@@ -68,6 +69,9 @@ public sealed class ProxyEgressMaintenanceTests
         Assert.Null(refreshed[disabled.Id].LastTestedAtUtc);
         Assert.Null(refreshed[warp.Id].LastTestedAtUtc);
         Assert.Null(refreshed[mtProxy.Id].LastTestedAtUtc);
+        Assert.Null(refreshed[managedWgcf.Id].LastTestedAtUtc);
+        Assert.Equal(managedTestStatus, refreshed[managedWgcf.Id].TestStatus);
+        Assert.Equal("203.0.113.7", refreshed[managedWgcf.Id].EgressIp);
     }
 
     [Fact]

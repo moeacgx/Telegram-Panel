@@ -145,16 +145,10 @@ public sealed class WireGuardWarpEndpointTests
 
             var configuration = new ConfigurationBuilder().Build();
             var probe = new WarpOnProbe();
-            var warp = new WarpContainerManager(
-                db,
-                configuration,
-                probe,
-                NullLogger<WarpContainerManager>.Instance);
             var service = new ProxyManagementService(
                 db,
                 new EmptyClientPool(),
                 probe,
-                warp,
                 NullLogger<ProxyManagementService>.Instance,
                 configuration);
 

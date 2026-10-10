@@ -23,9 +23,9 @@ test('逐账号批量代理仅扩展 Zip 导入与账号批量绑定策略', () 
 })
 
 test('账号导入支持已有 WARP 池和创建一对一 WARP', () => {
-  assert.match(source, /value="warp_pool"[^>]*>自动分配已有 WARP/)
+  assert.match(source, /value="warp_pool"[^>]*>自动分配空闲 WARP/)
   assert.match(source, /value="warp_per_account"[^>]*>创建一对一 WARP/)
-  assert.match(source, /proxy\.kind === 'warp'[\s\S]*proxy\.isEnabled[\s\S]*proxy\.warpRuntimeStatus === 'active'/)
+  assert.match(source, /countAvailableWgcfPool\(proxies\.value, warpStatus\.value\)/)
   assert.match(source, /不会创建新容器/)
   assert.match(source, /WARP_PER_ACCOUNT_IMPORT_LIMIT = 10/)
   assert.match(source, /panelApi\.wgcfStatus\(\)/)

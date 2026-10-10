@@ -5,7 +5,7 @@ namespace TelegramPanel.Web.Services;
 
 /// <summary>
 /// 定期刷新普通代理和 Resin 代理的出口及地理元数据。
-/// 不负责 WARP 容器恢复；WARP 由 WarpMaintenanceBackgroundService 独立维护。
+/// 受管轻量 WARP 由共享运行器监督进程负责恢复。
 /// </summary>
 public sealed class ProxyEgressMaintenanceBackgroundService : BackgroundService
 {

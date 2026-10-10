@@ -25,11 +25,11 @@ test('出口 IP 明确显示协议栈与检测状态', () => {
   assert.match(egressUtilSource, /normalized\.includes\(':'\) \? 'IPv6' : 'IPv4'/)
 })
 
-test('一键创建 WARP 统一打开轻量创建并保留旧代理维护', () => {
+test('一键创建 WARP 使用统一入口且移除旧代理维护', () => {
   assert.match(proxiesSource, /@click="openLightweightWarpCreate"/)
   assert.match(proxiesSource, /wgcfWarpPanel\.value\?\.openCreate\(\)/)
   assert.doesNotMatch(proxiesSource, /createWarpProxies|warpDialog|openWarpCreateForGlobal/)
-  assert.match(proxiesSource, /panelApi\.refreshWarpProxy/)
+  assert.doesNotMatch(proxiesSource, /panelApi\.refreshWarpProxy/)
   assert.match(typesSource, /managedWgcfProfile\?: string \| null/)
 })
 

@@ -59,11 +59,6 @@ public sealed class GlobalProxyEgressTests
             db,
             pool,
             probe,
-            new WarpContainerManager(
-                db,
-                configuration,
-                probe,
-                NullLogger<WarpContainerManager>.Instance),
             NullLogger<ProxyManagementService>.Instance,
             configuration);
 
@@ -407,16 +402,10 @@ public sealed class GlobalProxyEgressTests
             })
             .Build();
         var probe = new ProxyEgressProbeService();
-        var warp = new WarpContainerManager(
-            db,
-            configuration,
-            probe,
-            NullLogger<WarpContainerManager>.Instance);
         var service = new ProxyManagementService(
             db,
             new EmptyClientPool(),
             probe,
-            warp,
             NullLogger<ProxyManagementService>.Instance,
             configuration);
 

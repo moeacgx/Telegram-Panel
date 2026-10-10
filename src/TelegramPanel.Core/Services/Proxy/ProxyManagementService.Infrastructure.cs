@@ -17,6 +17,7 @@ public sealed partial class ProxyManagementService
         OutboundProxy proxy,
         CancellationToken cancellationToken)
     {
+        AccountProxyResolver.RejectRetiredWarp(proxy);
         var probeKey = $"telegram_panel_probe_{proxy.Id}";
         try
         {
@@ -66,28 +67,6 @@ public sealed partial class ProxyManagementService
                 proxy.EgressCountry = null;
                 proxy.EgressCity = null;
                 proxy.EgressIsp = null;
-            }
-
-            if (proxy.WarpProfile is { } warpProfile)
-            {
-                warpProfile.EgressIp = result.Success ? result.Ip : null;
-                warpProfile.Country = result.Success ? result.Country : null;
-                warpProfile.WarpStatus = result.Success ? result.WarpStatus : null;
-                warpProfile.LastError = result.Error;
-                warpProfile.LastCheckedAtUtc = result.CheckedAtUtc;
-                if (result.Success)
-                {
-                    warpProfile.ConsecutiveFailures = 0;
-                    if (warpProfile.DesiredEnabled && proxy.IsEnabled)
-                        warpProfile.Status = "active";
-                }
-                else if (warpProfile.DesiredEnabled && proxy.IsEnabled)
-                {
-                    warpProfile.ConsecutiveFailures++;
-                    if (warpProfile.Status != "restarting")
-                        warpProfile.Status = "degraded";
-                }
-                warpProfile.UpdatedAtUtc = DateTime.UtcNow;
             }
 
             await _db.SaveChangesAsync(cancellationToken);
@@ -555,21 +534,9 @@ public sealed partial class ProxyManagementService
         if (stillUsed)
             throw new ProxyInUseException("代理仍被账号使用");
 
+        // 历史容器已由部署迁移清理；此处只删除未被使用的数据库记录。
         if (proxy.WarpProfile != null)
-        {
-            proxy.IsEnabled = false;
-            proxy.TestStatus = "fail";
-            proxy.LastError = "WARP 资源正在清理或上次清理未完成";
-            proxy.UpdatedAtUtc = DateTime.UtcNow;
-            proxy.WarpProfile.Status = "deleting";
-            proxy.WarpProfile.DesiredEnabled = false;
-            proxy.WarpProfile.UpdatedAtUtc = DateTime.UtcNow;
-            await _db.SaveChangesAsync(cancellationToken);
-            await _warpManager.DeleteResourcesAsync(
-                proxy.WarpProfile,
-                purgeData: true,
-                cancellationToken);
-        }
+            _db.WarpProfiles.Remove(proxy.WarpProfile);
 
         _db.OutboundProxies.Remove(proxy);
         await _db.SaveChangesAsync(cancellationToken);

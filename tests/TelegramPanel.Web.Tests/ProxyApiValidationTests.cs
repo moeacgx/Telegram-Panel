@@ -225,28 +225,14 @@ public sealed class ProxyApiValidationTests
             await db.SaveChangesAsync();
 
             var configuration = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["Proxy:Warp:Enabled"] = "true",
-                    ["Proxy:Warp:DockerSocketPath"] = Path.Combine(
-                        Path.GetTempPath(),
-                        "proxy-api-validation.sock")
-                })
                 .Build();
             var probe = new ProxyEgressProbeService();
-            var warpManager = new WarpContainerManager(
-                db,
-                configuration,
-                probe,
-                NullLogger<WarpContainerManager>.Instance,
-                new NoopWarpDockerClientFactory());
             var warpUsageGuard = new AccountLoginProxyStateStore();
             var temporaryWarpClaims = new TemporaryWarpClaimStore();
             var service = new ProxyManagementService(
                 db,
                 new NoopClientPool(),
                 probe,
-                warpManager,
                 NullLogger<ProxyManagementService>.Instance,
                 configuration,
                 temporaryWarpClaims,
@@ -308,69 +294,4 @@ public sealed class ProxyApiValidationTests
         public bool IsClientConnected(int accountId) => false;
     }
 
-    private sealed class NoopWarpDockerClientFactory : WarpContainerManager.IWarpDockerClientFactory
-    {
-        public bool PlatformSupported => true;
-
-        public WarpContainerManager.IWarpDockerClient Create(string socketPath) =>
-            new NoopWarpDockerClient();
-    }
-
-    private sealed class NoopWarpDockerClient : WarpContainerManager.IWarpDockerClient
-    {
-        public Task<string?> GetVersionAsync(CancellationToken cancellationToken) =>
-            Task.FromResult<string?>("test");
-
-        public Task EnsureImageAsync(
-            string image,
-            bool pullIfMissing,
-            CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task CreateVolumeAsync(
-            string volumeName,
-            string profileId,
-            CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task<string> CreateContainerAsync(
-            WarpContainerManager.WarpSettings settings,
-            string profileId,
-            string containerName,
-            string volumeName,
-            int hostPort,
-            CancellationToken cancellationToken) => Task.FromResult("test-container");
-
-        public Task StartContainerAsync(
-            string containerId,
-            CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task StopContainerAsync(
-            string containerId,
-            CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task RestartContainerAsync(
-            string containerId,
-            CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task<bool> VerifyContainerOwnershipAsync(
-            string containerId,
-            string profileId,
-            CancellationToken cancellationToken) => Task.FromResult(true);
-
-        public Task<bool> VerifyVolumeOwnershipAsync(
-            string volumeName,
-            string profileId,
-            CancellationToken cancellationToken) => Task.FromResult(true);
-
-        public Task RemoveContainerAsync(
-            string containerId,
-            CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task RemoveVolumeAsync(
-            string volumeName,
-            CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public void Dispose()
-        {
-        }
-    }
 }

@@ -26,7 +26,7 @@
         </div>
         <el-radio-group v-model="proxyStrategy" class="login-proxy-options" :disabled="proxyRouteLocked">
           <el-radio-button value="existing">已有代理</el-radio-button>
-          <el-radio-button value="warp_pool" :disabled="availableWarpPoolCount === 0">自动分配已有 WARP</el-radio-button>
+          <el-radio-button value="warp_pool" :disabled="availableWarpPoolCount === 0">自动分配空闲 WARP</el-radio-button>
           <el-radio-button value="warp_per_account" :disabled="!warpStatus?.available">创建一对一 WARP</el-radio-button>
           <el-radio-button value="global">全局设置</el-radio-button>
           <el-radio-button value="direct">直连（确认风险）</el-radio-button>
@@ -40,7 +40,7 @@
           :disabled="proxyRouteLocked"
         >
           <el-option
-            v-for="proxy in proxies"
+            v-for="proxy in selectableProxies"
             :key="proxy.id"
             :value="proxy.id"
             :label="`${proxy.name} · ${proxy.protocol.toUpperCase()} · ${proxy.egressIp || `${proxy.host}:${proxy.port}`}`"
@@ -48,16 +48,16 @@
           />
         </el-select>
         <div v-if="!proxyStrategy" class="login-proxy-notice warning">
-          为防止首个 Telegram 请求使用面板直连 IP，请明确选择已有代理或自动分配已有 WARP。
+          为防止首个 Telegram 请求使用面板直连 IP，请明确选择已有代理或自动分配空闲 WARP。
         </div>
         <div v-else-if="proxyStrategy === 'direct'" class="login-proxy-notice danger">
           已明确选择直连：Telegram 从发送验证码或生成二维码开始即可看到面板公网 IP。
         </div>
         <div v-else-if="proxyStrategy === 'global'" class="login-proxy-notice warning">
-          仅在已配置全局代理时可用；未配置会在首次连接前拒绝，请改选已有代理、自动分配已有 WARP 或明确直连。
+          仅在已配置全局代理时可用；未配置会在首次连接前拒绝，请改选已有代理、自动分配空闲 WARP 或明确直连。
         </div>
         <div v-else-if="proxyStrategy === 'warp_pool'" class="login-proxy-notice warning">
-          将按当前账号绑定数自动选择已有 WARP；不会创建新容器。当前已启用 {{ availableWarpPoolCount }} 个 WARP。
+          将独占分配一个已检测通过的空闲 WARP；不会创建新容器。当前可分配 {{ availableWarpPoolCount }} 个出口。
         </div>
         <div v-if="proxyStrategy === 'warp_per_account'" class="login-proxy-notice warning">
           <el-checkbox v-model="acceptWarpTerms" :disabled="proxyRouteLocked">我已阅读并接受</el-checkbox>
@@ -352,6 +352,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import QRCode from 'qrcode'
 import { panelApi } from '@/api/panel'
+import { countAvailableWgcfPool } from '@/utils/proxyRows'
 import type {
   AccountDetail,
   AccountListItem,
@@ -410,11 +411,8 @@ const modeOptions = [
 
 const activeLoginId = computed(() => (loginMode.value === 'qr' ? qrLoginId.value : loginId.value))
 const hasActiveLoginSession = computed(() => loginId.value > 0 || qrLoginId.value > 0)
-const availableWarpPoolCount = computed(() => proxies.value.filter(
-  (proxy) => proxy.kind === 'warp'
-    && proxy.isEnabled
-    && proxy.warpRuntimeStatus === 'active',
-).length)
+const selectableProxies = computed(() => proxies.value.filter((proxy) => !proxy.managedWgcfProfile && proxy.kind !== 'warp'))
+const availableWarpPoolCount = computed(() => countAvailableWgcfPool(proxies.value, warpStatus.value))
 const proxySelectionInvalid = computed(() =>
   !proxyStrategy.value
   || (proxyStrategy.value === 'existing' && !proxyId.value)
@@ -493,11 +491,7 @@ function selectedProxyPayload() {
 }
 
 async function loadLoginProxyOptions() {
-  proxies.value = (await panelApi.proxies()).filter((proxy) => !proxy.managedWgcfProfile)
-  if (availableWarpPoolCount.value === 0 && proxyStrategy.value === 'warp_pool') {
-    proxyStrategy.value = ''
-    proxyId.value = null
-  }
+  proxies.value = await panelApi.proxies()
 }
 
 async function loadWarpStatus() {

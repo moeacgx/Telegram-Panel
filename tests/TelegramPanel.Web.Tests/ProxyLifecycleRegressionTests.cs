@@ -22,6 +22,32 @@ namespace TelegramPanel.Web.Tests;
 public sealed class ProxyLifecycleRegressionTests
 {
     [Fact]
+    public async Task 旧容器记录不能连接检测启用或重新绑定且未使用记录可删除()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await db.Database.EnsureCreatedAsync();
+        var legacy = NewWarpProxy("retired", 42080);
+        db.OutboundProxies.Add(legacy);
+        await db.SaveChangesAsync();
+        var service = CreateProxyService(db, new RecordingClientPool());
+        Assert.Throws<InvalidOperationException>(() => AccountProxyResolver.BuildConnectionOptions(legacy, "tg_account_42"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.TestAsync(legacy.Id));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.UpdateAsync(legacy.Id,
+            NewInput("retired", "warp", "http", legacy.Host, legacy.Port)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ValidateBindingInputAsync(new("existing", legacy.Id)));
+        var applied = false;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ExecuteGlobalProxyChangeAsync(
+            true, "existing", legacy.Id, _ => { applied = true; return Task.CompletedTask; }));
+        Assert.False(applied);
+        Assert.Equal("active", (await db.WarpProfiles.AsNoTracking().SingleAsync()).Status);
+        await service.DeleteAsync(legacy.Id);
+        Assert.Empty(await db.OutboundProxies.ToListAsync());
+        Assert.Empty(await db.WarpProfiles.ToListAsync());
+    }
+
+    [Fact]
     public async Task 直连与全局代理设置会持久化为不同路由()
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");
@@ -343,92 +369,7 @@ public sealed class ProxyLifecycleRegressionTests
         Assert.True(await db.OutboundProxies.AnyAsync(x => x.Id == proxy.Id));
     }
 
-    [Fact]
-    public async Task WARP清理失败时账号删除会保留已解绑且停用的账号()
-    {
-        await using var connection = new SqliteConnection("Data Source=:memory:");
-        await connection.OpenAsync();
-        var options = new DbContextOptionsBuilder<AppDbContext>()
-            .UseSqlite(connection)
-            .Options;
-        await using var db = new AppDbContext(options);
-        await db.Database.EnsureCreatedAsync();
 
-        var proxy = NewWarpProxy("account-delete-failure", 42111);
-        var account = NewAccount(proxy);
-        account.UseGlobalProxy = true;
-        db.Accounts.Add(account);
-        await db.SaveChangesAsync();
-
-        var pool = new RecordingClientPool();
-        var proxyService = CreateProxyService(db, pool, MissingDockerConfiguration());
-        var accountService = new AccountManagementService(
-            new AccountRepository(db),
-            new ChannelRepository(db),
-            new GroupRepository(db),
-            pool,
-            new ConfigurationBuilder().Build(),
-            NullLogger<AccountManagementService>.Instance,
-            proxyService,
-            new SessionPathResolver(new ConfigurationBuilder().Build()));
-
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            accountService.DeleteAccountAsync(account.Id));
-
-        Assert.Contains("WARP 资源清理失败", error.Message);
-        var preserved = await db.Accounts.AsNoTracking().SingleAsync();
-        Assert.Null(preserved.ProxyId);
-        Assert.False(preserved.IsActive);
-        Assert.True(preserved.UseGlobalProxy);
-        Assert.True(await db.OutboundProxies.AnyAsync(x => x.Id == proxy.Id));
-        Assert.False((await db.OutboundProxies.AsNoTracking().SingleAsync()).IsEnabled);
-        var profile = await db.WarpProfiles.AsNoTracking().SingleAsync();
-        Assert.Equal(proxy.WarpProfile!.ContainerName, profile.ContainerName);
-        Assert.Equal(proxy.WarpProfile.VolumeName, profile.VolumeName);
-        Assert.Equal("deleting", profile.Status);
-        Assert.False(profile.DesiredEnabled);
-    }
-
-    [Fact]
-    public async Task WARP清理失败时代理切换会保留已提交的新路由()
-    {
-        await using var connection = new SqliteConnection("Data Source=:memory:");
-        await connection.OpenAsync();
-        var options = new DbContextOptionsBuilder<AppDbContext>()
-            .UseSqlite(connection)
-            .Options;
-        await using var db = new AppDbContext(options);
-        await db.Database.EnsureCreatedAsync();
-
-        var warpProxy = NewWarpProxy("switch-failure", 42112);
-        var targetProxy = NewProxy("switch-target");
-        targetProxy.Port = 8082;
-        var account = NewAccount(warpProxy);
-        account.UseGlobalProxy = true;
-        db.AddRange(account, targetProxy);
-        await db.SaveChangesAsync();
-
-        var service = CreateProxyService(
-            db,
-            new RecordingClientPool(),
-            MissingDockerConfiguration());
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            service.BindAccountsAsync(
-                new[] { account.Id },
-                new AccountProxyBindingInput("existing", targetProxy.Id)));
-
-        Assert.Contains("WARP 资源清理失败", error.Message);
-        var switched = await db.Accounts.AsNoTracking().SingleAsync();
-        Assert.Equal(targetProxy.Id, switched.ProxyId);
-        Assert.False(switched.UseGlobalProxy);
-        Assert.True(await db.OutboundProxies.AnyAsync(x => x.Id == warpProxy.Id));
-        Assert.False((await db.OutboundProxies.AsNoTracking()
-            .SingleAsync(x => x.Id == warpProxy.Id)).IsEnabled);
-        var profile = await db.WarpProfiles.AsNoTracking()
-            .SingleAsync(x => x.OutboundProxyId == warpProxy.Id);
-        Assert.Equal("deleting", profile.Status);
-        Assert.False(profile.DesiredEnabled);
-    }
 
     [Theory]
     [InlineData(false)]
@@ -802,103 +743,6 @@ public sealed class ProxyLifecycleRegressionTests
         Assert.Null((await db.OutboundProxies.AsNoTracking().SingleAsync()).Secret);
     }
 
-    [Fact]
-    public async Task WARP启停会真实控制容器并同步数据库状态()
-    {
-        await using var connection = new SqliteConnection("Data Source=:memory:");
-        await connection.OpenAsync();
-        var options = new DbContextOptionsBuilder<AppDbContext>()
-            .UseSqlite(connection)
-            .Options;
-        await using var db = new AppDbContext(options);
-        await db.Database.EnsureCreatedAsync();
-
-        var proxy = NewProxy("warp-toggle");
-        proxy.Kind = OutboundProxyKinds.Warp;
-        var profile = new WarpProfile
-        {
-            ProfileId = "profile-warp-toggle",
-            ContainerId = "warp-toggle-id",
-            ContainerName = "warp-toggle",
-            VolumeName = "warp-toggle-data",
-            HostPort = 42101,
-            Status = "active",
-            DesiredEnabled = true,
-            Proxy = proxy
-        };
-        var account = NewAccount(proxy);
-        db.WarpProfiles.Add(profile);
-        db.Accounts.Add(account);
-        await db.SaveChangesAsync();
-
-        var docker = new WarpLifecycleRegressionTests.FakeWarpDockerClient();
-        docker.SeedResources(
-            profile.ProfileId,
-            profile.ContainerName,
-            profile.VolumeName,
-            profile.ContainerId!);
-        var pool = new RecordingClientPool();
-        var probe = new ProxyEgressProbeService();
-        var service = new ProxyManagementService(
-            db,
-            pool,
-            probe,
-            WarpLifecycleRegressionTests.CreateManager(db, docker, enabled: true),
-            NullLogger<ProxyManagementService>.Instance);
-
-        await service.UpdateAsync(
-            proxy.Id,
-            NewInput(
-                name: proxy.Name,
-                kind: OutboundProxyKinds.Warp,
-                protocol: OutboundProxyProtocols.Http,
-                host: proxy.Host,
-                port: proxy.Port,
-                isEnabled: false));
-
-        Assert.Contains(account.Id, pool.RemovedAccountIds);
-        Assert.Contains(profile.ContainerId!, docker.StoppedContainerReferences);
-        var stoppedProfile = await db.WarpProfiles.AsNoTracking().SingleAsync();
-        Assert.False(stoppedProfile.DesiredEnabled);
-        Assert.Equal("stopped", stoppedProfile.Status);
-        Assert.False((await db.OutboundProxies.AsNoTracking().SingleAsync()).IsEnabled);
-        Assert.False((await db.Accounts.AsNoTracking().SingleAsync()).IsActive);
-
-        // 兼容旧版本：数据库开关已经停用，但 Profile 仍标记 active，
-        // 再次保存“停用”也必须补做真实容器停止。
-        docker.StoppedContainerReferences.Clear();
-        profile.Status = "active";
-        await db.SaveChangesAsync();
-        await service.UpdateAsync(
-            proxy.Id,
-            NewInput(
-                name: proxy.Name,
-                kind: OutboundProxyKinds.Warp,
-                protocol: OutboundProxyProtocols.Http,
-                host: proxy.Host,
-                port: proxy.Port,
-                isEnabled: false));
-        Assert.Contains(profile.ContainerId!, docker.StoppedContainerReferences);
-        Assert.Equal(
-            "stopped",
-            (await db.WarpProfiles.AsNoTracking().SingleAsync()).Status);
-
-        await service.UpdateAsync(
-            proxy.Id,
-            NewInput(
-                name: proxy.Name,
-                kind: OutboundProxyKinds.Warp,
-                protocol: OutboundProxyProtocols.Http,
-                host: proxy.Host,
-                port: proxy.Port,
-                isEnabled: true));
-
-        Assert.Contains(profile.ContainerId!, docker.StartedContainerReferences);
-        var activeProfile = await db.WarpProfiles.AsNoTracking().SingleAsync();
-        Assert.True(activeProfile.DesiredEnabled);
-        Assert.Equal("active", activeProfile.Status);
-        Assert.True((await db.OutboundProxies.AsNoTracking().SingleAsync()).IsEnabled);
-    }
 
     [Fact]
     public async Task 客户端创建期间移除会等待账号锁并清理新客户端()
@@ -1083,29 +927,13 @@ public sealed class ProxyLifecycleRegressionTests
     {
         configuration ??= new ConfigurationBuilder().Build();
         var probe = new ProxyEgressProbeService();
-        var warp = new WarpContainerManager(
-            db,
-            configuration,
-            probe,
-            NullLogger<WarpContainerManager>.Instance);
         return new ProxyManagementService(
             db,
             pool,
             probe,
-            warp,
             NullLogger<ProxyManagementService>.Instance,
             configuration);
     }
-
-    private static IConfiguration MissingDockerConfiguration() =>
-        new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Proxy:Warp:DockerSocketPath"] = Path.Combine(
-                    Path.GetTempPath(),
-                    $"telegram-panel-missing-docker-{Guid.NewGuid():N}.sock")
-            })
-            .Build();
 
     private static IConfiguration GlobalProxyConfiguration() =>
         new ConfigurationBuilder()

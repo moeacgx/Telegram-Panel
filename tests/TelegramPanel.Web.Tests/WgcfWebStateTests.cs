@@ -1,4 +1,5 @@
 using System.Text.Json;
+using TelegramPanel.Data.Entities;
 using TelegramPanel.Web.Services;
 using Xunit;
 
@@ -30,5 +31,42 @@ public sealed class WgcfWebStateTests
         using var wrong = JsonDocument.Parse($"{{\"state\":\"listening\",\"revision\":\"old\",\"at\":{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}}}");
         Assert.Equal("unknown", WgcfWarpService.RuntimeState(meta.RootElement, stale.RootElement));
         Assert.Equal("starting", WgcfWarpService.RuntimeState(meta.RootElement, wrong.RootElement));
+    }
+
+    [Theory]
+    [InlineData("ready", true)]
+    [InlineData("temporary", false)]
+    [InlineData("stopRequested", false)]
+    [InlineData("claimed", false)]
+    [InlineData("creating", false)]
+    [InlineData("undesired", false)]
+    [InlineData("stopped", false)]
+    [InlineData("missing", false)]
+    [InlineData("disabled", false)]
+    [InlineData("untested", false)]
+    [InlineData("noEgress", false)]
+    [InlineData("bound", false)]
+    [InlineData("global", false)]
+    public void 空闲池资格排除临时占用与未就绪出口(string scenario, bool expected)
+    {
+        var proxy = new OutboundProxy
+        {
+            IsEnabled = scenario != "disabled",
+            TestStatus = scenario == "untested" ? "unknown" : "ok",
+            EgressIp = scenario == "noEgress" ? null : "1.2.3.4"
+        };
+        if (scenario == "bound") proxy.Accounts.Add(new Account());
+
+        var eligible = WgcfWarpService.IsPoolEligible(
+            temporary: scenario == "temporary",
+            stopRequested: scenario == "stopRequested",
+            claimed: scenario == "claimed",
+            phase: scenario == "creating" ? "creating" : "ready",
+            desired: scenario != "undesired",
+            runtime: scenario == "stopped" ? "stopped" : "listening",
+            proxy: scenario == "missing" ? null : proxy,
+            globallySelected: scenario == "global");
+
+        Assert.Equal(expected, eligible);
     }
 }

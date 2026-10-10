@@ -148,7 +148,7 @@ public sealed class WarpBindingClaimRegressionTests
             Provisioner = new(db, Claims);
             var configuration = new ConfigurationBuilder().Build();
             var probe = new ProxyEgressProbeService();
-            Service = new(db, Pool, probe, new WarpContainerManager(db, configuration, probe, NullLogger<WarpContainerManager>.Instance),
+            Service = new(db, Pool, probe,
                 NullLogger<ProxyManagementService>.Instance, configuration, Claims, managedWarpProvisioner: Provisioner);
         }
         public static async Task<Fixture> CreateAsync()

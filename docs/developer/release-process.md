@@ -41,7 +41,7 @@ ghcr.io/moeacgx/telegram-panel:dev-latest
 
 1. 在云端 `/home/docker/Telegram-Panel` 拉取 `dev`；
 2. 备份 `docker-data` 中的 SQLite 数据文件；
-3. 拉取镜像并保留 `docker-compose.warp.yml` 等 override；
+3. 拉取镜像并使用主 Compose 配置；v1.31.82 不再加载旧 WARP override 或 Docker Socket 挂载；
 4. 重建 `telegram-panel` 容器；
 5. 检查容器状态、最近日志、`/ui/dashboard` 和 `/api/panel/auth/me`。
 
@@ -67,7 +67,10 @@ ghcr.io/moeacgx/telegram-panel:dev-latest
 - 数据持久化、重启恢复和权限边界检查结果；
 - 失败时使用的回滚镜像或上一个可用提交。
 
-若改动涉及 WARP 或其他代理管理能力，还要验证协议、容器网络、端口、账号绑定和重启后的状态恢复；不能只以 HTTP 健康检查作为通过依据。
+若改动涉及 WARP 或其他代理管理能力，还要验证协议、运行器监听、出口检测、账号绑定和
+重启后的状态恢复；不能只以 HTTP 健康检查作为通过依据。v1.31.82 升级前需逐账号迁移
+旧容器路由并验证只读 Telegram 连接，确认旧直接绑定及全局引用归零后才删除旧资源；
+应用回滚保留迁移后的数据库和轻量注册材料，不能恢复指向已删除容器的旧账号路由。
 
 ### 4. 合并到 `main`
 

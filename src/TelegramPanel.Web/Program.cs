@@ -482,8 +482,6 @@ builder.Services.AddSingleton<IWarpProxyUsageGuard>(serviceProvider =>
     serviceProvider.GetRequiredService<AccountLoginProxyStateStore>());
 builder.Services.AddScoped<AccountLoginProxyCoordinator>();
 builder.Services.AddHostedService<AccountLoginProxyCleanupService>();
-builder.Services.AddSingleton<WarpMaintenanceState>();
-builder.Services.AddHostedService<WarpMaintenanceBackgroundService>();
 builder.Services.AddHostedService<ProxyEgressMaintenanceBackgroundService>();
 builder.Services.AddSingleton<WgcfWarpService>();
 builder.Services.AddSingleton<IManagedWarpProvisioner>(sp => sp.GetRequiredService<WgcfWarpService>());
