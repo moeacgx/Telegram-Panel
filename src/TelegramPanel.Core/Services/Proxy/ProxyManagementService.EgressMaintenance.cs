@@ -8,7 +8,7 @@ public sealed partial class ProxyManagementService
 {
     /// <summary>
     /// 轻量巡检所有启用的普通代理和 Resin 代理连通性。
-    /// 受管 WARP 由专用维护服务处理，避免与容器恢复和首次连接冻结保护发生竞争。
+    /// 受管轻量 WARP 由专用检测处理，避免普通 HTTP 健康探针覆盖 warp=on 验证结果。
     /// 巡检不拉取出口 IP/地理元数据，避免每 5 分钟调用 Trace 元数据端点。
     /// </summary>
     public async Task<ProxyEgressMaintenanceBatchResult> RefreshAllNonWarpProxyEgressAsync(
@@ -18,6 +18,7 @@ public sealed partial class ProxyManagementService
             .AsNoTracking()
             .Where(x => x.IsEnabled
                 && x.Kind != OutboundProxyKinds.Warp
+                && x.ManagedWgcfProfile == null
                 && x.Protocol != OutboundProxyProtocols.MtProto)
             .OrderBy(x => x.Id)
             .Select(x => new { x.Id, x.Name })

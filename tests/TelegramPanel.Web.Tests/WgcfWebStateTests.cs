@@ -46,6 +46,7 @@ public sealed class WgcfWebStateTests
     [InlineData("untested", false)]
     [InlineData("noEgress", false)]
     [InlineData("bound", false)]
+    [InlineData("global", false)]
     public void 空闲池资格排除临时占用与未就绪出口(string scenario, bool expected)
     {
         var proxy = new OutboundProxy
@@ -63,7 +64,8 @@ public sealed class WgcfWebStateTests
             phase: scenario == "creating" ? "creating" : "ready",
             desired: scenario != "undesired",
             runtime: scenario == "stopped" ? "stopped" : "listening",
-            proxy: scenario == "missing" ? null : proxy);
+            proxy: scenario == "missing" ? null : proxy,
+            globallySelected: scenario == "global");
 
         Assert.Equal(expected, eligible);
     }
