@@ -63,10 +63,15 @@ public sealed partial class ProxyManagementService
         string? claimToken = null)
     {
         await using var lease = await AcquireMutationLeaseAsync(cancellationToken);
+        // 启停落库期间也独占档案，避免首次连接租约跨过占用检查窗口。
+        using var profileClaim = _temporaryWarpClaims != null
+            && !_temporaryWarpClaims.OwnsManagedProfile(profile, claimToken)
+                ? _temporaryWarpClaims.ClaimManagedProfile(profile)
+                : null;
         var proxy = await _db.OutboundProxies.SingleOrDefaultAsync(
             proxy => proxy.ManagedWgcfProfile == profile, cancellationToken)
             ?? throw new KeyNotFoundException("受管 WireGuard 代理不存在");
-        EnsureManagedProfileClaimOwner(proxy, claimToken);
+        EnsureManagedProfileClaimOwner(proxy, profileClaim?.Token ?? claimToken);
         if (!enabled && (IsEnabledGlobalProxy(proxy.Id)
                          || await _db.Accounts.AnyAsync(account => account.ProxyId == proxy.Id, cancellationToken)))
             throw new ProxyInUseException("受管 WireGuard 仍被账号或全局配置使用，请先明确切换账号出口后再停止");

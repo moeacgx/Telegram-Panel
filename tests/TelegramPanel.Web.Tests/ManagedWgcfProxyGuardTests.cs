@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using TelegramPanel.Core.Interfaces;
@@ -140,6 +141,65 @@ public sealed class ManagedWgcfProxyGuardTests
         Assert.Null(unchanged.ProxyId);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task 专用启停落库全程阻止首次连接Acquire且完成后释放占用(bool enabled)
+    {
+        var saving = new BlockingSaveInterceptor();
+        await using var f = await Fixture.CreateAsync(saving);
+        var proxy = await f.ManagedAsync();
+        proxy.IsEnabled = !enabled;
+        await f.Db.SaveChangesAsync();
+        saving.Enabled = true;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var mutation = f.Service.SetManagedWgcfEnabledAsync(proxy.ManagedWgcfProfile!, enabled, timeout.Token);
+        try
+        {
+            await saving.Entered.Task.WaitAsync(timeout.Token);
+            Assert.True(f.Claims.IsManagedProfileClaimed(proxy.ManagedWgcfProfile!));
+            await using var competingDb = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+                .UseSqlite(f.Db.Database.GetDbConnection()).Options);
+            var provisioner = new FakeManagedWarpProvisioner(competingDb, f.Claims);
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => provisioner.AcquireAsync(proxy.Id, timeout.Token));
+            Assert.Contains("占用", error.Message);
+        }
+        finally
+        {
+            saving.Continue.TrySetResult();
+            await mutation;
+        }
+        Assert.False(f.Claims.IsManagedProfileClaimed(proxy.ManagedWgcfProfile!));
+        Assert.Equal(enabled, (await f.Db.OutboundProxies.AsNoTracking().SingleAsync()).IsEnabled);
+    }
+
+    [Fact]
+    public async Task 专用启停沿用内部租约且不会释放调用方占用()
+    {
+        await using var f = await Fixture.CreateAsync();
+        var proxy = await f.ManagedAsync();
+        using var owner = f.Claims.ClaimManagedProfile(proxy.ManagedWgcfProfile!);
+        await f.Service.SetManagedWgcfEnabledAsync(proxy.ManagedWgcfProfile!, false, claimToken: owner.Token);
+        Assert.True(f.Claims.OwnsManagedProfile(proxy.ManagedWgcfProfile!, owner.Token));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Service.SetManagedWgcfEnabledAsync(
+            proxy.ManagedWgcfProfile!, true, claimToken: "other"));
+        Assert.False((await f.Db.OutboundProxies.AsNoTracking().SingleAsync()).IsEnabled);
+        Assert.True(f.Claims.OwnsManagedProfile(proxy.ManagedWgcfProfile!, owner.Token));
+    }
+
+    [Fact]
+    public async Task 专用启停落库异常后释放本次占用()
+    {
+        var saving = new BlockingSaveInterceptor();
+        await using var f = await Fixture.CreateAsync(saving);
+        var proxy = await f.ManagedAsync();
+        saving.Enabled = true;
+        saving.ThrowOnSave = true;
+        saving.Continue.TrySetResult();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Service.SetManagedWgcfEnabledAsync(proxy.ManagedWgcfProfile!, false));
+        Assert.False(f.Claims.IsManagedProfileClaimed(proxy.ManagedWgcfProfile!));
+    }
+
     private static OutboundProxyInput Input(string host, int port) => new(
         "shadow", "manual", "socks5", host, port, "shadow", "secret", null, null, null, null);
 
@@ -149,6 +209,7 @@ public sealed class ManagedWgcfProxyGuardTests
         public AppDbContext Db { get; }
         public IConfiguration Configuration { get; }
         public ProxyManagementService Service { get; }
+        public TemporaryWarpClaimStore Claims { get; } = new();
         private Fixture(SqliteConnection connection, AppDbContext db)
         {
             _connection = connection;
@@ -157,13 +218,15 @@ public sealed class ManagedWgcfProxyGuardTests
             var probe = new Probe();
             Service = new(db, new EmptyPool(), probe,
                 new WarpContainerManager(db, Configuration, probe, NullLogger<WarpContainerManager>.Instance),
-                NullLogger<ProxyManagementService>.Instance, Configuration);
+                NullLogger<ProxyManagementService>.Instance, Configuration, temporaryWarpClaims: Claims);
         }
-        public static async Task<Fixture> CreateAsync()
+        public static async Task<Fixture> CreateAsync(SaveChangesInterceptor? interceptor = null)
         {
             var connection = new SqliteConnection("Data Source=:memory:");
             await connection.OpenAsync();
-            var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+            var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection);
+            if (interceptor != null) options.AddInterceptors(interceptor);
+            var db = new AppDbContext(options.Options);
             await db.Database.EnsureCreatedAsync();
             return new(connection, db);
         }
@@ -194,6 +257,22 @@ public sealed class ManagedWgcfProxyGuardTests
         {
             await Db.DisposeAsync();
             await _connection.DisposeAsync();
+        }
+    }
+    private sealed class BlockingSaveInterceptor : SaveChangesInterceptor
+    {
+        public bool Enabled { get; set; }
+        public bool ThrowOnSave { get; set; }
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Continue { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            if (!Enabled) return result;
+            Entered.TrySetResult();
+            await Continue.Task.WaitAsync(cancellationToken);
+            if (ThrowOnSave) throw new InvalidOperationException("模拟启停落库失败");
+            return result;
         }
     }
     private sealed class Probe : IProxyEgressProbeService
