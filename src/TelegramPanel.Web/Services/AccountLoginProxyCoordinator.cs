@@ -24,7 +24,8 @@ public sealed record AccountLoginProxyState(
     ResinLeaseControlSnapshot? ResinLease,
     string? TemporaryResinKey,
     DateTimeOffset CreatedAtUtc,
-    string? DeviceProfileKey = null);
+    string? DeviceProfileKey = null,
+    ManagedWarpProxyLease? ManagedWarpLease = null);
 
 /// <summary>
 /// 临时独占一个仍在字典中的冻结路由，释放前过期清理和完成流程都不能取得它。
@@ -208,6 +209,28 @@ public sealed class AccountLoginProxyStateStore : IWarpProxyUsageGuard
     public bool TryAdd(AccountLoginProxyState state) =>
         TryAdd(state, out _);
 
+    public bool TryBeginPreparation(int loginId)
+    {
+        lock (_stateGate)
+            return loginId > 0 && !_states.ContainsKey(loginId) && _claimedLoginIds.Add(loginId);
+    }
+
+    public bool TryAddPrepared(AccountLoginProxyState state, out string? error)
+    {
+        lock (_stateGate)
+        {
+            if (!_claimedLoginIds.Remove(state.LoginId))
+            {
+                error = "登录代理准备会话已失效";
+                return false;
+            }
+            var added = TryAdd(state, out error);
+            if (!added)
+                _claimedLoginIds.Add(state.LoginId);
+            return added;
+        }
+    }
+
     public bool TryAdd(AccountLoginProxyState state, out string? error)
     {
         ArgumentNullException.ThrowIfNull(state);
@@ -359,6 +382,8 @@ public sealed class AccountLoginProxyStateStore : IWarpProxyUsageGuard
 
     internal static int? GetFrozenWarpProxyId(AccountLoginProxyState state)
     {
+        if (state.ManagedWarpLease != null)
+            return state.ManagedWarpLease.Proxy.Id;
         var proxy = state.Resolution.Proxy;
         if (proxy is { ProxyId: > 0 }
             && string.Equals(
@@ -427,6 +452,7 @@ public sealed class AccountLoginProxyCoordinator
     private readonly IAccountService _accountService;
     private readonly TemporaryWarpClaimStore _temporaryWarpClaims;
     private readonly ILogger<AccountLoginProxyCoordinator> _logger;
+    private readonly IManagedWarpProvisioner? _managedWarp;
 
     public AccountLoginProxyCoordinator(
         AccountLoginProxyStateStore store,
@@ -435,7 +461,8 @@ public sealed class AccountLoginProxyCoordinator
         IAccountService accountService,
         TemporaryWarpClaimStore temporaryWarpClaims,
         IConfiguration configuration,
-        ILogger<AccountLoginProxyCoordinator> logger)
+        ILogger<AccountLoginProxyCoordinator> logger,
+        IManagedWarpProvisioner? managedWarp = null)
     {
         _store = store;
         _proxyManagement = proxyManagement;
@@ -444,6 +471,7 @@ public sealed class AccountLoginProxyCoordinator
         _accountService = accountService;
         _temporaryWarpClaims = temporaryWarpClaims;
         _logger = logger;
+        _managedWarp = managedWarp;
     }
 
     public bool HasState(int loginId) => _store.Contains(loginId);
@@ -533,10 +561,15 @@ public sealed class AccountLoginProxyCoordinator
         string? strategy,
         int? proxyId,
         CancellationToken cancellationToken = default,
-        string? deviceProfileKey = null)
+        string? deviceProfileKey = null,
+        bool acceptWarpTerms = false,
+        string? warpRequestId = null)
     {
         if (loginId <= 0)
             throw new ArgumentOutOfRangeException(nameof(loginId));
+        if (warpRequestId != null
+            && (!Guid.TryParse(warpRequestId, out var requestUuid) || requestUuid == Guid.Empty))
+            throw new ArgumentException("轻量 WARP 请求标识必须是有效 UUID");
 
         if (_store.Contains(loginId))
             throw new InvalidOperationException("该登录会话已有冻结路由，请先取消原会话");
@@ -558,146 +591,183 @@ public sealed class AccountLoginProxyCoordinator
             throw new ArgumentException("登录设备指纹不存在或已停用");
         var normalizedDeviceProfileKey = selectedDeviceProfileKey ?? TelegramDeviceProfileCatalog.ResolveDefaultKey(_configuration);
 
-        IDisposable? warpRequestClaim = null;
-
-        switch (normalizedStrategy)
-        {
-            case "direct":
-                binding = new AccountProxyBindingInput("direct");
-                resolution = new AccountProxyResolution(null, false);
-                frozenStrategy = "direct";
-                break;
-
-            case "global":
-                {
-                    var selectedGlobalId = _proxyManagement.GetEnabledGlobalProxyId();
-                    var selectedGlobal = selectedGlobalId is > 0
-                        ? await _proxyManagement.GetAsync(
-                            selectedGlobalId.Value,
-                            cancellationToken: cancellationToken)
-                        : null;
-                    if (selectedGlobalId is > 0 && selectedGlobal is not { IsEnabled: true })
-                        throw new InvalidOperationException("全局代理引用的已有代理不存在或已停用");
-                    if (selectedGlobal?.Kind == OutboundProxyKinds.Warp
-                        && _temporaryWarpClaims.OwnsRequest(selectedGlobal.WarpProfile?.RequestId))
-                    {
-                        throw new InvalidOperationException(
-                            "全局 WARP 正被另一个账号首次连接流程使用，请稍后重试");
-                    }
-
-                    temporaryResinKey = selectedGlobal?.Kind == OutboundProxyKinds.Resin
-                        ? $"tg_login_{loginId}_{Guid.NewGuid():N}"
-                        : null;
-                    var stableLoginKey = temporaryResinKey ?? $"tg_login_{loginId}";
-                    var globalProxy = selectedGlobal == null
-                        ? await _proxyManagement.ResolveGlobalProxyRequiredAsync(
-                            stableLoginKey,
-                            cancellationToken)
-                        : AccountProxyResolver.BuildConnectionOptions(
-                            selectedGlobal,
-                            stableLoginKey);
-                    if (selectedGlobal?.Kind == OutboundProxyKinds.Resin)
-                    {
-                        resinLease = new ResinLeaseControlSnapshot(
-                            selectedGlobal.Id,
-                            selectedGlobal.ResinAdminUrl,
-                            selectedGlobal.ResinAdminToken,
-                            selectedGlobal.ResinPlatform);
-                    }
-                    binding = new AccountProxyBindingInput("global");
-                    // 使用当前配置/数据库快照，而不是让临时登录 ID 再次动态解析全局设置。
-                    resolution = new AccountProxyResolution(globalProxy, false);
-                    frozenStrategy = "global";
-                    break;
-                }
-
-            case "existing":
-                {
-                    if (proxyId is not > 0)
-                        throw new ArgumentException("请选择已有代理");
-
-                    var proxy = await _proxyManagement.GetAsync(
-                        proxyId.Value,
-                        cancellationToken: cancellationToken);
-                    if (proxy is not { IsEnabled: true })
-                        throw new KeyNotFoundException("所选代理不存在或已停用");
-                    if (proxy.ManagedWgcfProfile != null)
-                        throw new InvalidOperationException("受管 WireGuard 只能由已入库账号单独绑定，登录首次连接不能使用");
-                    if (proxy.Kind == OutboundProxyKinds.Warp
-                        && _temporaryWarpClaims.OwnsRequest(proxy.WarpProfile?.RequestId))
-                    {
-                        throw new InvalidOperationException(
-                            "所选 WARP 正被另一个账号首次连接流程使用，请稍后重试");
-                    }
-
-                    temporaryResinKey = proxy.Kind == OutboundProxyKinds.Resin
-                            ? $"tg_login_{loginId}_{Guid.NewGuid():N}"
-                            : null;
-                    var stableLoginKey = temporaryResinKey ?? $"tg_login_{loginId}";
-                    var connection = AccountProxyResolver.BuildConnectionOptions(
-                        proxy,
-                        stableLoginKey);
-
-                    if (proxy.Kind == OutboundProxyKinds.Resin)
-                    {
-                        resinLease = new ResinLeaseControlSnapshot(
-                            proxy.Id,
-                            proxy.ResinAdminUrl,
-                            proxy.ResinAdminToken,
-                            proxy.ResinPlatform);
-                    }
-
-                    binding = new AccountProxyBindingInput("existing", proxy.Id);
-                    resolution = new AccountProxyResolution(connection, false);
-                    frozenStrategy = "existing";
-                    break;
-                }
-
-            case "warp_pool":
-                {
-                    var proxy = (await ListAvailableWarpPoolAsync(cancellationToken)).First();
-                    var connection = AccountProxyResolver.BuildConnectionOptions(
-                        proxy,
-                        $"tg_login_{loginId}");
-
-                    binding = new AccountProxyBindingInput("existing", proxy.Id);
-                    resolution = new AccountProxyResolution(connection, false);
-                    frozenStrategy = "warp_pool";
-                    break;
-                }
-
-            default:
-                throw new ArgumentException(
-                    "登录代理策略仅支持 direct、global、existing 或 warp_pool");
-        }
-
-        var state = new AccountLoginProxyState(
-            loginId,
-            binding,
-            frozenStrategy,
-            resolution,
-            ownedWarpProxyId,
-            resinLease,
-            temporaryResinKey,
-            DateTimeOffset.UtcNow,
-            normalizedDeviceProfileKey);
+        if (!_store.TryBeginPreparation(loginId))
+            throw new InvalidOperationException("该登录会话正在准备代理，请稍后重试");
+        ManagedWarpProxyLease? managedWarpLease = null;
+        var stateSaved = false;
         try
         {
-            if (!_store.TryAdd(state, out var stateError))
+            switch (normalizedStrategy)
             {
-                await ReleaseStateResourcesAsync(
-                    state,
-                    keepOwnedWarp: false,
-                    CancellationToken.None);
+                case "direct":
+                    binding = new AccountProxyBindingInput("direct");
+                    resolution = new AccountProxyResolution(null, false);
+                    frozenStrategy = "direct";
+                    break;
+
+                case "global":
+                    {
+                        var selectedGlobalId = _proxyManagement.GetEnabledGlobalProxyId();
+                        var selectedGlobal = selectedGlobalId is > 0
+                            ? await _proxyManagement.GetAsync(
+                                selectedGlobalId.Value,
+                                cancellationToken: cancellationToken)
+                            : null;
+                        if (selectedGlobalId is > 0 && selectedGlobal is not { IsEnabled: true })
+                            throw new InvalidOperationException("全局代理引用的已有代理不存在或已停用");
+                        if (selectedGlobal?.Kind == OutboundProxyKinds.Warp
+                            && _temporaryWarpClaims.OwnsRequest(selectedGlobal.WarpProfile?.RequestId))
+                        {
+                            throw new InvalidOperationException(
+                                "全局 WARP 正被另一个账号首次连接流程使用，请稍后重试");
+                        }
+
+                        temporaryResinKey = selectedGlobal?.Kind == OutboundProxyKinds.Resin
+                            ? $"tg_login_{loginId}_{Guid.NewGuid():N}"
+                            : null;
+                        var stableLoginKey = temporaryResinKey ?? $"tg_login_{loginId}";
+                        var globalProxy = selectedGlobal == null
+                            ? await _proxyManagement.ResolveGlobalProxyRequiredAsync(
+                                stableLoginKey,
+                                cancellationToken)
+                            : AccountProxyResolver.BuildConnectionOptions(
+                                selectedGlobal,
+                                stableLoginKey);
+                        if (selectedGlobal?.Kind == OutboundProxyKinds.Resin)
+                        {
+                            resinLease = new ResinLeaseControlSnapshot(
+                                selectedGlobal.Id,
+                                selectedGlobal.ResinAdminUrl,
+                                selectedGlobal.ResinAdminToken,
+                                selectedGlobal.ResinPlatform);
+                        }
+                        binding = new AccountProxyBindingInput("global");
+                        // 使用当前配置/数据库快照，而不是让临时登录 ID 再次动态解析全局设置。
+                        resolution = new AccountProxyResolution(globalProxy, false);
+                        frozenStrategy = "global";
+                        break;
+                    }
+
+                case "existing":
+                    {
+                        if (proxyId is not > 0)
+                            throw new ArgumentException("请选择已有代理");
+
+                        var proxy = await _proxyManagement.GetAsync(
+                            proxyId.Value,
+                            cancellationToken: cancellationToken);
+                        if (proxy is not { IsEnabled: true })
+                            throw new KeyNotFoundException("所选代理不存在或已停用");
+                        if (proxy.ManagedWgcfProfile != null)
+                        {
+                            if (_managedWarp == null)
+                                throw new InvalidOperationException("轻量 WARP 运行器未配置");
+                            managedWarpLease = await _managedWarp.AcquireAsync(proxy.Id, cancellationToken);
+                            proxy = managedWarpLease.Proxy;
+                        }
+                        if (proxy.Kind == OutboundProxyKinds.Warp
+                            && _temporaryWarpClaims.OwnsRequest(proxy.WarpProfile?.RequestId))
+                        {
+                            throw new InvalidOperationException(
+                                "所选 WARP 正被另一个账号首次连接流程使用，请稍后重试");
+                        }
+
+                        temporaryResinKey = proxy.Kind == OutboundProxyKinds.Resin
+                                ? $"tg_login_{loginId}_{Guid.NewGuid():N}"
+                                : null;
+                        var stableLoginKey = temporaryResinKey ?? $"tg_login_{loginId}";
+                        var connection = AccountProxyResolver.BuildConnectionOptions(
+                            proxy,
+                            stableLoginKey);
+
+                        if (proxy.Kind == OutboundProxyKinds.Resin)
+                        {
+                            resinLease = new ResinLeaseControlSnapshot(
+                                proxy.Id,
+                                proxy.ResinAdminUrl,
+                                proxy.ResinAdminToken,
+                                proxy.ResinPlatform);
+                        }
+
+                        binding = new AccountProxyBindingInput("existing", proxy.Id);
+                        resolution = new AccountProxyResolution(connection, false);
+                        frozenStrategy = "existing";
+                        break;
+                    }
+
+                case "warp_pool":
+                    {
+                        var proxy = (await ListAvailableWarpPoolAsync(cancellationToken)).First();
+                        var connection = AccountProxyResolver.BuildConnectionOptions(
+                            proxy,
+                            $"tg_login_{loginId}");
+
+                        binding = new AccountProxyBindingInput("existing", proxy.Id);
+                        resolution = new AccountProxyResolution(connection, false);
+                        frozenStrategy = "warp_pool";
+                        break;
+                    }
+
+                case "warp_per_account":
+                    {
+                        if (!acceptWarpTerms)
+                            throw new ArgumentException("请先阅读并接受 Cloudflare WARP 条款");
+                        if (_managedWarp == null)
+                            throw new InvalidOperationException("轻量 WARP 运行器未配置");
+                        managedWarpLease = await _managedWarp.ProvisionAsync(
+                            $"登录轻量 WARP {loginId}",
+                            $"{ManagedWarpRequestPrefix}{loginId}",
+                            acceptWarpTerms,
+                            cancellationToken);
+                        var proxy = managedWarpLease.Proxy;
+                        ownedWarpProxyId = proxy.Id;
+                        binding = new AccountProxyBindingInput("existing", proxy.Id);
+                        resolution = new AccountProxyResolution(
+                            AccountProxyResolver.BuildConnectionOptions(proxy, $"tg_login_{loginId}"), false);
+                        frozenStrategy = "warp_per_account";
+                        break;
+                    }
+
+                default:
+                    throw new ArgumentException(
+                        "登录代理策略仅支持 direct、global、existing、warp_pool 或 warp_per_account");
+            }
+
+            var state = new AccountLoginProxyState(
+                loginId,
+                binding,
+                frozenStrategy,
+                resolution,
+                ownedWarpProxyId,
+                resinLease,
+                temporaryResinKey,
+                DateTimeOffset.UtcNow,
+                normalizedDeviceProfileKey,
+                managedWarpLease);
+            if (!_store.TryAddPrepared(state, out var stateError))
+            {
                 throw new InvalidOperationException(
                     stateError ?? "登录代理会话无法保存，请稍后重试");
             }
-
+            stateSaved = true;
             return state;
         }
         finally
         {
-            warpRequestClaim?.Dispose();
+            if (!stateSaved)
+            {
+                try
+                {
+                    if (managedWarpLease != null && ownedWarpProxyId.HasValue)
+                        await _managedWarp!.StopUnboundAsync(
+                            managedWarpLease.Proxy.Id, managedWarpLease.ClaimToken, CancellationToken.None);
+                }
+                finally
+                {
+                    managedWarpLease?.Dispose();
+                    _store.ReleaseLoginClaim(loginId);
+                }
+            }
         }
     }
 
@@ -769,7 +839,8 @@ public sealed class AccountLoginProxyCoordinator
                 new[] { accountId },
                 state.Binding,
                 cancellationToken,
-                expectedConnection: state.Resolution.Proxy);
+                expectedConnection: state.Resolution.Proxy,
+                managedWarpClaimToken: state.ManagedWarpLease?.ClaimToken);
             var item = bindingResult.Items.FirstOrDefault(x => x.AccountId == accountId);
             if (item?.Success != true)
             {
@@ -827,6 +898,13 @@ public sealed class AccountLoginProxyCoordinator
                     keepOwnedWarp,
                     CancellationToken.None);
             }
+            catch
+            {
+                // 停止运行器失败时保留归属租约，允许取消或过期清理继续重试。
+                if (state.ManagedWarpLease != null && !keepOwnedWarp)
+                    _store.RestoreClaimedState(state);
+                throw;
+            }
             finally
             {
                 ReleaseFrozenWarpProxyClaim(state);
@@ -864,10 +942,18 @@ public sealed class AccountLoginProxyCoordinator
                 throw;
             }
 
-            await ReleaseStateResourcesAsync(
-                state,
-                keepOwnedWarp: false,
-                cancellationToken);
+            try
+            {
+                await ReleaseStateResourcesAsync(
+                    state,
+                    keepOwnedWarp: false,
+                    cancellationToken);
+            }
+            catch
+            {
+                _store.RestoreClaimedState(state);
+                throw;
+            }
             completed = true;
         }
         finally
@@ -933,6 +1019,15 @@ public sealed class AccountLoginProxyCoordinator
         CancellationToken cancellationToken)
     {
         await ReleaseTemporaryResinLeaseAsync(state, cancellationToken);
+
+        if (state.ManagedWarpLease != null)
+        {
+            if (!keepOwnedWarp && state.OwnedWarpProxyId.HasValue)
+                await _managedWarp!.StopUnboundAsync(
+                    state.ManagedWarpLease.Proxy.Id, state.ManagedWarpLease.ClaimToken, cancellationToken);
+            state.ManagedWarpLease.Dispose();
+            return;
+        }
 
         if (!keepOwnedWarp && state.OwnedWarpProxyId is > 0)
         {

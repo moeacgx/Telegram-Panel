@@ -39,9 +39,9 @@ test('批量导入弹窗关闭和重新打开时都会销毁代理文本', () =>
   const closeBody = section('function closeImportDialog()', 'function onProxyKindChange(')
   const beforeCloseBody = section(
     'function beforeImportDialogClose(',
-    'function beforeWarpDialogClose(',
+    'async function loadProxies(',
   )
-  const importBody = section('async function importProxyText()', 'function openWarpCreate()')
+  const importBody = section('async function importProxyText()', 'function openLightweightWarpCreate()')
 
   assert.match(resetBody, /importDialog\.text = ''/)
   assert.match(resetBody, /importDialog\.testAfterImport = false/)

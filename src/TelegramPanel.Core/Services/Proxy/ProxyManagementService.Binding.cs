@@ -242,7 +242,8 @@ public sealed partial class ProxyManagementService
         IReadOnlyCollection<int> accountIds,
         AccountProxyBindingInput input,
         CancellationToken cancellationToken = default,
-        ProxyConnectionOptions? expectedConnection = null)
+        ProxyConnectionOptions? expectedConnection = null,
+        string? managedWarpClaimToken = null)
     {
         var ids = accountIds.Where(x => x > 0).Distinct().ToArray();
         if (ids.Length == 0)
@@ -257,6 +258,8 @@ public sealed partial class ProxyManagementService
 
         if (strategy == "warp_per_account")
         {
+            await ValidateBindingInputAsync(input, cancellationToken);
+            var operationRequestId = input.WarpRequestId ?? Guid.NewGuid().ToString("N");
             var warpResults = new List<AccountProxyOperationResult>(ids.Length);
             foreach (var accountId in ids)
             {
@@ -265,6 +268,9 @@ public sealed partial class ProxyManagementService
                     warpResults.Add(await BindOneWarpAsync(
                         accountId,
                         ids.Length == 1 ? input.ExpectedProxyId : null,
+                        ids.Length == 1 ? input.ExpectedUseGlobalProxy : null,
+                        BuildAccountWarpRequestId(operationRequestId, accountId),
+                        input.AcceptWarpTerms,
                         cancellationToken));
                 }
                 catch (Exception ex)
@@ -291,6 +297,7 @@ public sealed partial class ProxyManagementService
                 ? input.ProxyId
                 : throw new ArgumentException("请选择已有代理");
 
+        IDisposable? managedBindingClaim = null;
         await MutationLock.WaitAsync(cancellationToken);
         try
         {
@@ -305,6 +312,11 @@ public sealed partial class ProxyManagementService
                 EnsureWireGuardWarpReadyForBinding(targetProxy);
                 if (targetProxy.ManagedWgcfProfile != null)
                 {
+                    EnsureManagedProfileClaimOwner(targetProxy, managedWarpClaimToken);
+                    // 普通绑定也在落库前独占档案，阻止运行器首连租约跨过检查窗口。
+                    if (_temporaryWarpClaims != null
+                        && !_temporaryWarpClaims.OwnsManagedProfile(targetProxy.ManagedWgcfProfile, managedWarpClaimToken))
+                        managedBindingClaim = _temporaryWarpClaims.ClaimManagedProfile(targetProxy.ManagedWgcfProfile);
                     if (ids.Length != 1 || IsEnabledGlobalProxy(targetProxy.Id)
                         || await _db.Accounts.AnyAsync(
                             account => account.ProxyId == targetProxy.Id && account.Id != ids[0], cancellationToken))
@@ -444,6 +456,7 @@ public sealed partial class ProxyManagementService
         }
         finally
         {
+            managedBindingClaim?.Dispose();
             MutationLock.Release();
         }
     }
@@ -452,6 +465,10 @@ public sealed partial class ProxyManagementService
         AccountProxyBindingInput input,
         CancellationToken cancellationToken = default)
     {
+        if (input.WarpRequestId != null
+            && (!Guid.TryParse(input.WarpRequestId, out var requestUuid) || requestUuid == Guid.Empty))
+            throw new ArgumentException("轻量 WARP 请求标识必须是有效 UUID");
+
         var strategy = NormalizeStrategy(input.Strategy);
         if (strategy == "global")
         {
@@ -474,9 +491,11 @@ public sealed partial class ProxyManagementService
         }
         else if (strategy == "warp_per_account")
         {
-            var status = await _warpManager.GetStatusAsync(cancellationToken);
-            if (!status.PlatformSupported || !status.Enabled || !status.DockerAvailable)
-                throw new InvalidOperationException(status.Error ?? "WARP 运行条件不可用");
+            if (!input.AcceptWarpTerms)
+                throw new ArgumentException("创建轻量 WARP 前必须阅读并接受 Cloudflare WARP 条款");
+            var status = await GetManagedWarpAvailabilityAsync(cancellationToken);
+            if (!status.Available)
+                throw new InvalidOperationException(status.Reason ?? "轻量 WARP 运行条件不可用");
         }
     }
 
@@ -495,6 +514,9 @@ public sealed partial class ProxyManagementService
     private async Task<AccountProxyOperationResult> BindOneWarpAsync(
         int accountId,
         int? expectedProxyId,
+        bool? expectedUseGlobalProxy,
+        string requestId,
+        bool acceptTerms,
         CancellationToken cancellationToken)
     {
         var accountSnapshot = await _db.Accounts
@@ -502,22 +524,25 @@ public sealed partial class ProxyManagementService
             .FirstOrDefaultAsync(x => x.Id == accountId, cancellationToken)
             ?? throw new KeyNotFoundException("账号不存在");
         var currentProxyId = accountSnapshot.ProxyId ?? 0;
-        if (expectedProxyId.HasValue && currentProxyId != expectedProxyId.Value)
+        if ((expectedProxyId.HasValue && currentProxyId != expectedProxyId.Value)
+            || (expectedUseGlobalProxy.HasValue && accountSnapshot.UseGlobalProxy != expectedUseGlobalProxy.Value))
             throw new ProxyBindingConflictException("账号代理绑定已变化，未创建 WARP");
 
-        var requestId = $"account-{accountId}-{Guid.NewGuid():N}";
-        using var temporaryWarpClaim = _temporaryWarpClaims?.ClaimRequest(requestId);
-        var newProxy = await _warpManager.CreateAsync(
+        using var warpLease = await CreateManagedWarpLeaseAsync(
             $"WARP · {accountSnapshot.DisplayPhone}",
             requestId,
+            acceptTerms,
             cancellationToken);
+        var newProxy = warpLease.Proxy;
         var keep = false;
         try
         {
             var result = await BindAccountsAsync(
                 new[] { accountId },
-                new AccountProxyBindingInput("existing", newProxy.Id, currentProxyId),
-                cancellationToken);
+                new AccountProxyBindingInput("existing", newProxy.Id, currentProxyId,
+                    ExpectedUseGlobalProxy: accountSnapshot.UseGlobalProxy),
+                cancellationToken,
+                managedWarpClaimToken: warpLease.ClaimToken);
             var item = result.Items.Single();
             keep = item.Success;
             return item with
@@ -532,7 +557,7 @@ public sealed partial class ProxyManagementService
             {
                 try
                 {
-                    await DeleteAsync(newProxy.Id, CancellationToken.None);
+                    await StopUnboundManagedWarpAsync(newProxy.Id, warpLease.ClaimToken, CancellationToken.None);
                 }
                 catch (Exception cleanupError)
                 {
@@ -543,6 +568,13 @@ public sealed partial class ProxyManagementService
                 }
             }
         }
+    }
+
+    private static string BuildAccountWarpRequestId(string requestId, int accountId)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes($"{requestId}\naccount:{accountId}");
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes).AsSpan(0, 12)).ToLowerInvariant();
+        return $"telegram-panel.internal.account.{accountId}.{hash}";
     }
 
     private async Task CleanupReplacedWarpProxiesAsync(

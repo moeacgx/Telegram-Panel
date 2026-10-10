@@ -8,7 +8,6 @@
         </el-tag>
       </div>
       <div class="wgcf-actions">
-        <el-button type="primary" :icon="CirclePlus" :disabled="!status?.available || !!loadError" @click="openCreate">创建出口</el-button>
         <el-tooltip content="刷新轻量 WARP 状态" placement="top">
           <el-button circle :icon="Refresh" :loading="loading" aria-label="刷新轻量 WARP 状态" @click="loadStatus" />
         </el-tooltip>
@@ -62,7 +61,7 @@
       <template #empty><el-empty description="暂无轻量 WARP 出口" :image-size="48" /></template>
     </el-table>
 
-    <el-dialog v-model="createDialog.visible" title="创建轻量 WARP 出口" width="min(480px, calc(100vw - 24px))"
+    <el-dialog v-model="createDialog.visible" title="一键创建 WARP" width="min(480px, calc(100vw - 24px))"
       :before-close="beforeCreateClose" :close-on-click-modal="!createDialog.running" :close-on-press-escape="!createDialog.running" :show-close="!createDialog.running">
       <el-form label-position="top" :disabled="createDialog.running">
         <el-form-item label="出口名称" required>
@@ -102,11 +101,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { CirclePlus, Connection, Refresh, RefreshRight, SwitchButton, User, VideoPlay } from '@element-plus/icons-vue'
+import { Connection, Refresh, RefreshRight, SwitchButton, User, VideoPlay } from '@element-plus/icons-vue'
 import { panelApi } from '@/api/panel'
 import type { AccountListItem, WgcfProfile, WgcfRuntimeStatus } from '@/api/types'
 
-const emit = defineEmits<{ changed: [] }>()
+const emit = defineEmits<{ changed: []; availability: [available: boolean] }>()
 const status = ref<WgcfRuntimeStatus | null>(null)
 const profiles = computed(() => status.value?.profiles ?? [])
 const loading = ref(false)
@@ -159,9 +158,13 @@ async function loadStatus() {
     const changed = JSON.stringify(status.value?.profiles) !== JSON.stringify(next.profiles)
     status.value = next
     loadError.value = ''
+    emit('availability', next.available)
     if (changed) emit('changed')
   } catch (error) {
-    if (!disposed) loadError.value = errorMessage(error)
+    if (!disposed) {
+      loadError.value = errorMessage(error)
+      emit('availability', false)
+    }
   } finally {
     if (!disposed) loading.value = false
   }
@@ -171,6 +174,8 @@ function openCreate() {
   if (!status.value?.available || loadError.value || createDialog.running) return
   Object.assign(createDialog, { visible: true, name: '', requestId: crypto.randomUUID(), acceptTerms: false, submittedName: null, error: '' })
 }
+
+defineExpose({ openCreate })
 
 function beforeCreateClose(done: () => void) {
   if (!createDialog.running) done()

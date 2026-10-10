@@ -9,6 +9,42 @@ public sealed class TemporaryWarpClaimStore
 {
     private readonly ConcurrentDictionary<string, int> _requestClaims =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> _managedClaims = new(StringComparer.Ordinal);
+
+    public ManagedProfileClaim ClaimManagedProfile(string profile)
+    {
+        var token = Guid.NewGuid().ToString("N");
+        if (!_managedClaims.TryAdd(profile, token))
+            throw new InvalidOperationException("轻量 WARP 正被其它首次连接或绑定流程占用，请稍后重试");
+        return new ManagedProfileClaim(this, profile, token);
+    }
+
+    public bool IsManagedProfileClaimed(string profile) => _managedClaims.ContainsKey(profile);
+
+    public bool OwnsManagedProfile(string profile, string? token) => token != null
+        && _managedClaims.TryGetValue(profile, out var current) && current == token;
+
+    public sealed class ManagedProfileClaim : IDisposable
+    {
+        private TemporaryWarpClaimStore? _owner;
+        private readonly string _profile;
+        public string Token { get; }
+
+        internal ManagedProfileClaim(TemporaryWarpClaimStore owner, string profile, string token)
+        {
+            _owner = owner;
+            _profile = profile;
+            Token = token;
+        }
+
+        public void Dispose()
+        {
+            var owner = Interlocked.Exchange(ref _owner, null);
+            if (owner != null)
+                ((ICollection<KeyValuePair<string, string>>)owner._managedClaims)
+                    .Remove(new KeyValuePair<string, string>(_profile, Token));
+        }
+    }
 
     public IDisposable ClaimRequest(string requestId)
     {

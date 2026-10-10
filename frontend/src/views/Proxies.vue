@@ -48,30 +48,31 @@
         <el-button
           type="success"
           :icon="MagicStick"
-          :disabled="warpUnavailable || refreshingAllWarps"
-          @click="openWarpCreate()"
+          :disabled="!lightweightWarpAvailable"
+          @click="openLightweightWarpCreate"
         >
           一键创建 WARP
         </el-button>
         <el-button
+          v-if="hasLegacyWarp"
           type="warning"
           :icon="RefreshRight"
           :loading="refreshingAllWarps"
           :disabled="warpUnavailable || !hasEnabledWarp || refreshingAllWarps || refreshingIds.size > 0"
           @click="refreshAllWarps"
         >
-          立即刷新全部 WARP
+          立即刷新旧版 WARP
         </el-button>
         <el-button :icon="Refresh" :loading="loading" @click="refreshAll">刷新页面状态</el-button>
         <span class="toolbar-spacer" />
-        <div class="warp-runtime">
-          <span>WARP 运行环境</span>
+        <div v-if="hasLegacyWarp" class="warp-runtime">
+          <span>旧版容器 WARP</span>
           <el-tag :type="warpStatusType" size="small">{{ warpStatusText }}</el-tag>
         </div>
       </div>
       <div v-if="globalProxyError" class="runtime-error">全局代理：{{ globalProxyError }}</div>
-      <div v-if="warpStatusError || warpStatus?.error" class="runtime-error">{{ warpStatusError || warpStatus?.error }}</div>
-      <div v-if="maintenance && warpStatus?.enabled" class="warp-maintenance" aria-label="WARP 自动维护状态">
+      <div v-if="hasLegacyWarp && (warpStatusError || warpStatus?.error)" class="runtime-error">{{ warpStatusError || warpStatus?.error }}</div>
+      <div v-if="hasLegacyWarp && maintenance && warpStatus?.enabled" class="warp-maintenance" aria-label="WARP 自动维护状态">
         <div class="maintenance-state">
           <el-tag :type="maintenanceStatusType" size="small">
             {{ maintenanceStatusText }}
@@ -98,7 +99,7 @@
       </div>
     </el-card>
 
-    <WgcfWarpPanel @changed="loadProxies(false)" />
+    <WgcfWarpPanel ref="wgcfWarpPanel" @changed="loadProxies(false)" @availability="lightweightWarpAvailable = $event" />
 
     <el-dialog
       v-model="globalProxyDialog.visible"
@@ -170,21 +171,12 @@
               </div>
             </div>
             <el-alert
-              v-else-if="proxies.length === 0"
+              v-else-if="globalProxyGroups.every((group) => group.items.length === 0)"
               type="warning"
               :closable="false"
-              title="还没有可选代理，请先创建 WARP、导入外部 WireGuard WARP、Resin 或普通代理"
+              title="还没有可选代理，请添加外部 WireGuard WARP、Resin 或普通代理"
             />
             <div class="global-proxy-actions">
-              <el-button
-                type="success"
-                plain
-                :icon="MagicStick"
-                :disabled="warpUnavailable"
-                @click="openWarpCreateForGlobal()"
-              >
-                一键创建 WARP
-              </el-button>
               <el-button plain :icon="CirclePlus" @click="openProxyCreateForGlobal('resin')">
                 新增 Resin
               </el-button>
@@ -771,52 +763,6 @@
       </template>
     </el-dialog>
 
-    <el-dialog
-      v-model="warpDialog.visible"
-      title="一键创建 WARP"
-      width="min(500px, calc(100vw - 24px))"
-      append-to-body
-      :before-close="beforeWarpDialogClose"
-      :close-on-click-modal="!warpDialog.creating"
-      :close-on-press-escape="!warpDialog.creating"
-      :show-close="!warpDialog.creating"
-    >
-      <el-form label-position="top" :disabled="warpDialog.creating">
-        <el-alert
-          class="mb-3"
-          type="warning"
-          :closable="false"
-          show-icon
-          title="每创建一个 WARP，都会启动一个独立 Docker 容器"
-          description="每个容器还会保留独立数据卷，并持续占用服务器内存与少量 CPU；请根据服务器资源控制创建数量。"
-        />
-        <el-form-item label="代理名称">
-          <el-input v-model="warpDialog.name" maxlength="80" placeholder="留空自动命名" />
-        </el-form-item>
-        <el-form-item label="代理协议">
-          <el-radio-group v-model="warpDialog.protocol">
-            <el-radio-button value="http">HTTP</el-radio-button>
-            <el-radio-button value="socks5">SOCKS5</el-radio-button>
-          </el-radio-group>
-          <div class="form-hint">
-            系统默认：{{ protocolLabel(warpStatus?.defaultProtocol || 'http') }}；本选项只覆盖这一次创建。
-            WARP 容器同一端口同时支持 HTTP 和 SOCKS5。
-          </div>
-        </el-form-item>
-        <el-alert
-          v-if="warpStatus"
-          :title="`镜像：${warpStatus.image}`"
-          :description="`网络：${warpStatus.network} · 连接方式：${warpStatus.proxyHostMode} · 默认协议：${protocolLabel(warpStatus.defaultProtocol)}`"
-          type="info"
-          :closable="false"
-          show-icon
-        />
-      </el-form>
-      <template #footer>
-        <el-button :disabled="warpDialog.creating" @click="closeWarpDialog">取消</el-button>
-        <el-button type="success" :loading="warpDialog.creating" @click="createWarp">创建</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -848,7 +794,6 @@ import type {
   GlobalProxySourceMode,
   SaveOutboundProxyRequest,
   SaveGlobalProxySettingsRequest,
-  WarpProxyProtocol,
   WarpRuntimeStatus,
 } from '@/api/types'
 import { formatTime } from '@/utils/format'
@@ -883,7 +828,6 @@ let globalProxyOperationToken = 0
 let warpStatusOperationToken = 0
 let proxySaveOperationToken = 0
 let proxyImportOperationToken = 0
-let warpCreateOperationToken = 0
 
 type DialogCloseDone = () => void
 
@@ -968,14 +912,8 @@ const importDialog = reactive({
   testAfterImport: false,
 })
 
-const warpDialog = reactive({
-  visible: false,
-  creating: false,
-  name: '',
-  requestId: '',
-  protocol: 'http' as WarpProxyProtocol,
-  selectForGlobal: false,
-})
+const wgcfWarpPanel = ref<InstanceType<typeof WgcfWarpPanel> | null>(null)
+const lightweightWarpAvailable = ref(false)
 
 const warpUnavailable = computed(() => !warpStatus.value
   || !warpStatus.value.platformSupported
@@ -984,6 +922,7 @@ const warpUnavailable = computed(() => !warpStatus.value
 
 const maintenance = computed(() => warpStatus.value?.maintenance ?? null)
 const hasEnabledWarp = computed(() => proxies.value.some((proxy) => proxy.kind === 'warp' && proxy.isEnabled))
+const hasLegacyWarp = computed(() => proxies.value.some((proxy) => proxy.kind === 'warp'))
 const usageCounts = computed(() => {
   const used = proxies.value.filter(proxyIsUsed).length
   return { all: proxies.value.length, used, unused: proxies.value.length - used }
@@ -1225,11 +1164,6 @@ function beforeImportDialogClose(done: DialogCloseDone) {
   done()
 }
 
-function beforeWarpDialogClose(done: DialogCloseDone) {
-  if (warpDialog.creating) return
-  warpDialog.selectForGlobal = false
-  done()
-}
 
 async function loadProxies(showLoading = true) {
   const operationToken = ++proxyListOperationToken
@@ -1812,62 +1746,8 @@ async function importProxyText() {
   }
 }
 
-function openWarpCreate() {
-  openWarpCreateInternal(false)
-}
-
-function openWarpCreateForGlobal() {
-  openWarpCreateInternal(true)
-}
-
-function openWarpCreateInternal(selectForGlobal = false) {
-  if (warpDialog.creating) return
-  if (warpUnavailable.value) {
-    ElMessage.warning(warpStatusError.value || warpStatus.value?.error || '当前环境无法创建 WARP')
-    return
-  }
-  warpCreateOperationToken += 1
-  warpDialog.name = ''
-  warpDialog.protocol = warpStatus.value?.defaultProtocol === 'socks5' ? 'socks5' : 'http'
-  warpDialog.selectForGlobal = selectForGlobal
-  warpDialog.requestId = typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `warp-${Date.now()}-${Math.random().toString(36).slice(2)}`
-  warpDialog.visible = true
-}
-
-function closeWarpDialog() {
-  if (warpDialog.creating) return
-  warpDialog.selectForGlobal = false
-  warpDialog.visible = false
-}
-
-async function createWarp() {
-  if (warpDialog.creating) return
-  const operationToken = ++warpCreateOperationToken
-  const name = normalizeOptional(warpDialog.name)
-  const requestId = warpDialog.requestId
-  const selectForGlobal = warpDialog.selectForGlobal
-  warpDialog.creating = true
-  try {
-    const created = await panelApi.createWarpProxies({
-      name,
-      requestId,
-      protocol: warpDialog.protocol,
-    })
-    if (operationToken !== warpCreateOperationToken) return
-    ElMessage.success(`WARP 代理“${created.name}”已创建（${protocolLabel(created.protocol)}）`)
-    warpDialog.visible = false
-    warpDialog.requestId = ''
-    warpDialog.selectForGlobal = false
-    if (selectForGlobal) {
-      globalProxyDialog.form.sourceMode = 'existing'
-      globalProxyDialog.form.proxyId = created.id
-    }
-  } finally {
-    await Promise.allSettled([loadProxies(), loadWarpStatus()])
-    if (operationToken === warpCreateOperationToken) warpDialog.creating = false
-  }
+function openLightweightWarpCreate() {
+  if (lightweightWarpAvailable.value) wgcfWarpPanel.value?.openCreate()
 }
 
 onMounted(() => {
