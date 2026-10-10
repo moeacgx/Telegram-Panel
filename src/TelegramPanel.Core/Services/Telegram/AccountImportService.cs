@@ -18,6 +18,9 @@ namespace TelegramPanel.Core.Services.Telegram;
 /// </summary>
 public class AccountImportService
 {
+    // 无法确认客户端已断开时保留独占到进程重启，禁止自动释放后被另一账号抢用。
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ManagedWarpProxyLease>
+        RetainedManagedWarpLeases = new(StringComparer.Ordinal);
     public const string ManagedWarpRequestPrefix = "telegram-panel.internal.import.";
     public const int MaxWarpPerAccountImportCount = 10;
     private const int MaxZipEntryCount = 5_000;
@@ -945,6 +948,7 @@ public class AccountImportService
         ImportResult? result = null;
         int? stagedAccountId = null;
         var keepOwnedWarp = false;
+        var managedBindingCommitted = false;
         try
         {
             if (requestedStrategy == "warp_pool")
@@ -1084,6 +1088,7 @@ public class AccountImportService
 
             // 一旦新创建的 WARP 绑定到账号，就不能再做失败补偿删除；否则账号会指向已清理的代理。
             keepOwnedWarp = prepared.OwnedWarpProxyId.HasValue;
+            managedBindingCommitted = prepared.ManagedWarpLease != null;
 
             if (prepared.TemporaryResinLease != null
                 && prepared.Connection != null
@@ -1185,11 +1190,30 @@ public class AccountImportService
                     CancellationToken.None);
             }
 
+            var retainManagedLease = false;
             try
             {
+                if (prepared.ManagedWarpLease != null && !managedBindingCommitted && stagedAccountId is > 0)
+                {
+                    try
+                    {
+                        await _proxyManagement.ReleaseAccountClientStrictAsync(stagedAccountId.Value);
+                    }
+                    catch (Exception cleanupError)
+                    {
+                        retainManagedLease = true;
+                        RetainedManagedWarpLeases.TryAdd(prepared.ManagedWarpLease.ClaimToken, prepared.ManagedWarpLease);
+                        _logger.LogCritical(cleanupError,
+                            "账号 {AccountId} 导入失败且客户端无法确认断开，保留轻量 WARP {ProxyId} 独占直到重启核对",
+                            stagedAccountId.Value, prepared.ManagedWarpLease.Proxy.Id);
+                        throw new InvalidOperationException(
+                            "导入失败后的客户端无法确认断开，轻量 WARP 已锁定且未停止；需重启面板并核对账号及出口后再操作",
+                            cleanupError);
+                    }
+                }
                 if (!keepOwnedWarp && prepared.OwnedWarpProxyId is > 0)
                 {
-                    if (stagedAccountId is > 0)
+                    if (prepared.ManagedWarpLease == null && stagedAccountId is > 0)
                         await _proxyManagement.ReleaseAccountClientStrictAsync(stagedAccountId.Value);
                     await StopOwnedManagedWarpBestEffortAsync(
                         prepared.OwnedWarpProxyId.Value, prepared.ManagedWarpLease?.ClaimToken);
@@ -1199,7 +1223,8 @@ public class AccountImportService
             {
                 prepared.WarpUsageClaim?.Dispose();
                 prepared.TemporaryWarpRequestClaim?.Dispose();
-                prepared.ManagedWarpLease?.Dispose();
+                if (!retainManagedLease)
+                    prepared.ManagedWarpLease?.Dispose();
             }
         }
     }

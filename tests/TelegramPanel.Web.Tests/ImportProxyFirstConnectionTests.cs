@@ -707,6 +707,40 @@ public sealed class ImportProxyFirstConnectionTests
         Assert.Equal(0, fixture.Importer.ImportCount);
     }
 
+    [Theory]
+    [InlineData("warp_per_account")]
+    [InlineData("warp_pool")]
+    public async Task 导入严格断开失败保留轻量出口独占直到重启且拒绝他人抢绑定(string strategy)
+    {
+        await using var fixture = await ImportFixture.CreateAsync(OutboundProxyProtocols.Http,
+            warpDocker: new WarpLifecycleRegressionTests.FakeWarpDockerClient());
+        if (strategy == "warp_pool")
+        {
+            using var ready = await fixture.ManagedWarp!.ProvisionAsync("pool", Guid.NewGuid().ToString("D"), true);
+        }
+        fixture.Importer.ResultFactory = _ => new ImportResult(true, "8613800000400", 10400,
+            "retained", "sessions/retained.session");
+        fixture.ClientPool.OnRemoveClientAsync = _ => throw new InvalidOperationException("模拟客户端无法断开");
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Service.ImportFromStringSessionAsync(
+            "session-data", 12345, "0123456789abcdef0123456789abcdef",
+            proxyBinding: new(strategy, AcceptWarpTerms: true)));
+        Assert.Contains("需重启面板", error.Message);
+        var retained = await fixture.Db.OutboundProxies.AsNoTracking().SingleAsync(x => x.ManagedWgcfProfile != null);
+        Assert.True(retained.IsEnabled);
+        Assert.Equal(0, fixture.ManagedWarp!.StopCalls);
+        var account = await fixture.Db.Accounts.AsNoTracking().SingleAsync();
+        Assert.False(account.IsActive);
+        Assert.Null(account.ProxyId);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.ManagedWarp.AcquireAsync(retained.Id));
+        fixture.ClientPool.OnRemoveClientAsync = null;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.ProxyManagement!.BindAccountsAsync(
+            new[] { account.Id }, new("existing", retained.Id)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.ProxyManagement!.SetManagedWgcfEnabledAsync(
+            retained.ManagedWgcfProfile!, false));
+        Assert.Null((await fixture.Db.Accounts.AsNoTracking().SingleAsync()).ProxyId);
+        Assert.True((await fixture.Db.OutboundProxies.AsNoTracking().SingleAsync(x => x.Id == retained.Id)).IsEnabled);
+    }
+
     [Fact]
     public async Task 自动WARP池可独占未绑定轻量出口且第二账号不会复用同出口()
     {
@@ -982,6 +1016,7 @@ public sealed class ImportProxyFirstConnectionTests
         public OutboundProxy Proxy { get; }
         public StubClientPool ClientPool { get; }
         public FakeManagedWarpProvisioner? ManagedWarp { get; private set; }
+        public ProxyManagementService? ProxyManagement { get; private set; }
 
         public async Task<OutboundProxy> AddWarpAsync(string name, int port)
         {
@@ -1102,7 +1137,10 @@ public sealed class ImportProxyFirstConnectionTests
                 temporaryWarpClaims,
                 warpProxyUsageGuard);
 
-            return new ImportFixture(connection, db, importer, service, proxy, pool) { ManagedWarp = managedWarp };
+            return new ImportFixture(connection, db, importer, service, proxy, pool)
+            {
+                ManagedWarp = managedWarp, ProxyManagement = proxyManagement
+            };
         }
 
         public async ValueTask DisposeAsync()
