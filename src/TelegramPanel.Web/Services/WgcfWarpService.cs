@@ -36,9 +36,11 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
     private readonly Channel<string> _queue = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
     private readonly SemaphoreSlim _stateLock = new(1, 1);
     private readonly SemaphoreSlim _toolLock = new(1, 1);
+    private readonly object _persistLock = new();
     private volatile bool _supervisorReady;
     private readonly TemporaryWarpClaimStore _claims;
     private readonly ConcurrentDictionary<string, string> _queueTokens = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, byte> _pendingTemporary = new(StringComparer.Ordinal);
 
     public WgcfWarpService(IServiceScopeFactory scopes, IConfiguration configuration,
         IWebHostEnvironment environment, ILogger<WgcfWarpService> logger)
@@ -81,9 +83,12 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
             {
                 if (_entries.TryGetValue(profile, out var old) && (!old.Temporary || old.RequestId != requestId))
                     throw new InvalidOperationException("出口操作归属不一致");
+                if (_pendingTemporary.ContainsKey(profile))
+                    throw new InvalidOperationException("原出口创建或取消仍在收尾，请稍后重试");
                 if (old == null && _entries.Count >= 100) throw new InvalidOperationException("轻量出口档案已达到 100 份上限");
                 await EnsureUnboundAsync(profile, cancellationToken);
                 _queueTokens[profile] = claim.Token;
+                _pendingTemporary[profile] = 0;
                 Persist(new Entry(profile, old?.Name ?? name, "creating") { Temporary = true, RequestId = requestId });
                 _queue.Writer.TryWrite(profile);
                 queued = true;
@@ -112,7 +117,11 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         catch
         {
             // 队列任务可能仍在运行，先保存停止意图，最终完成也不能遗留活动出口。
-            if (queued) await RequestStopAsync(profile, claim.Token);
+            if (queued)
+            {
+                try { await RequestStopAsync(profile, claim.Token); }
+                catch (Exception) { _logger.LogWarning("临时轻量出口停止待重试，材料和停止意图已保留"); }
+            }
             claim.Dispose();
             throw;
         }
@@ -180,7 +189,11 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
             try { await StopProfileAsync(profile, token, timeout.Token); }
             finally { _toolLock.Release(); }
         }
-        catch (Exception) { _logger.LogWarning("临时轻量出口停止尚未确认，运行器将继续按停止意图收尾"); }
+        catch (Exception)
+        {
+            _logger.LogWarning("临时轻量出口停止尚未确认，运行器将继续按停止意图收尾");
+            throw new InvalidOperationException("轻量出口停止尚未确认，请保留租约并重试清理");
+        }
     }
 
     private async Task StopProfileAsync(string profile, string? token, CancellationToken ct)
@@ -406,7 +419,12 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
                 else Persist(GetEntry(profile) with { Phase = "failed", Error = "创建或恢复未完成；材料已保留，请重试恢复。注册结果不明确时不会重新注册" });
                 _logger.LogWarning("轻量 WARP 创建或恢复未完成，原始输出已隐藏");
             }
-            finally { _queueTokens.TryRemove(profile, out _); _toolLock.Release(); }
+            finally
+            {
+                _queueTokens.TryRemove(profile, out _);
+                _pendingTemporary.TryRemove(profile, out _);
+                _toolLock.Release();
+            }
         }
     }
 
@@ -504,6 +522,11 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
 
     private void Persist(Entry entry)
     {
+        lock (_persistLock)
+        {
+        if (entry.Phase is "ready" or "failed" && _entries.TryGetValue(entry.Profile, out var current)
+            && current.StopRequested)
+            entry = entry with { StopRequested = true };
         var target = Path.Combine(_root, "web-requests", entry.Profile + ".json");
         var temp = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
         using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
@@ -514,6 +537,7 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         }
         File.Move(temp, target, overwrite: true);
         _entries[entry.Profile] = entry;
+        }
     }
 
     private WgcfProfileDto ToDto(Entry entry, TelegramPanel.Data.Entities.OutboundProxy? proxy)
