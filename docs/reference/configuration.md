@@ -293,6 +293,8 @@ https://bucket.example.com/telegram-panel/tp-{timestamp}.zip?X-Amz-Signature=...
 后台普通代理、外部 WireGuard WARP 和 Resin 巡检使用 `Proxy:Egress:ProbeUrl`，Docker 默认值为
 `TP_PROXY_EGRESS_PROBE_URL=https://208.67.222.222/`。该请求只用于确认出站 HTTP/SOCKS 链路仍可用，
 不会调用 Cloudflare Trace，也不会刷新出口 IP、地理位置或 WARP 状态。
+带 `ManagedWgcfProfile` 的内置轻量 WARP 不参加此巡检；其可分配状态只依据专用
+`warp=on` 检测，防止普通 HTTP 成功覆盖 WARP 验证。
 
 手动“检测面板出口/检测代理出口”仍使用 `Proxy:Egress:MetadataUrl`，默认
 `https://cloudflare.com/cdn-cgi/trace`，用于读取公网 IP、国家码和 `warp=` 状态。成功标准是后台
