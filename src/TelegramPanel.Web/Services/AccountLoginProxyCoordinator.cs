@@ -212,7 +212,7 @@ public sealed class AccountLoginProxyStateStore : IWarpProxyUsageGuard
     public bool TryBeginPreparation(int loginId)
     {
         lock (_stateGate)
-            return !_states.ContainsKey(loginId) && _claimedLoginIds.Add(loginId);
+            return loginId > 0 && !_states.ContainsKey(loginId) && _claimedLoginIds.Add(loginId);
     }
 
     public bool TryAddPrepared(AccountLoginProxyState state, out string? error)
@@ -224,7 +224,10 @@ public sealed class AccountLoginProxyStateStore : IWarpProxyUsageGuard
                 error = "登录代理准备会话已失效";
                 return false;
             }
-            return TryAdd(state, out error);
+            var added = TryAdd(state, out error);
+            if (!added)
+                _claimedLoginIds.Add(state.LoginId);
+            return added;
         }
     }
 
@@ -752,16 +755,18 @@ public sealed class AccountLoginProxyCoordinator
         finally
         {
             if (!stateSaved)
-                _store.ReleaseLoginClaim(loginId);
-            if (!stateSaved && managedWarpLease != null)
             {
                 try
                 {
-                    if (ownedWarpProxyId.HasValue)
+                    if (managedWarpLease != null && ownedWarpProxyId.HasValue)
                         await _managedWarp!.StopUnboundAsync(
                             managedWarpLease.Proxy.Id, managedWarpLease.ClaimToken, CancellationToken.None);
                 }
-                finally { managedWarpLease.Dispose(); }
+                finally
+                {
+                    managedWarpLease?.Dispose();
+                    _store.ReleaseLoginClaim(loginId);
+                }
             }
         }
     }

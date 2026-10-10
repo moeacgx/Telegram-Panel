@@ -20,6 +20,23 @@ namespace TelegramPanel.Web.Tests;
 public sealed class ManualLoginProxyRoutingTests
 {
     [Fact]
+    public void 准备完成登记失败时仍占有登录ID直到资源释放()
+    {
+        var store = new AccountLoginProxyStateStore();
+        var connection = new ProxyConnectionOptions(1, "占用出口", OutboundProxyKinds.Warp,
+            OutboundProxyProtocols.Socks5, "127.0.0.1", 1080, null, null, null);
+        using var maintenance = store.TryAcquireMaintenance(1);
+        Assert.True(store.TryBeginPreparation(1912));
+        Assert.False(store.TryAddPrepared(new AccountLoginProxyState(1912,
+            new AccountProxyBindingInput("existing", 1), "existing", new AccountProxyResolution(connection, false),
+            null, null, null, DateTimeOffset.UtcNow), out _));
+        Assert.False(store.TryBeginPreparation(1912));
+        store.ReleaseLoginClaim(1912);
+        Assert.True(store.TryBeginPreparation(1912));
+        store.ReleaseLoginClaim(1912);
+    }
+
+    [Fact]
     public async Task 轻量WARP首次连接必须明确接受条款()
     {
         await using var fixture = await Fixture.CreateAsync();
