@@ -59,12 +59,14 @@ public sealed partial class ProxyManagementService
     }
 
     public async Task<OutboundProxy> SetManagedWgcfEnabledAsync(
-        string profile, bool enabled, CancellationToken cancellationToken = default)
+        string profile, bool enabled, CancellationToken cancellationToken = default,
+        string? claimToken = null)
     {
         await using var lease = await AcquireMutationLeaseAsync(cancellationToken);
         var proxy = await _db.OutboundProxies.SingleOrDefaultAsync(
             proxy => proxy.ManagedWgcfProfile == profile, cancellationToken)
             ?? throw new KeyNotFoundException("受管 WireGuard 代理不存在");
+        EnsureManagedProfileClaimOwner(proxy, claimToken);
         if (!enabled && (IsEnabledGlobalProxy(proxy.Id)
                          || await _db.Accounts.AnyAsync(account => account.ProxyId == proxy.Id, cancellationToken)))
             throw new ProxyInUseException("受管 WireGuard 仍被账号或全局配置使用，请先明确切换账号出口后再停止");
@@ -79,5 +81,13 @@ public sealed partial class ProxyManagementService
     {
         if (proxy.ManagedWgcfProfile != null)
             throw new InvalidOperationException("受管 WireGuard 请使用专用创建和启停入口，普通编辑或删除不会变更运行器");
+    }
+
+    private void EnsureManagedProfileClaimOwner(OutboundProxy proxy, string? claimToken)
+    {
+        if (proxy.ManagedWgcfProfile is { } profile
+            && _temporaryWarpClaims?.IsManagedProfileClaimed(profile) == true
+            && !_temporaryWarpClaims.OwnsManagedProfile(profile, claimToken))
+            throw new InvalidOperationException("轻量 WARP 正被首次连接或绑定流程占用，未修改出口");
     }
 }

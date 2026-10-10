@@ -397,7 +397,7 @@ public sealed class ImportProxyFirstConnectionTests
             "session-data",
             12345,
             "0123456789abcdef0123456789abcdef",
-            proxyBinding: new AccountProxyBindingInput("warp_per_account"));
+            proxyBinding: new AccountProxyBindingInput("warp_per_account", AcceptWarpTerms: true));
 
         Assert.False(result.Success);
         Assert.True(IsWarpUnavailableError(result.Error), result.Error);
@@ -575,7 +575,7 @@ public sealed class ImportProxyFirstConnectionTests
     }
 
     [Fact]
-    public async Task 创建一对一WARP导入会先创建新容器并把首连出口绑定到账号()
+    public async Task 创建一对一WARP导入会先创建轻量出口并把首连出口绑定到账号()
     {
         await using var fixture = await ImportFixture.CreateAsync(
             OutboundProxyProtocols.Http,
@@ -592,25 +592,26 @@ public sealed class ImportProxyFirstConnectionTests
             "session-data",
             12345,
             "0123456789abcdef0123456789abcdef",
-            proxyBinding: new AccountProxyBindingInput("warp_per_account"));
+            proxyBinding: new AccountProxyBindingInput("warp_per_account", AcceptWarpTerms: true));
 
         Assert.True(result.Success, result.Error);
         Assert.NotNull(fixture.Importer.SeenProxy);
-        Assert.Equal(OutboundProxyKinds.Warp, fixture.Importer.SeenProxy!.Kind);
+        Assert.Equal(OutboundProxyKinds.WireGuardWarp, fixture.Importer.SeenProxy!.Kind);
         Assert.Equal(fixture.Importer.SeenProxy.ProxyId, result.ProxyId);
         Assert.Equal("2606:4700:100::90", result.ProxyEgressIp);
         var proxy = await fixture.Db.OutboundProxies
             .Include(x => x.WarpProfile)
             .AsNoTracking()
-            .SingleAsync(x => x.Kind == OutboundProxyKinds.Warp);
+            .SingleAsync(x => x.Kind == OutboundProxyKinds.WireGuardWarp);
         var account = await fixture.Db.Accounts.AsNoTracking().SingleAsync();
         Assert.True(account.IsActive);
         Assert.Equal(proxy.Id, account.ProxyId);
-        Assert.StartsWith(AccountImportService.ManagedWarpRequestPrefix, proxy.WarpProfile!.RequestId);
+        Assert.NotNull(proxy.ManagedWgcfProfile);
+        Assert.Empty(await fixture.Db.WarpProfiles.ToListAsync());
     }
 
     [Fact]
-    public async Task 创建一对一WARP导入失败会删除未绑定的新容器记录()
+    public async Task 创建一对一WARP导入失败会停止出口且保留注册档案()
     {
         await using var fixture = await ImportFixture.CreateAsync(
             OutboundProxyProtocols.Http,
@@ -628,17 +629,17 @@ public sealed class ImportProxyFirstConnectionTests
             "session-data",
             12345,
             "0123456789abcdef0123456789abcdef",
-            proxyBinding: new AccountProxyBindingInput("warp_per_account"));
+            proxyBinding: new AccountProxyBindingInput("warp_per_account", AcceptWarpTerms: true));
 
         Assert.False(result.Success);
         Assert.Contains("模拟 Session 失效", result.Error);
         var proxyRows = await fixture.Db.OutboundProxies.AsNoTracking()
-            .Where(x => x.Kind == OutboundProxyKinds.Warp)
+            .Where(x => x.Kind == OutboundProxyKinds.WireGuardWarp)
             .ToListAsync();
-        Assert.Empty(proxyRows);
-        var profile = await fixture.Db.WarpProfiles.AsNoTracking().SingleAsync();
-        Assert.Equal("deleted", profile.Status);
-        Assert.Null(profile.OutboundProxyId);
+        var retained = Assert.Single(proxyRows);
+        Assert.False(retained.IsEnabled);
+        Assert.NotNull(retained.ManagedWgcfProfile);
+        Assert.Equal(1, fixture.ManagedWarp!.StopCalls);
         Assert.Empty(await fixture.Db.Accounts.AsNoTracking().ToListAsync());
     }
 
@@ -675,6 +676,35 @@ public sealed class ImportProxyFirstConnectionTests
             foreach (var file in files)
                 await file.Content.DisposeAsync();
         }
+    }
+
+    [Fact]
+    public async Task 轻量出口未检测就绪时不发起首次连接且停止保留材料()
+    {
+        await using var fixture = await ImportFixture.CreateAsync(OutboundProxyProtocols.Http,
+            warpDocker: new WarpLifecycleRegressionTests.FakeWarpDockerClient(), managedReady: false);
+        var result = await fixture.Service.ImportFromStringSessionAsync("session-data", 12345,
+            "0123456789abcdef0123456789abcdef",
+            proxyBinding: new("warp_per_account", AcceptWarpTerms: true));
+        Assert.False(result.Success);
+        Assert.Equal(0, fixture.Importer.ImportCount);
+        Assert.Equal(1, fixture.ManagedWarp!.StopCalls);
+        var retained = await fixture.Db.OutboundProxies.AsNoTracking().SingleAsync(x => x.ManagedWgcfProfile != null);
+        Assert.False(retained.IsEnabled);
+        Assert.Empty(await fixture.Db.Accounts.ToListAsync());
+    }
+
+    [Fact]
+    public async Task 导入未接受条款时不创建出口且不发起首次连接()
+    {
+        await using var fixture = await ImportFixture.CreateAsync(OutboundProxyProtocols.Http,
+            warpDocker: new WarpLifecycleRegressionTests.FakeWarpDockerClient());
+        var result = await fixture.Service.ImportFromStringSessionAsync("session-data", 12345,
+            "0123456789abcdef0123456789abcdef", proxyBinding: new("warp_per_account"));
+        Assert.False(result.Success);
+        Assert.Contains("条款", result.Error);
+        Assert.Equal(0, fixture.ManagedWarp!.ProvisionCalls);
+        Assert.Equal(0, fixture.Importer.ImportCount);
     }
 
     [Fact]
@@ -855,8 +885,7 @@ public sealed class ImportProxyFirstConnectionTests
     private static bool IsWarpUnavailableError(string? error)
     {
         return !string.IsNullOrWhiteSpace(error)
-            && (error.Contains("WARP 仅支持在 Linux Docker 环境中运行", StringComparison.Ordinal)
-                || error.Contains("WARP 未启用，请设置 Proxy:Warp:Enabled=true", StringComparison.Ordinal));
+            && error.Contains("轻量 WARP 创建服务不可用", StringComparison.Ordinal);
     }
 
     private static Client CreateClient()
@@ -923,6 +952,7 @@ public sealed class ImportProxyFirstConnectionTests
         public AccountImportService Service { get; }
         public OutboundProxy Proxy { get; }
         public StubClientPool ClientPool { get; }
+        public FakeManagedWarpProvisioner? ManagedWarp { get; private set; }
 
         public async Task<OutboundProxy> AddWarpAsync(string name, int port)
         {
@@ -956,7 +986,8 @@ public sealed class ImportProxyFirstConnectionTests
             IWarpProxyUsageGuard? warpProxyUsageGuard = null,
             TemporaryWarpClaimStore? temporaryWarpClaims = null,
             WarpLifecycleRegressionTests.FakeWarpDockerClient? warpDocker = null,
-            IProxyEgressProbeService? warpProbe = null)
+            IProxyEgressProbeService? warpProbe = null,
+            bool managedReady = true)
         {
             var connection = new SqliteConnection("Data Source=:memory:");
             await connection.OpenAsync();
@@ -996,6 +1027,10 @@ public sealed class ImportProxyFirstConnectionTests
             var pool = new StubClientPool();
             var probe = warpProbe ?? new ProxyEgressProbeService();
             temporaryWarpClaims ??= new TemporaryWarpClaimStore();
+            var managedWarp = warpDocker == null ? null : new FakeManagedWarpProvisioner(db, temporaryWarpClaims)
+            {
+                Ready = managedReady
+            };
             var warp = warpDocker == null
                 ? new WarpContainerManager(
                     db,
@@ -1016,7 +1051,8 @@ public sealed class ImportProxyFirstConnectionTests
                 NullLogger<ProxyManagementService>.Instance,
                 configuration,
                 temporaryWarpClaims: temporaryWarpClaims,
-                warpProxyUsageGuard: warpProxyUsageGuard);
+                warpProxyUsageGuard: warpProxyUsageGuard,
+                managedWarpProvisioner: managedWarp);
             var accountManagement = new AccountManagementService(
                 new AccountRepository(db),
                 new ChannelRepository(db),
@@ -1037,7 +1073,7 @@ public sealed class ImportProxyFirstConnectionTests
                 temporaryWarpClaims,
                 warpProxyUsageGuard);
 
-            return new ImportFixture(connection, db, importer, service, proxy, pool);
+            return new ImportFixture(connection, db, importer, service, proxy, pool) { ManagedWarp = managedWarp };
         }
 
         public async ValueTask DisposeAsync()

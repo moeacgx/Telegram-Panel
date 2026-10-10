@@ -113,7 +113,9 @@ public sealed record AccountProxyBindingInput(
     // 导入/登录首连使用的冻结快照。正式绑定在代理变更锁内复核，
     // 防止首条请求走旧出口而落库时绑定到已被编辑的新出口。
     ProxyConnectionOptions? ExpectedConnection = null,
-    bool? ExpectedUseGlobalProxy = null);
+    bool? ExpectedUseGlobalProxy = null,
+    bool AcceptWarpTerms = false,
+    string? WarpRequestId = null);
 
 /// <summary>
 /// 单个账号代理操作结果。

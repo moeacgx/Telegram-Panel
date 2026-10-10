@@ -940,7 +940,7 @@ public class AccountImportService
 
         var requestedStrategy = (binding.Strategy ?? string.Empty).Trim().ToLowerInvariant();
         var selectedBinding = binding;
-        var operationNonce = Guid.NewGuid().ToString("N");
+        var operationNonce = binding.WarpRequestId ?? Guid.NewGuid().ToString("N");
         PreparedImportProxy prepared = default;
         ImportResult? result = null;
         int? stagedAccountId = null;
@@ -959,6 +959,7 @@ public class AccountImportService
                 (selectedBinding, prepared) = await PrepareWarpPerAccountImportProxyAsync(
                     stableKeySeed,
                     operationNonce,
+                    binding.AcceptWarpTerms,
                     cancellationToken);
             }
             else
@@ -1069,7 +1070,8 @@ public class AccountImportService
                 new[] { account.Id },
                 selectedBinding,
                 cancellationToken,
-                expectedConnection: prepared.Connection);
+                expectedConnection: prepared.Connection,
+                managedWarpClaimToken: prepared.ManagedWarpLease?.ClaimToken);
             var item = operation.Items.FirstOrDefault(x => x.AccountId == account.Id);
             if (item?.Success != true)
             {
@@ -1183,10 +1185,22 @@ public class AccountImportService
                     CancellationToken.None);
             }
 
-            prepared.WarpUsageClaim?.Dispose();
-            if (!keepOwnedWarp && prepared.OwnedWarpProxyId is > 0)
-                await DeleteOwnedWarpBestEffortAsync(prepared.OwnedWarpProxyId.Value);
-            prepared.TemporaryWarpRequestClaim?.Dispose();
+            try
+            {
+                if (!keepOwnedWarp && prepared.OwnedWarpProxyId is > 0)
+                {
+                    if (stagedAccountId is > 0)
+                        await _proxyManagement.ReleaseAccountClientStrictAsync(stagedAccountId.Value);
+                    await StopOwnedManagedWarpBestEffortAsync(
+                        prepared.OwnedWarpProxyId.Value, prepared.ManagedWarpLease?.ClaimToken);
+                }
+            }
+            finally
+            {
+                prepared.WarpUsageClaim?.Dispose();
+                prepared.TemporaryWarpRequestClaim?.Dispose();
+                prepared.ManagedWarpLease?.Dispose();
+            }
         }
     }
 
@@ -1330,7 +1344,7 @@ public class AccountImportService
         if (strategy == "warp_per_account")
         {
             await _proxyManagement.ValidateBindingInputAsync(
-                new AccountProxyBindingInput("warp_per_account"),
+                binding,
                 cancellationToken);
             return;
         }
@@ -1361,6 +1375,19 @@ public class AccountImportService
             var binding = new AccountProxyBindingInput("existing", proxy.Id);
             try
             {
+                if (proxy.ManagedWgcfProfile != null)
+                {
+                    var managedLease = await _proxyManagement.AcquireManagedWarpLeaseAsync(proxy.Id, cancellationToken);
+                    try
+                    {
+                        var stableImportKey = BuildImportStableKey(stableKeySeed, operationNonce);
+                        var connection = AccountProxyResolver.BuildConnectionOptions(managedLease.Proxy, stableImportKey);
+                        return (binding with { ExpectedConnection = connection }, new PreparedImportProxy(
+                            connection, null, null, stableImportKey, null,
+                            EgressIp: managedLease.Proxy.EgressIp, ManagedWarpLease: managedLease));
+                    }
+                    catch { managedLease.Dispose(); throw; }
+                }
                 var prepared = await PrepareImportProxyAsync(
                     stableKeySeed,
                     operationNonce,
@@ -1370,7 +1397,8 @@ public class AccountImportService
             }
             catch (InvalidOperationException ex) when (
                 ex.Message.Contains("首次连接流程使用", StringComparison.Ordinal)
-                || ex.Message.Contains("正在维护", StringComparison.Ordinal))
+                || ex.Message.Contains("正在维护", StringComparison.Ordinal)
+                || ex.Message.Contains("占用", StringComparison.Ordinal))
             {
                 busyError = ex;
             }
@@ -1385,27 +1413,23 @@ public class AccountImportService
         PrepareWarpPerAccountImportProxyAsync(
             string stableKeySeed,
             string operationNonce,
+            bool acceptTerms,
             CancellationToken cancellationToken)
     {
         var stableImportKey = BuildImportStableKey(stableKeySeed, operationNonce);
-        var requestId = $"{ManagedWarpRequestPrefix}{stableImportKey}";
-        IDisposable? requestClaim = null;
-        IDisposable? warpUsageClaim = null;
-        OutboundProxy? newProxy = null;
+        var requestHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(stableImportKey)).AsSpan(0, 12)).ToLowerInvariant();
+        var requestId = $"{ManagedWarpRequestPrefix}{requestHash}";
+        ManagedWarpProxyLease? lease = null;
 
         try
         {
-            requestClaim = _temporaryWarpClaims.ClaimRequest(requestId);
-            newProxy = await _proxyManagement.CreateWarpAsync(
+            lease = await _proxyManagement.CreateManagedWarpLeaseAsync(
                 BuildImportWarpDisplayName(stableKeySeed),
                 requestId,
+                acceptTerms,
                 cancellationToken);
-            if (_warpProxyUsageGuard != null)
-            {
-                warpUsageClaim = _warpProxyUsageGuard.TryAcquireUsage(newProxy.Id)
-                    ?? throw new InvalidOperationException(
-                        "新创建的 WARP 正在维护或被其他首次连接流程占用，账号尚未发起首次连接");
-            }
+            var newProxy = lease.Proxy;
 
             var connection = AccountProxyResolver.BuildConnectionOptions(
                 newProxy,
@@ -1420,17 +1444,18 @@ public class AccountImportService
                     TemporaryResinLease: null,
                     TemporaryResinLeaseKey: null,
                     stableImportKey,
-                    warpUsageClaim,
-                    requestClaim,
-                    newProxy.Id,
-                    newProxy.EgressIp));
+                    WarpUsageClaim: null,
+                    OwnedWarpProxyId: newProxy.Id,
+                    EgressIp: newProxy.EgressIp,
+                    ManagedWarpLease: lease));
         }
         catch
         {
-            warpUsageClaim?.Dispose();
-            if (newProxy != null)
-                await DeleteOwnedWarpBestEffortAsync(newProxy.Id);
-            requestClaim?.Dispose();
+            if (lease != null)
+            {
+                try { await StopOwnedManagedWarpBestEffortAsync(lease.Proxy.Id, lease.ClaimToken); }
+                finally { lease.Dispose(); }
+            }
             throw;
         }
     }
@@ -1440,14 +1465,17 @@ public class AccountImportService
     {
         var proxies = await _proxyManagement.ListAsync(cancellationToken);
         var candidates = proxies
-            .Where(x => x.IsEnabled
-                        && x.Kind == OutboundProxyKinds.Warp
+            .Where(x => x.IsEnabled && ((x.ManagedWgcfProfile != null
+                        && x.Kind == OutboundProxyKinds.WireGuardWarp
+                        && x.Accounts.Count == 0 && x.TestStatus == "ok" && !string.IsNullOrWhiteSpace(x.EgressIp)
+                        && !_temporaryWarpClaims.IsManagedProfileClaimed(x.ManagedWgcfProfile))
+                        || (x.Kind == OutboundProxyKinds.Warp
                         && x.WarpProfile is
                         {
                             DesiredEnabled: true,
                             Status: "active"
                         }
-                        && !_temporaryWarpClaims.OwnsRequest(x.WarpProfile.RequestId))
+                        && !_temporaryWarpClaims.OwnsRequest(x.WarpProfile.RequestId))))
             .OrderBy(x => x.Accounts.Count)
             .ThenBy(x => x.Id)
             .ToList();
@@ -1608,31 +1636,18 @@ public class AccountImportService
         IDisposable? WarpUsageClaim,
         IDisposable? TemporaryWarpRequestClaim = null,
         int? OwnedWarpProxyId = null,
-        string? EgressIp = null);
+        string? EgressIp = null,
+        ManagedWarpProxyLease? ManagedWarpLease = null);
 
-    private async Task DeleteOwnedWarpBestEffortAsync(int proxyId)
+    private async Task StopOwnedManagedWarpBestEffortAsync(int proxyId, string? claimToken)
     {
         try
         {
-            await _proxyManagement.DeleteAsync(proxyId, CancellationToken.None);
-        }
-        catch (KeyNotFoundException)
-        {
-            // 已被其他清理流程删除。
-        }
-        catch (ProxyInUseException ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Import-created WARP proxy {ProxyId} is already bound and will be retained",
-                proxyId);
+            await _proxyManagement.StopUnboundManagedWarpAsync(proxyId, claimToken, CancellationToken.None);
         }
         catch (Exception ex)
         {
-            _logger.LogError(
-                ex,
-                "Failed to clean import-created WARP proxy {ProxyId}",
-                proxyId);
+            _logger.LogWarning(ex, "轻量 WARP 导入失败后的停止未完成，保留档案 {ProxyId}", proxyId);
         }
     }
 
