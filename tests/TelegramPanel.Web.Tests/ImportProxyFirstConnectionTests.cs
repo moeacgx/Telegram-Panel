@@ -708,6 +708,35 @@ public sealed class ImportProxyFirstConnectionTests
     }
 
     [Fact]
+    public async Task 自动WARP池可独占未绑定轻量出口且第二账号不会复用同出口()
+    {
+        await using var fixture = await ImportFixture.CreateAsync(OutboundProxyProtocols.Http,
+            warpDocker: new WarpLifecycleRegressionTests.FakeWarpDockerClient());
+        int managedId;
+        using (var ready = await fixture.ManagedWarp!.ProvisionAsync("pool", Guid.NewGuid().ToString("D"), true))
+            managedId = ready.Proxy.Id;
+        fixture.Importer.BeforeImportAsync = async () =>
+        {
+            using var competing = await fixture.ManagedWarp!.AcquireAsync(managedId);
+        };
+        var blocked = await fixture.Service.ImportFromStringSessionAsync("session-data", 12345,
+            "0123456789abcdef0123456789abcdef", proxyBinding: new("warp_pool"));
+        Assert.False(blocked.Success);
+        Assert.Contains("占用", blocked.Error);
+        fixture.Importer.BeforeImportAsync = null;
+        fixture.Importer.ResultFactory = _ => new ImportResult(true, "8613800000399", 10399, "pool", "sessions/pool.session");
+        var bound = await fixture.Service.ImportFromStringSessionAsync("session-data", 12345,
+            "0123456789abcdef0123456789abcdef", proxyBinding: new("warp_pool"));
+        Assert.True(bound.Success, bound.Error);
+        Assert.Equal(managedId, (await fixture.Db.Accounts.AsNoTracking().SingleAsync()).ProxyId);
+        var second = await fixture.Service.ImportFromStringSessionAsync("other-session", 12345,
+            "0123456789abcdef0123456789abcdef", proxyBinding: new("warp_pool"));
+        Assert.False(second.Success);
+        Assert.Contains("没有可自动分配", second.Error);
+        Assert.Equal(1, fixture.ManagedWarp!.ProvisionCalls);
+    }
+
+    [Fact]
     public async Task Zip条目数超限会在解压前整体拒绝()
     {
         await using var fixture = await ImportFixture.CreateAsync(OutboundProxyProtocols.Http);
@@ -1100,6 +1129,7 @@ public sealed class ImportProxyFirstConnectionTests
     private sealed class RecordingSessionImporter : ISessionImporter
     {
         public Action? BeforeImport { get; set; }
+        public Func<Task>? BeforeImportAsync { get; set; }
         public Func<int, ImportResult>? ResultFactory { get; set; }
         public ProxyConnectionOptions? SeenProxy { get; private set; }
         public List<ProxyConnectionOptions?> SeenProxies { get; } = new();
@@ -1134,18 +1164,19 @@ public sealed class ImportProxyFirstConnectionTests
 
         public Task<bool> ValidateSessionAsync(string sessionPath) => Task.FromResult(true);
 
-        private Task<ImportResult> ImportAsync(ProxyConnectionOptions? proxy)
+        private async Task<ImportResult> ImportAsync(ProxyConnectionOptions? proxy)
         {
             ImportCount++;
             SeenProxy = proxy;
             SeenProxies.Add(proxy);
             BeforeImport?.Invoke();
-            return Task.FromResult(ResultFactory?.Invoke(ImportCount) ?? new ImportResult(
+            if (BeforeImportAsync != null) await BeforeImportAsync();
+            return ResultFactory?.Invoke(ImportCount) ?? new ImportResult(
                 true,
                 "8613800000000",
                 10001,
                 "imported",
-                "sessions/8613800000000.session"));
+                "sessions/8613800000000.session");
         }
     }
 
