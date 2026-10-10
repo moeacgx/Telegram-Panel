@@ -15,261 +15,129 @@ namespace TelegramPanel.Web.Tests;
 public sealed class WarpBindingClaimRegressionTests
 {
     [Fact]
-    public async Task 逐账号创建WARP会持有请求占用直到失败补偿删除结束()
+    public async Task 逐账号创建轻量WARP会持有独占直到失败停止结束且保留档案()
     {
-        await using var connection = new SqliteConnection("Data Source=:memory:");
-        await connection.OpenAsync();
-        var options = new DbContextOptionsBuilder<AppDbContext>()
-            .UseSqlite(connection)
-            .Options;
-        await using var db = new AppDbContext(options);
-        await db.Database.EnsureCreatedAsync();
-
-        var account = new Account
-        {
-            Phone = "8613800000888",
-            UserId = 888,
-            SessionPath = "sessions/warp-binding-claim.session",
-            ApiId = 1,
-            ApiHash = "hash",
-            IsActive = true
-        };
-        db.Accounts.Add(account);
-        await db.SaveChangesAsync();
-
-        var claims = new TemporaryWarpClaimStore();
-        string? requestId = null;
+        await using var f = await Fixture.CreateAsync();
         bool? claimedDuringBinding = null;
-        bool? claimedDuringCompensation = null;
-        var innerDocker = new WarpLifecycleRegressionTests.FakeWarpDockerClient();
-        var docker = new ObservingDockerClient(innerDocker, async () =>
+        bool? claimedDuringStop = null;
+        f.Pool.OnRemove = async () =>
         {
-            var cleanupRequestId = await db.WarpProfiles
-                .AsNoTracking()
-                .Select(x => x.RequestId)
-                .SingleAsync();
-            claimedDuringCompensation = claims.OwnsRequest(cleanupRequestId);
-        });
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Proxy:Warp:Enabled"] = "true",
-                ["Proxy:Warp:DockerSocketPath"] = Path.Combine(
-                    Path.GetTempPath(),
-                    "fake-docker.sock"),
-                ["Proxy:Warp:ProxyHostMode"] = "container"
-            })
-            .Build();
-        var probe = new SuccessfulProbeService();
-        var manager = new WarpContainerManager(
-            db,
-            configuration,
-            probe,
-            NullLogger<WarpContainerManager>.Instance,
-            new FakeDockerClientFactory(docker));
-        var clientPool = new RejectingClientPool(async () =>
+            var proxy = await f.Db.OutboundProxies.SingleAsync();
+            claimedDuringBinding = f.Claims.IsManagedProfileClaimed(proxy.ManagedWgcfProfile!);
+            throw new InvalidOperationException("模拟旧客户端无法断开");
+        };
+        f.Provisioner.OnStop = proxy =>
         {
-            requestId = await db.WarpProfiles
-                .AsNoTracking()
-                .Select(x => x.RequestId)
-                .SingleAsync();
-            claimedDuringBinding = claims.OwnsRequest(requestId);
-            throw new InvalidOperationException("模拟绑定前旧客户端无法断开");
-        });
-        var service = new ProxyManagementService(
-            db,
-            clientPool,
-            probe,
-            manager,
-            NullLogger<ProxyManagementService>.Instance,
-            configuration,
-            claims);
-
-        var result = await service.BindAccountsAsync(
-            new[] { account.Id },
-            new AccountProxyBindingInput("warp_per_account"));
-
-        Assert.Equal(0, result.Success);
+            claimedDuringStop = f.Claims.IsManagedProfileClaimed(proxy.ManagedWgcfProfile!);
+            return Task.CompletedTask;
+        };
+        var result = await f.Service.BindAccountsAsync(new[] { f.Account.Id },
+            new("warp_per_account", AcceptWarpTerms: true));
         Assert.Equal(1, result.Failed);
         Assert.True(claimedDuringBinding);
-        Assert.True(claimedDuringCompensation);
-        Assert.NotNull(requestId);
-        Assert.False(claims.OwnsRequest(requestId));
-        Assert.Empty(await db.OutboundProxies.AsNoTracking().ToListAsync());
-        var deletedProfile = await db.WarpProfiles.AsNoTracking().SingleAsync();
-        Assert.Equal("deleted", deletedProfile.Status);
-        Assert.Null(deletedProfile.OutboundProxyId);
-        Assert.Empty(innerDocker.Containers);
-        Assert.Empty(innerDocker.Volumes);
+        Assert.True(claimedDuringStop);
+        var retained = await f.Db.OutboundProxies.AsNoTracking().SingleAsync();
+        Assert.False(retained.IsEnabled);
+        Assert.False(f.Claims.IsManagedProfileClaimed(retained.ManagedWgcfProfile!));
+        Assert.Null((await f.Db.Accounts.AsNoTracking().SingleAsync()).ProxyId);
+        Assert.Empty(await f.Db.WarpProfiles.ToListAsync());
     }
 
-    private sealed class FakeDockerClientFactory : WarpContainerManager.IWarpDockerClientFactory
+    [Fact]
+    public async Task 未接受条款和不可用服务均拒绝轻量创建且不创建Docker资源()
     {
-        private readonly WarpContainerManager.IWarpDockerClient _client;
-
-        public FakeDockerClientFactory(WarpContainerManager.IWarpDockerClient client)
-        {
-            _client = client;
-        }
-
-        public bool PlatformSupported => true;
-
-        public WarpContainerManager.IWarpDockerClient Create(string socketPath) => _client;
+        await using var f = await Fixture.CreateAsync();
+        await Assert.ThrowsAsync<ArgumentException>(() => f.Service.BindAccountsAsync(new[] { f.Account.Id }, new("warp_per_account")));
+        Assert.Equal(0, f.Provisioner.ProvisionCalls);
+        Assert.Empty(await f.Db.OutboundProxies.ToListAsync());
+        await Assert.ThrowsAsync<ArgumentException>(() => f.Service.CreateWarpAsync("test", "request", protocol: "http", acceptTerms: true));
+        Assert.Equal(0, f.Provisioner.ProvisionCalls);
     }
 
-    private sealed class ObservingDockerClient : WarpContainerManager.IWarpDockerClient
+    [Fact]
+    public async Task 首连租约阻止外部抢绑定和启停但允许所有者绑定()
     {
-        private readonly WarpContainerManager.IWarpDockerClient _inner;
-        private readonly Func<Task> _onRemoveContainer;
-
-        public ObservingDockerClient(
-            WarpContainerManager.IWarpDockerClient inner,
-            Func<Task> onRemoveContainer)
-        {
-            _inner = inner;
-            _onRemoveContainer = onRemoveContainer;
-        }
-
-        public Task<string?> GetVersionAsync(CancellationToken cancellationToken) =>
-            _inner.GetVersionAsync(cancellationToken);
-
-        public Task EnsureImageAsync(
-            string image,
-            bool pullIfMissing,
-            CancellationToken cancellationToken) =>
-            _inner.EnsureImageAsync(image, pullIfMissing, cancellationToken);
-
-        public Task CreateVolumeAsync(
-            string volumeName,
-            string profileId,
-            CancellationToken cancellationToken) =>
-            _inner.CreateVolumeAsync(volumeName, profileId, cancellationToken);
-
-        public Task<string> CreateContainerAsync(
-            WarpContainerManager.WarpSettings settings,
-            string profileId,
-            string containerName,
-            string volumeName,
-            int hostPort,
-            CancellationToken cancellationToken) =>
-            _inner.CreateContainerAsync(
-                settings,
-                profileId,
-                containerName,
-                volumeName,
-                hostPort,
-                cancellationToken);
-
-        public Task StartContainerAsync(
-            string containerId,
-            CancellationToken cancellationToken) =>
-            _inner.StartContainerAsync(containerId, cancellationToken);
-
-        public Task StopContainerAsync(
-            string containerId,
-            CancellationToken cancellationToken) =>
-            _inner.StopContainerAsync(containerId, cancellationToken);
-
-        public Task RestartContainerAsync(
-            string containerId,
-            CancellationToken cancellationToken) =>
-            _inner.RestartContainerAsync(containerId, cancellationToken);
-
-        public Task<bool> VerifyContainerOwnershipAsync(
-            string containerId,
-            string profileId,
-            CancellationToken cancellationToken) =>
-            _inner.VerifyContainerOwnershipAsync(containerId, profileId, cancellationToken);
-
-        public Task<bool> VerifyVolumeOwnershipAsync(
-            string volumeName,
-            string profileId,
-            CancellationToken cancellationToken) =>
-            _inner.VerifyVolumeOwnershipAsync(volumeName, profileId, cancellationToken);
-
-        public async Task RemoveContainerAsync(
-            string containerId,
-            CancellationToken cancellationToken)
-        {
-            await _onRemoveContainer();
-            await _inner.RemoveContainerAsync(containerId, cancellationToken);
-        }
-
-        public Task RemoveVolumeAsync(
-            string volumeName,
-            CancellationToken cancellationToken) =>
-            _inner.RemoveVolumeAsync(volumeName, cancellationToken);
-
-        public void Dispose()
-        {
-            // 测试工厂重用同一个假客户端，不在单次操作后释放。
-        }
+        await using var f = await Fixture.CreateAsync();
+        using var lease = await f.Service.CreateManagedWarpLeaseAsync("managed", Guid.NewGuid().ToString("D"), true);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Service.BindAccountsAsync(new[] { f.Account.Id }, new("existing", lease.Proxy.Id)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Service.SetManagedWgcfEnabledAsync(lease.Proxy.ManagedWgcfProfile!, false));
+        Assert.Null((await f.Db.Accounts.AsNoTracking().SingleAsync()).ProxyId);
+        var result = await f.Service.BindAccountsAsync(new[] { f.Account.Id }, new("existing", lease.Proxy.Id),
+            managedWarpClaimToken: lease.ClaimToken);
+        Assert.Equal(1, result.Success);
+        Assert.Equal(lease.Proxy.Id, (await f.Db.Accounts.AsNoTracking().SingleAsync()).ProxyId);
     }
 
-    private sealed class RejectingClientPool : ITelegramClientPool
+    [Fact]
+    public async Task 相同操作重试派生相同逐账号请求且不会产生第二份档案()
     {
-        private readonly Func<Task> _onStrictRemove;
+        await using var f = await Fixture.CreateAsync();
+        var input = new AccountProxyBindingInput("warp_per_account", AcceptWarpTerms: true, WarpRequestId: Guid.NewGuid().ToString("D"));
+        Assert.Equal(1, (await f.Service.BindAccountsAsync(new[] { f.Account.Id }, input)).Success);
+        var original = await f.Db.OutboundProxies.AsNoTracking().SingleAsync();
+        Assert.Equal(1, (await f.Service.BindAccountsAsync(new[] { f.Account.Id }, input)).Success);
+        Assert.Equal(original.Id, (await f.Db.OutboundProxies.AsNoTracking().SingleAsync()).Id);
+    }
 
-        public RejectingClientPool(Func<Task> onStrictRemove)
+    [Fact]
+    public async Task 创建期间旧全局模式改变时CAS拒绝切换并停止新出口()
+    {
+        await using var f = await Fixture.CreateAsync();
+        f.Provisioner.OnProvision = async _ =>
         {
-            _onStrictRemove = onStrictRemove;
-        }
+            f.Account.UseGlobalProxy = !f.Account.UseGlobalProxy;
+            await f.Db.SaveChangesAsync();
+        };
+        var result = await f.Service.BindAccountsAsync(new[] { f.Account.Id }, new("warp_per_account", AcceptWarpTerms: true));
+        Assert.Equal(1, result.Failed);
+        Assert.Null((await f.Db.Accounts.AsNoTracking().SingleAsync()).ProxyId);
+        Assert.Equal(1, f.Provisioner.StopCalls);
+    }
 
+    private sealed class Fixture : IAsyncDisposable
+    {
+        private readonly SqliteConnection _connection;
+        public AppDbContext Db { get; }
+        public Account Account { get; }
+        public TemporaryWarpClaimStore Claims { get; } = new();
+        public RecordingPool Pool { get; } = new();
+        public FakeManagedWarpProvisioner Provisioner { get; }
+        public ProxyManagementService Service { get; }
+        private Fixture(SqliteConnection connection, AppDbContext db, Account account)
+        {
+            _connection = connection;
+            Db = db;
+            Account = account;
+            Provisioner = new(db, Claims);
+            var configuration = new ConfigurationBuilder().Build();
+            var probe = new ProxyEgressProbeService();
+            Service = new(db, Pool, probe, new WarpContainerManager(db, configuration, probe, NullLogger<WarpContainerManager>.Instance),
+                NullLogger<ProxyManagementService>.Instance, configuration, Claims, managedWarpProvisioner: Provisioner);
+        }
+        public static async Task<Fixture> CreateAsync()
+        {
+            var connection = new SqliteConnection("Data Source=:memory:");
+            await connection.OpenAsync();
+            var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+            await db.Database.EnsureCreatedAsync();
+            var account = new Account { Phone = "8613800000888", UserId = 888, SessionPath = "sessions/test.session", ApiId = 1, ApiHash = "hash", IsActive = true };
+            db.Accounts.Add(account);
+            await db.SaveChangesAsync();
+            return new(connection, db, account);
+        }
+        public async ValueTask DisposeAsync() { await Db.DisposeAsync(); await _connection.DisposeAsync(); }
+    }
+
+    private sealed class RecordingPool : ITelegramClientPool
+    {
+        public Func<Task>? OnRemove { get; set; }
         public int ActiveClientCount => 0;
-
-        public Task<Client> GetOrCreateClientAsync(
-            int accountId,
-            int apiId,
-            string apiHash,
-            string sessionPath,
-            string? sessionKey = null,
-            string? phoneNumber = null,
-            long? userId = null) =>
-            throw new NotSupportedException();
-
+        public Task<Client> GetOrCreateClientAsync(int accountId, int apiId, string apiHash, string sessionPath,
+            string? sessionKey = null, string? phoneNumber = null, long? userId = null) => throw new NotSupportedException();
         public Client? GetClient(int accountId) => null;
-
         public Task RemoveClientAsync(int accountId) => Task.CompletedTask;
-
-        public Task RemoveClientStrictAsync(int accountId) => _onStrictRemove();
-
+        public Task RemoveClientStrictAsync(int accountId) => OnRemove?.Invoke() ?? Task.CompletedTask;
         public Task RemoveAllClientsAsync() => Task.CompletedTask;
-
         public bool IsClientConnected(int accountId) => false;
-    }
-
-    private sealed class SuccessfulProbeService : IProxyEgressProbeService
-    {
-        public Task<EgressProbeResult> ProbePanelAsync(
-            CancellationToken cancellationToken = default) =>
-            SuccessAsync(cancellationToken);
-
-        public Task<EgressProbeResult> ProbeProxyAsync(
-            OutboundProxy proxy,
-            string stableAccountKey,
-            CancellationToken cancellationToken = default) =>
-            SuccessAsync(cancellationToken);
-
-        public Task<EgressProbeResult> ProbeProxyAsync(
-            ProxyConnectionOptions options,
-            bool requireWarp = false,
-            CancellationToken cancellationToken = default) =>
-            SuccessAsync(cancellationToken);
-
-        private static Task<EgressProbeResult> SuccessAsync(
-            CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(new EgressProbeResult(
-                true,
-                "104.16.0.1",
-                "US",
-                null,
-                "Cloudflare",
-                "on",
-                10,
-                DateTime.UtcNow,
-                null));
-        }
     }
 }

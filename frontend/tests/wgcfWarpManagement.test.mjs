@@ -21,11 +21,11 @@ function setup(overrides = {}) {
   const js = ts.transpileModule(script.replace(/^import[\s\S]*?from ['"][^'"]+['"]\s*$/gm, ''), {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
   }).outputText.replace(/export \{\};?/, '')
-  const factory = new Function('ref', 'reactive', 'computed', 'onMounted', 'onBeforeUnmount', 'defineEmits', 'panelApi', 'ElMessage', 'crypto',
+  const factory = new Function('ref', 'reactive', 'computed', 'onMounted', 'onBeforeUnmount', 'defineEmits', 'panelApi', 'ElMessage', 'crypto', 'defineExpose',
     `${js}\nreturn {status, createDialog, bindDialog, profiles, busyProfiles, openCreate, createProfile, operate, canBind, openBind, bindAccount, loadStatus};`)
   const state = factory(ref, reactive, computed, () => {}, () => {}, () => (...args) => events.push(args), api,
     Object.fromEntries(['success', 'warning', 'error'].map((type) => [type, (message) => messages.push({ type, message })])),
-    { randomUUID: () => '0efca5bd-b7b0-4a77-92b7-112c686ef591' })
+    { randomUUID: () => '0efca5bd-b7b0-4a77-92b7-112c686ef591' }, () => {})
   state.status.value = { available: true, reason: null, profiles: [] }
   return { ...state, messages, events }
 }

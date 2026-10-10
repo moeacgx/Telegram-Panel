@@ -37,6 +37,7 @@ public sealed partial class ProxyManagementService
     private readonly IConfiguration? _configuration;
     private readonly TemporaryWarpClaimStore? _temporaryWarpClaims;
     private readonly IWarpProxyUsageGuard? _warpProxyUsageGuard;
+    private readonly IManagedWarpProvisioner? _managedWarpProvisioner;
 
     public ProxyManagementService(
         AppDbContext db,
@@ -46,7 +47,8 @@ public sealed partial class ProxyManagementService
         ILogger<ProxyManagementService> logger,
         IConfiguration? configuration = null,
         TemporaryWarpClaimStore? temporaryWarpClaims = null,
-        IWarpProxyUsageGuard? warpProxyUsageGuard = null)
+        IWarpProxyUsageGuard? warpProxyUsageGuard = null,
+        IManagedWarpProvisioner? managedWarpProvisioner = null)
     {
         _db = db;
         _clientPool = clientPool;
@@ -56,6 +58,7 @@ public sealed partial class ProxyManagementService
         _configuration = configuration;
         _temporaryWarpClaims = temporaryWarpClaims;
         _warpProxyUsageGuard = warpProxyUsageGuard;
+        _managedWarpProvisioner = managedWarpProvisioner;
     }
 
     public async Task<IReadOnlyList<OutboundProxy>> ListAsync(
@@ -427,12 +430,68 @@ public sealed partial class ProxyManagementService
         ?? throw new InvalidOperationException(
             "Telegram 全局代理尚未配置，已阻止降级为直连");
 
-    public Task<OutboundProxy> CreateWarpAsync(
+    public async Task<OutboundProxy> CreateWarpAsync(
         string? name,
         string? requestId,
         CancellationToken cancellationToken = default,
-        string? protocol = null) =>
-        _warpManager.CreateAsync(name, requestId, cancellationToken, protocol);
+        string? protocol = null,
+        bool acceptTerms = false)
+    {
+        if (!string.IsNullOrWhiteSpace(protocol) && protocol != OutboundProxyProtocols.Socks5)
+            throw new ArgumentException("轻量 WARP 仅支持 SOCKS5 协议", nameof(protocol));
+        using var lease = await CreateManagedWarpLeaseAsync(
+            NormalizeName(name, "WARP"), requestId ?? Guid.NewGuid().ToString("N"), acceptTerms, cancellationToken);
+        return lease.Proxy;
+    }
+
+    public async Task<ManagedWarpProxyLease> CreateManagedWarpLeaseAsync(
+        string name, string requestId, bool acceptTerms, CancellationToken cancellationToken = default)
+    {
+        if (!acceptTerms)
+            throw new ArgumentException("创建轻量 WARP 前必须阅读并接受 Cloudflare WARP 条款");
+        var provisioner = _managedWarpProvisioner
+            ?? throw new InvalidOperationException("轻量 WARP 创建服务不可用");
+        var lease = await provisioner.ProvisionAsync(name, requestId, acceptTerms, cancellationToken);
+        try
+        {
+            EnsureManagedWarpLeaseReady(lease);
+            return lease;
+        }
+        catch
+        {
+            try { await provisioner.StopUnboundAsync(lease.Proxy.Id, lease.ClaimToken, CancellationToken.None); }
+            finally { lease.Dispose(); }
+            throw;
+        }
+    }
+
+    public async Task<ManagedWarpProxyLease> AcquireManagedWarpLeaseAsync(
+        int proxyId, CancellationToken cancellationToken = default)
+    {
+        var lease = await (_managedWarpProvisioner
+            ?? throw new InvalidOperationException("轻量 WARP 创建服务不可用"))
+            .AcquireAsync(proxyId, cancellationToken);
+        try { EnsureManagedWarpLeaseReady(lease); return lease; }
+        catch { lease.Dispose(); throw; }
+    }
+
+    public Task StopUnboundManagedWarpAsync(int proxyId, string? claimToken = null,
+        CancellationToken cancellationToken = default) =>
+        (_managedWarpProvisioner ?? throw new InvalidOperationException("轻量 WARP 创建服务不可用"))
+        .StopUnboundAsync(proxyId, claimToken, cancellationToken);
+
+    public Task<ManagedWarpAvailability> GetManagedWarpAvailabilityAsync(CancellationToken cancellationToken = default) =>
+        _managedWarpProvisioner?.GetAvailabilityAsync(cancellationToken)
+        ?? Task.FromResult(new ManagedWarpAvailability(false, "轻量 WARP 创建服务不可用"));
+
+    private static void EnsureManagedWarpLeaseReady(ManagedWarpProxyLease lease)
+    {
+        if (string.IsNullOrWhiteSpace(lease.Proxy.ManagedWgcfProfile)
+            || lease.Proxy.Kind != OutboundProxyKinds.WireGuardWarp
+            || lease.Proxy.Protocol != OutboundProxyProtocols.Socks5 || !lease.Proxy.IsEnabled)
+            throw new InvalidOperationException("轻量 WARP 出口尚未就绪，未发起首次连接");
+        EnsureWireGuardWarpReadyForBinding(lease.Proxy);
+    }
 
     public Task<WarpRuntimeStatus> GetWarpStatusAsync(
         CancellationToken cancellationToken = default) =>

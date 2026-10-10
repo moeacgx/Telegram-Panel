@@ -25,20 +25,16 @@ test('出口 IP 明确显示协议栈与检测状态', () => {
   assert.match(egressUtilSource, /normalized\.includes\(':'\) \? 'IPv6' : 'IPv4'/)
 })
 
-test('一键创建 WARP 支持默认协议和单次 HTTP SOCKS5 覆盖', () => {
-  assert.match(typesSource, /defaultProtocol: WarpProxyProtocol/)
-  assert.match(typesSource, /protocol\?: WarpProxyProtocol \| null/)
-  assert.match(proxiesSource, /v-model="warpDialog\.protocol"/)
-  assert.match(proxiesSource, /value="http">HTTP/)
-  assert.match(proxiesSource, /value="socks5">SOCKS5/)
-  assert.match(proxiesSource, /warpStatus\.value\?\.defaultProtocol === 'socks5'/)
-  assert.match(proxiesSource, /protocol: warpDialog\.protocol/)
+test('一键创建 WARP 统一打开轻量创建并保留旧代理维护', () => {
+  assert.match(proxiesSource, /@click="openLightweightWarpCreate"/)
+  assert.match(proxiesSource, /wgcfWarpPanel\.value\?\.openCreate\(\)/)
+  assert.doesNotMatch(proxiesSource, /createWarpProxies|warpDialog|openWarpCreateForGlobal/)
+  assert.match(proxiesSource, /panelApi\.refreshWarpProxy/)
+  assert.match(typesSource, /managedWgcfProfile\?: string \| null/)
 })
 
 test('WARP 创建与首次连接分配说明资源边界', () => {
-  assert.match(proxiesSource, /每创建一个 WARP，都会启动一个独立 Docker 容器/)
-  assert.match(proxiesSource, /持续占用服务器内存与少量 CPU/)
-  assert.match(proxiesSource, /根据服务器资源控制创建数量/)
+  assert.doesNotMatch(proxiesSource, /每创建一个 WARP，都会启动一个独立 Docker 容器/)
   assert.match(accountLoginSource, /不会创建新容器/)
   assert.doesNotMatch(accountImportSource, /每个账号都会创建一个独立 Docker 容器和数据卷/)
   assert.match(accountImportSource, /不会创建新的 Docker 容器|不会创建新容器/)

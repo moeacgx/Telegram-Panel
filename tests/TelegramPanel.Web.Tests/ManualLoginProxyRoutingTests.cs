@@ -20,6 +20,170 @@ namespace TelegramPanel.Web.Tests;
 public sealed class ManualLoginProxyRoutingTests
 {
     [Fact]
+    public void 准备完成登记失败时仍占有登录ID直到资源释放()
+    {
+        var store = new AccountLoginProxyStateStore();
+        var connection = new ProxyConnectionOptions(1, "占用出口", OutboundProxyKinds.Warp,
+            OutboundProxyProtocols.Socks5, "127.0.0.1", 1080, null, null, null);
+        using var maintenance = store.TryAcquireMaintenance(1);
+        Assert.True(store.TryBeginPreparation(1912));
+        Assert.False(store.TryAddPrepared(new AccountLoginProxyState(1912,
+            new AccountProxyBindingInput("existing", 1), "existing", new AccountProxyResolution(connection, false),
+            null, null, null, DateTimeOffset.UtcNow), out _));
+        Assert.False(store.TryBeginPreparation(1912));
+        store.ReleaseLoginClaim(1912);
+        Assert.True(store.TryBeginPreparation(1912));
+        store.ReleaseLoginClaim(1912);
+    }
+
+    [Fact]
+    public async Task 轻量WARP首次连接必须明确接受条款()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            fixture.Coordinator.PrepareAsync(1901, "warp_per_account", null));
+        Assert.Empty(fixture.ManagedWarp.Requests);
+        Assert.False(fixture.Coordinator.HasState(1901));
+    }
+
+    [Fact]
+    public async Task 轻量WARP登录冻结出口且二维码重试不重复注册()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var state = await fixture.Coordinator.PrepareAsync(
+            1902, "warp_per_account", null, acceptWarpTerms: true);
+        Assert.Equal("warp_per_account", state.FrozenStrategy);
+        Assert.NotNull(state.ManagedWarpLease);
+        Assert.True(fixture.StateStore.OwnsWarpProxy(state.OwnedWarpProxyId!.Value));
+        Assert.Equal($"{AccountLoginProxyCoordinator.ManagedWarpRequestPrefix}1902",
+            Assert.Single(fixture.ManagedWarp.Requests));
+        using (var lease = fixture.Coordinator.ClaimFrozenState(1902, "warp_per_account", null))
+            Assert.Same(state.ManagedWarpLease, lease.State.ManagedWarpLease);
+        Assert.Single(fixture.ManagedWarp.Requests);
+        await fixture.Coordinator.AbandonAsync(1902);
+        Assert.Single(fixture.ManagedWarp.Stopped);
+        Assert.Single(await fixture.Db.OutboundProxies.ToListAsync());
+        Assert.Equal(1, fixture.ManagedWarp.ReleaseCount);
+    }
+
+    [Fact]
+    public async Task 同登录ID准备期间拒绝第二次轻量创建()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        fixture.ManagedWarp.WaitForProvision = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var preparing = fixture.Coordinator.PrepareAsync(1903, "warp_per_account", null, acceptWarpTerms: true);
+        await fixture.ManagedWarp.Started.Task;
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Coordinator.PrepareAsync(1903, "warp_per_account", null, acceptWarpTerms: true));
+        fixture.ManagedWarp.WaitForProvision.SetResult();
+        await preparing;
+        Assert.Single(fixture.ManagedWarp.Requests);
+        await fixture.Coordinator.AbandonAsync(1903);
+    }
+
+    [Fact]
+    public async Task 首次轻量创建失败可重新准备同登录ID()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        fixture.ManagedWarp.ProvisionError = new InvalidOperationException("模拟运行器未就绪");
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Coordinator.PrepareAsync(1904, "warp_per_account", null, acceptWarpTerms: true));
+        Assert.False(fixture.Coordinator.HasState(1904));
+        fixture.ManagedWarp.ProvisionError = null;
+        await fixture.Coordinator.PrepareAsync(1904, "warp_per_account", null, acceptWarpTerms: true);
+        await fixture.Coordinator.AbandonAsync(1904);
+    }
+
+    [Fact]
+    public async Task 取消已有轻量出口登录不会停止用户出口()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var proxy = await fixture.ManagedWarp.AddManagedProxyAsync();
+        await fixture.Coordinator.PrepareAsync(1905, "existing", proxy.Id);
+        await fixture.Coordinator.AbandonAsync(1905);
+        Assert.Empty(fixture.ManagedWarp.Stopped);
+        Assert.Equal(1, fixture.ManagedWarp.ReleaseCount);
+        Assert.True((await fixture.Db.OutboundProxies.SingleAsync()).IsEnabled);
+    }
+
+    [Fact]
+    public async Task 轻量取消严格断开失败保留冻结路由与租约()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var state = await fixture.Coordinator.PrepareAsync(1906, "warp_per_account", null, acceptWarpTerms: true);
+        fixture.ClientPool.StrictRemoveError = new IOException("模拟断开失败");
+        await Assert.ThrowsAsync<IOException>(() => fixture.Coordinator.AbandonAsync(1906));
+        Assert.True(fixture.Coordinator.HasState(1906));
+        Assert.True(fixture.StateStore.OwnsWarpProxy(state.OwnedWarpProxyId!.Value));
+        Assert.Empty(fixture.ManagedWarp.Stopped);
+        Assert.Equal(0, fixture.ManagedWarp.ReleaseCount);
+        fixture.ClientPool.StrictRemoveError = null;
+        await fixture.Coordinator.AbandonAsync(1906);
+    }
+
+    [Fact]
+    public async Task 轻量停止失败保留登录状态供过期清理重试()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await fixture.Coordinator.PrepareAsync(1907, "warp_per_account", null, acceptWarpTerms: true);
+        fixture.ManagedWarp.StopError = new IOException("模拟停止失败");
+        await Assert.ThrowsAsync<IOException>(() => fixture.Coordinator.AbandonAsync(1907));
+        Assert.True(fixture.Coordinator.HasState(1907));
+        Assert.Equal(0, fixture.ManagedWarp.ReleaseCount);
+        fixture.ManagedWarp.StopError = null;
+        await fixture.Coordinator.AbandonAsync(1907);
+        Assert.False(fixture.Coordinator.HasState(1907));
+        Assert.Equal(1, fixture.ManagedWarp.ReleaseCount);
+    }
+
+    [Fact]
+    public async Task 轻量登录成功把同一出口独占绑定正式账号()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var account = await fixture.AddInactiveAccountAsync();
+        var state = await fixture.Coordinator.PrepareAsync(1908, "warp_per_account", null, acceptWarpTerms: true);
+        await fixture.Coordinator.CompleteAsync(1908, account.Id);
+        var saved = await fixture.Db.Accounts.AsNoTracking().SingleAsync();
+        Assert.Equal(state.Resolution.Proxy!.ProxyId, saved.ProxyId);
+        Assert.True(saved.IsActive);
+        Assert.Empty(fixture.ManagedWarp.Stopped);
+        Assert.Equal(1, fixture.ManagedWarp.ReleaseCount);
+        Assert.False(fixture.StateStore.OwnsWarpProxy(state.OwnedWarpProxyId!.Value));
+    }
+
+    [Fact]
+    public async Task 轻量登录期间连接参数变化会停止临时出口并保持账号停用()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var account = await fixture.AddInactiveAccountAsync();
+        var state = await fixture.Coordinator.PrepareAsync(1909, "warp_per_account", null, acceptWarpTerms: true);
+        state.ManagedWarpLease!.Proxy.Port++;
+        await fixture.Db.SaveChangesAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Coordinator.CompleteAsync(1909, account.Id));
+        var saved = await fixture.Db.Accounts.AsNoTracking().SingleAsync();
+        Assert.False(saved.IsActive);
+        Assert.Null(saved.ProxyId);
+        Assert.Equal(state.OwnedWarpProxyId, Assert.Single(fixture.ManagedWarp.Stopped));
+        Assert.Single(await fixture.Db.OutboundProxies.ToListAsync());
+        Assert.Equal(1, fixture.ManagedWarp.ReleaseCount);
+    }
+
+    [Fact]
+    public async Task 已有轻量出口不能被两个登录会话同时使用()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var proxy = await fixture.ManagedWarp.AddManagedProxyAsync();
+        await fixture.Coordinator.PrepareAsync(1910, "existing", proxy.Id);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Coordinator.PrepareAsync(1911, "existing", proxy.Id));
+        Assert.False(fixture.Coordinator.HasState(1911));
+        await fixture.Coordinator.AbandonAsync(1910);
+        await fixture.Coordinator.PrepareAsync(1911, "existing", proxy.Id);
+        await fixture.Coordinator.AbandonAsync(1911);
+        Assert.Empty(fixture.ManagedWarp.Stopped);
+    }
+
+    [Fact]
     public void 二维码临时客户端在发起登录前已安装显式代理()
     {
         var sessionPath = Path.Combine(
@@ -768,7 +932,8 @@ public sealed class ManualLoginProxyRoutingTests
             AccountLoginProxyStateStore stateStore,
             AccountLoginProxyCoordinator coordinator,
             StubClientPool clientPool,
-            TemporaryWarpClaimStore temporaryWarpClaims)
+            TemporaryWarpClaimStore temporaryWarpClaims,
+            StubManagedWarpProvisioner managedWarp)
         {
             _connection = connection;
             Db = db;
@@ -777,6 +942,7 @@ public sealed class ManualLoginProxyRoutingTests
             Coordinator = coordinator;
             ClientPool = clientPool;
             TemporaryWarpClaims = temporaryWarpClaims;
+            ManagedWarp = managedWarp;
         }
 
         public AppDbContext Db { get; }
@@ -785,6 +951,7 @@ public sealed class ManualLoginProxyRoutingTests
         public AccountLoginProxyCoordinator Coordinator { get; }
         public StubClientPool ClientPool { get; }
         public TemporaryWarpClaimStore TemporaryWarpClaims { get; }
+        public StubManagedWarpProvisioner ManagedWarp { get; }
 
         public static async Task<Fixture> CreateAsync(
             IEnumerable<KeyValuePair<string, string?>>? values = null)
@@ -832,6 +999,7 @@ public sealed class ManualLoginProxyRoutingTests
                 pool,
                 NullLogger<AccountService>.Instance,
                 configuration);
+            var managedWarp = new StubManagedWarpProvisioner(db, temporaryWarpClaims);
             var coordinator = new AccountLoginProxyCoordinator(
                 stateStore,
                 proxyManagement,
@@ -839,7 +1007,8 @@ public sealed class ManualLoginProxyRoutingTests
                 accountService,
                 temporaryWarpClaims,
                 configuration,
-                NullLogger<AccountLoginProxyCoordinator>.Instance);
+                NullLogger<AccountLoginProxyCoordinator>.Instance,
+                managedWarp);
 
             return new Fixture(
                 connection,
@@ -848,7 +1017,8 @@ public sealed class ManualLoginProxyRoutingTests
                 stateStore,
                 coordinator,
                 pool,
-                temporaryWarpClaims);
+                temporaryWarpClaims,
+                managedWarp);
         }
 
         public async Task<OutboundProxy> AddProxyAsync(string kind)
@@ -910,6 +1080,76 @@ public sealed class ManualLoginProxyRoutingTests
         {
             await Db.DisposeAsync();
             await _connection.DisposeAsync();
+        }
+    }
+
+    private sealed class StubManagedWarpProvisioner(AppDbContext db, TemporaryWarpClaimStore claims) : IManagedWarpProvisioner
+    {
+        public List<string> Requests { get; } = new();
+        public List<int> Stopped { get; } = new();
+        public int ReleaseCount { get; private set; }
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource? WaitForProvision { get; set; }
+        public Exception? ProvisionError { get; set; }
+        public Exception? StopError { get; set; }
+
+        public Task<ManagedWarpAvailability> GetAvailabilityAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ManagedWarpAvailability(true, null));
+
+        public async Task<ManagedWarpProxyLease> ProvisionAsync(string name, string requestId, bool acceptTerms,
+            CancellationToken cancellationToken = default)
+        {
+            Requests.Add(requestId);
+            Started.TrySetResult();
+            if (WaitForProvision != null) await WaitForProvision.Task.WaitAsync(cancellationToken);
+            if (ProvisionError != null) throw ProvisionError;
+            return await AcquireAsync((await AddManagedProxyAsync()).Id, cancellationToken);
+        }
+
+        public async Task<OutboundProxy> AddManagedProxyAsync()
+        {
+            var proxy = new OutboundProxy
+            {
+                Name = "轻量测试出口",
+                Kind = "wireguard_warp",
+                ManagedWgcfProfile = "web-" + Guid.NewGuid().ToString("N"),
+                Protocol = "socks5",
+                Host = "127.0.0.1",
+                Port = 42000,
+                Username = "user",
+                Password = "password",
+                IsEnabled = true,
+                TestStatus = "ok",
+                EgressIp = "203.0.113.1",
+                CreatedAtUtc = DateTime.UtcNow,
+                UpdatedAtUtc = DateTime.UtcNow
+            };
+            db.OutboundProxies.Add(proxy);
+            await db.SaveChangesAsync();
+            return proxy;
+        }
+
+        public async Task<ManagedWarpProxyLease> AcquireAsync(int proxyId, CancellationToken cancellationToken = default)
+        {
+            var proxy = await db.OutboundProxies.SingleAsync(x => x.Id == proxyId, cancellationToken);
+            var claim = claims.ClaimManagedProfile(proxy.ManagedWgcfProfile!);
+            return new ManagedWarpProxyLease(proxy, claim.Token, new ReleaseAction(() =>
+            {
+                claim.Dispose();
+                ReleaseCount++;
+            }));
+        }
+
+        public Task StopUnboundAsync(int proxyId, string? claimToken = null, CancellationToken cancellationToken = default)
+        {
+            if (StopError != null) return Task.FromException(StopError);
+            Stopped.Add(proxyId);
+            return Task.CompletedTask;
+        }
+
+        private sealed class ReleaseAction(Action action) : IDisposable
+        {
+            public void Dispose() => action();
         }
     }
 

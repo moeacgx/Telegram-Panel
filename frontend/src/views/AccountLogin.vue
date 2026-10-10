@@ -27,6 +27,7 @@
         <el-radio-group v-model="proxyStrategy" class="login-proxy-options" :disabled="proxyRouteLocked">
           <el-radio-button value="existing">已有代理</el-radio-button>
           <el-radio-button value="warp_pool" :disabled="availableWarpPoolCount === 0">自动分配已有 WARP</el-radio-button>
+          <el-radio-button value="warp_per_account" :disabled="!warpStatus?.available">创建一对一 WARP</el-radio-button>
           <el-radio-button value="global">全局设置</el-radio-button>
           <el-radio-button value="direct">直连（确认风险）</el-radio-button>
         </el-radio-group>
@@ -57,6 +58,10 @@
         </div>
         <div v-else-if="proxyStrategy === 'warp_pool'" class="login-proxy-notice warning">
           将按当前账号绑定数自动选择已有 WARP；不会创建新容器。当前已启用 {{ availableWarpPoolCount }} 个 WARP。
+        </div>
+        <div v-if="proxyStrategy === 'warp_per_account'" class="login-proxy-notice warning">
+          <el-checkbox v-model="acceptWarpTerms" :disabled="proxyRouteLocked">我已阅读并接受</el-checkbox>
+          <a href="https://www.cloudflare.com/application/terms/" target="_blank" rel="noopener noreferrer">Cloudflare WARP 条款</a>
         </div>
       </section>
 
@@ -355,6 +360,7 @@ import type {
   AccountQrLoginResponse,
   OutboundProxy,
   TelegramDeviceProfile,
+  WgcfRuntimeStatus,
 } from '@/api/types'
 type LoginStep = 'phone' | 'code' | 'password' | 'done'
 type LoginMode = 'qr' | 'phone'
@@ -390,6 +396,9 @@ const saveQrPasswordToSystem = ref(false)
 const proxies = ref<OutboundProxy[]>([])
 const proxyStrategy = ref<AccountProxyStrategy | ''>('')
 const proxyId = ref<number | null>(null)
+const warpStatus = ref<WgcfRuntimeStatus | null>(null)
+const acceptWarpTerms = ref(false)
+const warpRequestId = ref('')
 const deviceProfiles = ref<TelegramDeviceProfile[]>([])
 const deviceProfileKey = ref('')
 let qrTimer: number | undefined
@@ -409,7 +418,8 @@ const availableWarpPoolCount = computed(() => proxies.value.filter(
 const proxySelectionInvalid = computed(() =>
   !proxyStrategy.value
   || (proxyStrategy.value === 'existing' && !proxyId.value)
-  || (proxyStrategy.value === 'warp_pool' && availableWarpPoolCount.value === 0),
+  || (proxyStrategy.value === 'warp_pool' && availableWarpPoolCount.value === 0)
+  || (proxyStrategy.value === 'warp_per_account' && (!warpStatus.value?.available || !acceptWarpTerms.value)),
 )
 const proxyRouteLocked = computed(() => logging.value || hasActiveLoginSession.value)
 const randomDeviceProfileSelected = computed(() => deviceProfileKey.value === 'random')
@@ -464,16 +474,21 @@ function ensureProxySelected() {
   if (!proxyStrategy.value) {
     ElMessage.warning('请先明确选择本次登录首次连接使用的代理方式')
   } else {
-    ElMessage.warning(proxyStrategy.value === 'warp_pool' ? '当前没有可自动分配的已有 WARP' : '请选择已有代理')
+    ElMessage.warning(proxyStrategy.value === 'warp_per_account'
+      ? !acceptWarpTerms.value ? '请先阅读并接受 Cloudflare WARP 条款' : warpStatus.value?.reason || '当前环境无法创建轻量 WARP'
+      : proxyStrategy.value === 'warp_pool' ? '当前没有可自动分配的已有 WARP' : '请选择已有代理')
   }
   return false
 }
 
-function selectedProxyPayload(): { proxyStrategy: AccountProxyStrategy; proxyId: number | null } {
+function selectedProxyPayload() {
   const strategy = proxyStrategy.value as AccountProxyStrategy
+  if (strategy === 'warp_per_account') warpRequestId.value ||= crypto.randomUUID()
   return {
     proxyStrategy: strategy,
     proxyId: strategy === 'existing' ? proxyId.value : null,
+    acceptWarpTerms: strategy === 'warp_per_account' && acceptWarpTerms.value,
+    warpRequestId: strategy === 'warp_per_account' ? warpRequestId.value : null,
   }
 }
 
@@ -484,6 +499,19 @@ async function loadLoginProxyOptions() {
     proxyId.value = null
   }
 }
+
+async function loadWarpStatus() {
+  try {
+    warpStatus.value = await panelApi.wgcfStatus()
+  } catch {
+    warpStatus.value = null
+  }
+}
+
+watch([proxyStrategy, phone, deviceProfileKey], () => {
+  if (!hasActiveLoginSession.value) warpRequestId.value = ''
+}, { flush: 'sync' })
+watch(proxyStrategy, () => { acceptWarpTerms.value = false }, { flush: 'sync' })
 
 async function next() {
   if (logging.value) return
@@ -930,6 +958,7 @@ onMounted(async () => {
   await Promise.allSettled([
     loadTelegramApiStatus(),
     loadLoginProxyOptions(),
+    loadWarpStatus(),
   ])
 })
 </script>

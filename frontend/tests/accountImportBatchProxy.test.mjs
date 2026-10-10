@@ -28,7 +28,7 @@ test('账号导入支持已有 WARP 池和创建一对一 WARP', () => {
   assert.match(source, /proxy\.kind === 'warp'[\s\S]*proxy\.isEnabled[\s\S]*proxy\.warpRuntimeStatus === 'active'/)
   assert.match(source, /不会创建新容器/)
   assert.match(source, /WARP_PER_ACCOUNT_IMPORT_LIMIT = 10/)
-  assert.match(source, /panelApi\.warpStatus\(\)/)
+  assert.match(source, /panelApi\.wgcfStatus\(\)/)
 })
 
 test('有效代理计数忽略空行和注释并保留重复槽位', () => {

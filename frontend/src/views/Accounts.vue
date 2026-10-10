@@ -403,6 +403,10 @@
           show-icon
         />
         <div class="muted proxy-account-count">账号数量：{{ proxyDialog.accountIds.length }}</div>
+        <div v-if="proxyDialog.strategy === 'warp_per_account'">
+          <el-checkbox v-model="proxyDialog.acceptWarpTerms">我已阅读并接受</el-checkbox>
+          <a href="https://www.cloudflare.com/application/terms/" target="_blank" rel="noopener noreferrer">Cloudflare WARP 条款</a>
+        </div>
       </el-form>
       <template #footer>
         <el-button :disabled="proxyDialog.running" @click="proxyDialog.visible = false">取消</el-button>
@@ -762,7 +766,7 @@ import type {
   DataDictionary,
   OutboundProxy,
   ProxyKind,
-  WarpRuntimeStatus,
+  WgcfRuntimeStatus,
   LoginEmailStatus,
   TelegramStatus,
   TelegramAuthorization,
@@ -784,7 +788,7 @@ const categories = ref<AccountCategory[]>([])
 const dictionaries = ref<DataDictionary[]>([])
 const proxies = ref<OutboundProxy[]>([])
 const deviceProfiles = ref<TelegramDeviceProfile[]>([])
-const warpStatus = ref<WarpRuntimeStatus | null>(null)
+const warpStatus = ref<WgcfRuntimeStatus | null>(null)
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
@@ -905,14 +909,21 @@ const proxyDialog = reactive({
   expectedProxyId: null as number | null,
   expectedUseGlobalProxy: null as boolean | null,
   proxyText: '',
+  acceptWarpTerms: false,
+  warpRequestId: '',
 })
 const proxyDialogProxyCount = computed(() => countEffectiveProxyLines(proxyDialog.proxyText))
 let accountProxyOperationToken = 0
 const warpAvailable = computed(() => Boolean(
-  warpStatus.value?.platformSupported
-  && warpStatus.value.enabled
-  && warpStatus.value.dockerAvailable,
+  warpStatus.value?.available,
 ))
+
+watch(() => proxyDialog.strategy, () => {
+  if (!proxyDialog.running) {
+    proxyDialog.acceptWarpTerms = false
+    proxyDialog.warpRequestId = crypto.randomUUID()
+  }
+}, { flush: 'sync' })
 
 const twoFactor = reactive({
   visible: false,
@@ -1039,7 +1050,7 @@ async function loadProxies() {
 
 async function loadWarpStatus() {
   try {
-    warpStatus.value = await panelApi.warpStatus()
+    warpStatus.value = await panelApi.wgcfStatus()
   } catch {
     warpStatus.value = null
   }
@@ -1559,6 +1570,8 @@ function openAccountProxy(accountIds: number[], row?: Row) {
     : ''
   proxyDialog.proxyId = row?.proxy?.id ?? null
   proxyDialog.proxyText = ''
+  proxyDialog.acceptWarpTerms = false
+  proxyDialog.warpRequestId = crypto.randomUUID()
   proxyDialog.visible = true
 }
 
@@ -1588,7 +1601,11 @@ async function saveAccountProxy() {
     return
   }
   if (strategy === 'warp_per_account' && !warpAvailable.value) {
-    ElMessage.warning(warpStatus.value?.error || '当前环境无法创建 WARP')
+    ElMessage.warning(warpStatus.value?.reason || '当前环境无法创建轻量 WARP')
+    return
+  }
+  if (strategy === 'warp_per_account' && !proxyDialog.acceptWarpTerms) {
+    ElMessage.warning('请先阅读并接受 Cloudflare WARP 条款')
     return
   }
   if (strategy === 'warp_per_account' && accountIds.length > 10) {
@@ -1617,6 +1634,8 @@ async function saveAccountProxy() {
   try {
     const payload = {
       strategy,
+      acceptWarpTerms: strategy === 'warp_per_account' && proxyDialog.acceptWarpTerms,
+      warpRequestId: strategy === 'warp_per_account' ? proxyDialog.warpRequestId : null,
       proxyId: strategy === 'existing' ? proxyId : null,
       proxyText: strategy === 'proxy_per_account' ? proxyDialog.proxyText : null,
     }

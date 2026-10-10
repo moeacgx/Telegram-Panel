@@ -164,12 +164,6 @@ export interface WarpMaintenanceBatchResult {
   items: WarpMaintenanceResult[]
 }
 
-export interface CreateWarpProxyRequest {
-  name?: string | null
-  requestId?: string | null
-  protocol?: WarpProxyProtocol | null
-}
-
 export interface WgcfProfile {
   profile: string
   name: string
@@ -207,6 +201,8 @@ export type ZipImportProxyStrategy = AccountImportProxyStrategy | 'proxy_per_acc
 
 export interface AccountProxyBindingRequest {
   strategy: AccountProxyBatchStrategy
+  acceptWarpTerms?: boolean
+  warpRequestId?: string | null
   proxyId?: number | null
   expectedProxyId?: number | null
   expectedUseGlobalProxy?: boolean | null

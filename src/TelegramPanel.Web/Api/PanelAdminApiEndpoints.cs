@@ -1886,7 +1886,8 @@ public static class PanelAdminApiEndpoints
         }
         else
         {
-            proxyBinding = ParseImportProxyBinding(proxyStrategy, form["proxyId"]);
+            proxyBinding = ParseImportProxyBinding(proxyStrategy, form["proxyId"],
+                string.Equals(form["acceptWarpTerms"], "true", StringComparison.OrdinalIgnoreCase), form["warpRequestId"]);
             if (proxyBinding == null)
             {
                 return Results.BadRequest(new OperationResultDto(
@@ -1936,7 +1937,8 @@ public static class PanelAdminApiEndpoints
 
         var categoryId = ParseNullableInt(form["categoryId"]);
         var deviceProfileKey = NormalizeNullable(form["deviceProfileKey"]);
-        var proxyBinding = ParseImportProxyBinding(form["proxyStrategy"], form["proxyId"]);
+        var proxyBinding = ParseImportProxyBinding(form["proxyStrategy"], form["proxyId"],
+            string.Equals(form["acceptWarpTerms"], "true", StringComparison.OrdinalIgnoreCase), form["warpRequestId"]);
         if (proxyBinding == null)
         {
             return Results.BadRequest(new OperationResultDto(
@@ -1984,7 +1986,8 @@ public static class PanelAdminApiEndpoints
         if (string.IsNullOrWhiteSpace(sessionString))
             return Results.BadRequest(new OperationResultDto(false, "请填写 StringSession"));
 
-        var proxyBinding = ParseImportProxyBinding(request.ProxyStrategy, request.ProxyId?.ToString());
+        var proxyBinding = ParseImportProxyBinding(request.ProxyStrategy, request.ProxyId?.ToString(),
+            request.AcceptWarpTerms, request.WarpRequestId);
         if (proxyBinding == null)
         {
             return Results.BadRequest(new OperationResultDto(
@@ -2069,7 +2072,9 @@ public static class PanelAdminApiEndpoints
                     request.ProxyStrategy,
                     request.ProxyId,
                     cancellationToken,
-                    request.DeviceProfileKey);
+                    request.DeviceProfileKey,
+                    request.AcceptWarpTerms,
+                    request.WarpRequestId);
             }
         }
         catch (Exception ex) when (IsLoginProxyInputError(ex))
@@ -2205,7 +2210,9 @@ public static class PanelAdminApiEndpoints
                     request.ProxyStrategy,
                     request.ProxyId,
                     cancellationToken,
-                    request.DeviceProfileKey);
+                    request.DeviceProfileKey,
+                    request.AcceptWarpTerms,
+                    request.WarpRequestId);
             }
         }
         catch (Exception ex) when (IsLoginProxyInputError(ex))
@@ -7124,7 +7131,9 @@ public static class PanelAdminApiEndpoints
 
     internal static AccountProxyBindingInput? ParseImportProxyBinding(
         string? strategy,
-        string? proxyId)
+        string? proxyId,
+        bool acceptWarpTerms = false,
+        string? warpRequestId = null)
     {
         if (string.IsNullOrWhiteSpace(strategy)
             || string.Equals(
@@ -7134,7 +7143,8 @@ public static class PanelAdminApiEndpoints
             return null;
 
         var parsedProxyId = ParseNullableInt(proxyId);
-        return new AccountProxyBindingInput(strategy.Trim(), parsedProxyId);
+        return new AccountProxyBindingInput(strategy.Trim(), parsedProxyId,
+            AcceptWarpTerms: acceptWarpTerms, WarpRequestId: warpRequestId);
     }
 
     private static async Task<int> ResolveLoginIdAsync(
@@ -8543,18 +8553,24 @@ public sealed record ImportStringSessionRequestDto(
     int? CategoryId,
     string? ProxyStrategy,
     int? ProxyId,
-    string? DeviceProfileKey);
+    string? DeviceProfileKey,
+    bool AcceptWarpTerms = false,
+    string? WarpRequestId = null);
 public sealed record StartAccountLoginRequestDto(
     string? Phone,
     int LoginId = 0,
     string? ProxyStrategy = null,
     int? ProxyId = null,
-    string? DeviceProfileKey = null);
+    string? DeviceProfileKey = null,
+    bool AcceptWarpTerms = false,
+    string? WarpRequestId = null);
 public sealed record StartAccountQrLoginRequestDto(
     int LoginId = 0,
     string? ProxyStrategy = null,
     int? ProxyId = null,
-    string? DeviceProfileKey = null);
+    string? DeviceProfileKey = null,
+    bool AcceptWarpTerms = false,
+    string? WarpRequestId = null);
 public sealed record AccountLoginSessionRequestDto(int LoginId);
 public sealed record AccountLoginCodeRequestDto(int LoginId, string? Code);
 public sealed record AccountLoginPasswordRequestDto(int LoginId, string? Password, bool? SaveTwoFactorPassword = null);
