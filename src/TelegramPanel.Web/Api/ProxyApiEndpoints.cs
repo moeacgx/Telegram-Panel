@@ -413,7 +413,7 @@ public static class ProxyApiEndpoints
 
     private static async Task<IResult> CreateWarpAsync(
         WarpCreateRequestDto request,
-        ProxyManagementService service,
+        WgcfWarpService service,
         CancellationToken cancellationToken)
     {
         try
@@ -422,12 +422,11 @@ public static class ProxyApiEndpoints
                 || AccountImportService.IsManagedWarpRequestId(request.RequestId))
                 throw new ArgumentException("该 WARP 请求 ID 前缀为系统内部保留值");
 
-            var proxy = await service.CreateWarpAsync(
-                request.Name,
-                request.RequestId,
-                cancellationToken,
-                request.Protocol);
-            return Results.Ok(ToDto(proxy));
+            if (!string.IsNullOrWhiteSpace(request.Protocol) && request.Protocol != "socks5")
+                throw new ArgumentException("轻量 WARP 仅支持 SOCKS5");
+            var profile = await service.CreateAsync(request.RequestId ?? string.Empty,
+                request.Name ?? string.Empty, request.AcceptWarpTerms, cancellationToken);
+            return Results.Accepted(value: profile);
         }
         catch (Exception ex) when (IsClientError(ex))
         {
@@ -482,7 +481,9 @@ public static class ProxyApiEndpoints
                     request.Strategy ?? string.Empty,
                     request.ProxyId,
                     request.ExpectedProxyId,
-                    ExpectedUseGlobalProxy: request.ExpectedUseGlobalProxy),
+                    ExpectedUseGlobalProxy: request.ExpectedUseGlobalProxy,
+                    AcceptWarpTerms: request.AcceptWarpTerms,
+                    WarpRequestId: request.WarpRequestId),
                 cancellationToken);
             return Results.Ok(result);
         }
@@ -554,7 +555,9 @@ public static class ProxyApiEndpoints
                 request.AccountIds ?? Array.Empty<int>(),
                 new AccountProxyBindingInput(
                     request.Strategy ?? string.Empty,
-                    request.ProxyId),
+                    request.ProxyId,
+                    AcceptWarpTerms: request.AcceptWarpTerms,
+                    WarpRequestId: request.WarpRequestId),
                 cancellationToken);
             return Results.Ok(result);
         }
@@ -726,17 +729,22 @@ public sealed record ProxyImportRequestDto(string? Text, bool TestAfterImport = 
 public sealed record WarpCreateRequestDto(
     string? Name,
     string? RequestId,
-    string? Protocol = null);
+    string? Protocol = null,
+    bool AcceptWarpTerms = false);
 public sealed record AccountProxyBindingRequestDto(
     string? Strategy,
     int? ProxyId,
     int? ExpectedProxyId,
-    bool? ExpectedUseGlobalProxy = null);
+    bool? ExpectedUseGlobalProxy = null,
+    bool AcceptWarpTerms = false,
+    string? WarpRequestId = null);
 public sealed record BatchAccountProxyBindingRequestDto(
     IReadOnlyList<int>? AccountIds,
     string? Strategy,
     int? ProxyId,
-    string? ProxyText);
+    string? ProxyText,
+    bool AcceptWarpTerms = false,
+    string? WarpRequestId = null);
 
 public sealed record ProxyCategorySaveRequestDto(
     string? Name,

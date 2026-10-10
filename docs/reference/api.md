@@ -217,10 +217,11 @@ Telegram 的限流、权限和 Session 等业务错误不会重试，避免扩�
 代理 ID 升序选择。它不会创建容器或数据卷，也无需提供 `proxyId`。没有候选项或候选项都在
 维护/被其他首次连接流程占用时，请求会在连接 Telegram 前失败。
 
-`warp_per_account` 会在每个账号首次 Telegram 验证前创建一个受管 WARP，并在账号成功入库后把
+`warp_per_account` 从 v1.31.81 起在每个账号首次 Telegram 验证前创建一个轻量 WARP，并在账号成功入库后把
 新 `ProxyId` 绑定到账号。Zip 和 Session 文件导入单次最多 10 个账号，StringSession 固定 1 个；
-超过上限、Docker/WARP 未启用或容器创建失败时，请求会在首次 Telegram 连接前失败。导入未成功
-绑定账号的新代理会自动删除，运行档案保留 `deleted` 状态用于审计。
+请求必须明确提交 `acceptWarpTerms=true`，可提供本次操作 UUID `warpRequestId`。超过上限、
+运行器不可用或出口检测失败时，请求会在首次 Telegram 连接前失败。导入未成功绑定账号的
+新出口会停止，代理记录和注册材料保留用于核对；不会删除上游注册或降级直连。
 
 Zip 专属的一对一代理模式使用以下字段：
 
@@ -279,7 +280,7 @@ proxyText: http://user-a:password-a@proxy-a.example.com:8080
 - `PUT /api/panel/proxies/{id}`：修改代理
 - `POST /api/panel/proxies/{id}/test`：检测代理出口
 - `GET /api/panel/proxies/warp/status`：受管 WARP 运行环境
-- `POST /api/panel/proxies/warp`：创建受管 WARP
+- `POST /api/panel/proxies/warp`：v1.31.81 起创建轻量 WARP，固定 SOCKS5；返回 202 档案状态
 - `POST /api/panel/proxies/{id}/warp/refresh`：重启并复测单个受管 WARP
 - `POST /api/panel/proxies/warp/refresh-all`：依次重启并复测全部期望启用的 WARP
 - `POST /api/panel/accounts/{id}/proxy`：切换单个账号路由
@@ -440,9 +441,9 @@ Telegram 限流和 Session/代理状态。该功能不引入数据库迁移，�
 需要给外部系统调用时，优先使用模块的 `MapEndpoints` 明确设计鉴权、限流和响应模型，
 不要直接把管理 Cookie 接口暴露到公网。
 
-## 轻量 WARP 管理 API（v1.31.80）
+## 轻量 WARP 管理 API（v1.31.81）
 
-以下接口均位于已登录的 `/api/panel` 下，只用于管理页面，不接受或返回 WARP 私钥、注册
+以下接口均位于已登录的 `/api/panel` 下，不接受或返回 WARP 私钥、注册
 Token、SOCKS 密码或上游原始输出。
 
 - `GET /proxies/wgcf`：返回环境是否可用及档案数组。档案包含 `profile`、`phase`、
@@ -455,3 +456,9 @@ Token、SOCKS 密码或上游原始输出。
 
 常规代理 DTO 新增可空 `managedWgcfProfile`。带该字段的代理只能通过上述专用接口维护，
 不能用常规代理编辑、删除、批量或全局代理 API 修改。
+
+账号登录（手机和二维码）、导入（表单或 StringSession）及单/批账号代理绑定的
+`warp_per_account` 新增 `acceptWarpTerms` 与可选 `warpRequestId`，前者必须显式为 `true`。
+旧 `POST /proxies/warp` 请求改为 `{name, requestId, acceptWarpTerms, protocol:"socks5"}`，
+返回档案而非代理 DTO，通过 `GET /proxies/wgcf` 等待完成。旧容器维护接口仍可使用。
+首次连接期间的出口不可由其它流程绑定、恢复或启停；内部归属 token 不接受公开提交。

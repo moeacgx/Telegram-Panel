@@ -1,4 +1,6 @@
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.AspNetCore.Hosting;
@@ -20,6 +22,76 @@ namespace TelegramPanel.Web.Tests;
 
 public sealed class WgcfLifecycleConcurrencyTests
 {
+    [Fact]
+    public async Task 首连租约拒绝外部启停恢复检测且释放后恢复操作()
+    {
+        await using var f = await Fixture.CreateAsync();
+        await using (var scope = f.Provider.CreateAsyncScope())
+            await scope.ServiceProvider.GetRequiredService<ProxyManagementService>().TestAsync((await f.ProxyAsync()).Id);
+        using (var lease = await f.Service.AcquireAsync((await f.ProxyAsync()).Id))
+        {
+            await Assert.ThrowsAsync<ProxyInUseException>(() => f.Service.SetEnabledAsync(f.Profile, false, default));
+            await Assert.ThrowsAsync<ProxyInUseException>(() => f.Service.ResumeAsync(f.Profile, default));
+            await Assert.ThrowsAsync<ProxyInUseException>(() => f.Service.TestAsync(f.Profile, default));
+            await Assert.ThrowsAsync<ProxyInUseException>(() => f.Service.StopUnboundAsync(lease.Proxy.Id));
+            Assert.Empty(f.Commands);
+        }
+        await f.Service.SetEnabledAsync(f.Profile, false, default);
+        Assert.Equal("stopped", f.PersistedPhase());
+    }
+
+    [Fact]
+    public async Task 未接受条款不创建不注册且成功首连返回检测通过的同一出口()
+    {
+        var request = "telegram-panel.internal.login.123";
+        await using var f = await Fixture.CreateAsync(request);
+        await Assert.ThrowsAsync<ArgumentException>(() => f.Service.ProvisionAsync("并发验收出口", request, false));
+        Assert.Empty(f.Commands);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var worker = f.ProcessQueueAsync(timeout.Token);
+        try
+        {
+            using var lease = await f.Service.ProvisionAsync("并发验收出口", request, true, timeout.Token);
+            Assert.Equal((await f.ProxyAsync()).Id, lease.Proxy.Id);
+            Assert.Equal("ok", lease.Proxy.TestStatus);
+            Assert.NotNull(lease.Proxy.EgressIp);
+            await f.Service.StopUnboundAsync(lease.Proxy.Id, lease.ClaimToken, timeout.Token);
+            Assert.Equal("stopped", f.PersistedPhase());
+            Assert.False((await f.ProxyAsync()).IsEnabled);
+        }
+        finally
+        {
+            timeout.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => worker);
+        }
+    }
+
+    [Fact]
+    public async Task 取消排队的首连会停止并保留材料且后到任务不重新启动()
+    {
+        var request = "telegram-panel.internal.import.fixture";
+        await using var f = await Fixture.CreateAsync(request);
+        using var cancellation = new CancellationTokenSource();
+        var provision = f.Service.ProvisionAsync("并发验收出口", request, true, cancellation.Token);
+        while (f.PersistedPhase() != "creating") await Task.Delay(10);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => provision);
+        Assert.Equal("stopped", f.PersistedPhase());
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var worker = f.ProcessQueueAsync(timeout.Token);
+        try
+        {
+            while (f.Commands.Count < 2) await Task.Delay(10, timeout.Token);
+            Assert.DoesNotContain("provision", f.Commands);
+            Assert.False((await f.ProxyAsync()).IsEnabled);
+        }
+        finally
+        {
+            timeout.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => worker);
+        }
+    }
+
     [Fact]
     public async Task 停止等待工具时恢复请求必须等待并保留最终创建状态()
     {
@@ -142,7 +214,7 @@ public sealed class WgcfLifecycleConcurrencyTests
         public List<string> Commands { get; } = new();
         private string Root => Path.Combine(_directory, "wgcf-warp");
 
-        public static async Task<Fixture> CreateAsync()
+        public static async Task<Fixture> CreateAsync(string? internalRequest = null)
         {
             var f = new Fixture();
             Directory.CreateDirectory(Path.Combine(f.Root, "web-requests"));
@@ -151,6 +223,7 @@ public sealed class WgcfLifecycleConcurrencyTests
                 ["Storage:RootPath"] = f._directory
             }).Build();
             var services = new ServiceCollection();
+            services.AddSingleton<TemporaryWarpClaimStore>();
             services.AddDbContext<AppDbContext>(options => options.UseSqlite(
                 $"Data Source={Path.Combine(f._directory, "test.db")};Pooling=False"));
             services.AddScoped(provider =>
@@ -159,7 +232,8 @@ public sealed class WgcfLifecycleConcurrencyTests
                 var probe = new Probe();
                 return new ProxyManagementService(db, new EmptyPool(), probe,
                     new WarpContainerManager(db, config, probe, NullLogger<WarpContainerManager>.Instance),
-                    NullLogger<ProxyManagementService>.Instance, config);
+                    NullLogger<ProxyManagementService>.Instance, config,
+                    provider.GetRequiredService<TemporaryWarpClaimStore>());
             });
             f.Provider = services.BuildServiceProvider();
             await using (var scope = f.Provider.CreateAsyncScope())
@@ -176,12 +250,23 @@ public sealed class WgcfLifecycleConcurrencyTests
                     return Task.CompletedTask;
                 });
             typeof(WgcfWarpService).GetField("_supervisorReady", PrivateInstance)!.SetValue(f.Service, true);
-            f.Profile = (await f.Service.CreateAsync(Guid.NewGuid().ToString(), "并发验收出口", true, default)).Profile;
+            var id = internalRequest == null ? Guid.NewGuid().ToString() :
+                new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(internalRequest)).AsSpan(0, 16), bigEndian: true).ToString();
+            f.Profile = (await f.Service.CreateAsync(id, "并发验收出口", true, default)).Profile;
             Assert.True(f.Field<Channel<string>>("_queue").Reader.TryRead(out _));
             Directory.CreateDirectory(Path.Combine(f.Root, f.Profile));
             File.WriteAllText(Path.Combine(f.Root, f.Profile, "proxy-auth.json"), "{\"username\":\"fixture\",\"password\":\"fixture-secret\"}");
             f.WriteRuntime(true);
             f.PersistPhase("ready");
+            if (internalRequest != null)
+            {
+                var entryType = typeof(WgcfWarpService).GetNestedType("Entry", BindingFlags.NonPublic)!;
+                var entry = JsonSerializer.Deserialize(JsonSerializer.Serialize(new
+                {
+                    Profile = f.Profile, Name = "并发验收出口", Phase = "ready", Temporary = true, RequestId = internalRequest
+                }), entryType);
+                typeof(WgcfWarpService).GetMethod("Persist", PrivateInstance)!.Invoke(f.Service, new[] { entry });
+            }
             await using (var scope = f.Provider.CreateAsyncScope())
                 await scope.ServiceProvider.GetRequiredService<ProxyManagementService>()
                     .CreateManagedWgcfProxyAsync(f.Profile, "并发验收出口", 18081, "fixture", "fixture-secret");

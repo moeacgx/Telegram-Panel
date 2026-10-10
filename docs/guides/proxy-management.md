@@ -23,8 +23,8 @@ Telegram Panel 按账号管理 Telegram 连接出口。导入、登录，以及�
 - **已有代理**：绑定代理管理中的 HTTP、SOCKS5、MTProxy、Resin 或外部 WireGuard WARP。
 - **外部 WireGuard WARP**：运营方在面板外运行 WireGuard/gost 等轻量出口，面板只保存
   它暴露出的 HTTP/SOCKS5 监听并绑定账号。
-- **独立 WARP**：账号管理可按需创建并绑定受管 WARP 容器；账号导入也可选择“创建一对一 WARP”
-  在每个账号首次验证前新建并绑定，手动登录仍只会自动分配已有 WARP。
+- **独立 WARP**：v1.31.81 起，一键创建、登录、导入及逐账号绑定统一使用主容器内的轻量
+  wgcf＋wireproxy。选择“创建一对一 WARP”并勾选条款后，在首次验证前创建独占出口。
 
 导入账号、手机号登录和二维码登录都会在第一条 Telegram 请求前要求选择路由。
 选定后，验证码发送、二维码轮询、2FA 验证和 Session 建立会使用同一出口；失败时不会
@@ -131,13 +131,22 @@ wg-warp+http://10.0.0.5:8080
 
 ### 不支持的托管模式
 
-当前服务边界只安全托管 Docker WARP 容器。直接管理宿主 WireGuard 需要 root 级网络权限、
+当前服务托管用户态 wireproxy 进程，并保留旧 Docker WARP 容器维护。直接管理宿主 WireGuard 需要 root 级网络权限、
 路由表和防火墙改写，以及对 WARP 注册材料的生命周期保证；这些都超出当前面板服务权限，
 所以不会实现为“复制配置并改 key”的一键托管功能。
 
-## 启用独立 WARP
+## 统一创建 WARP（v1.31.81）
 
-普通代理和 Resin 不需要 Docker Socket。只有需要面板创建独立 WARP 容器时，才叠加
+升级 Linux Docker 镜像后，“一键创建 WARP”直接创建轻量出口。登录、导入及账号绑定的
+“创建一对一 WARP”也使用同一运行器，固定 SOCKS5，无需为每个出口创建 Docker 容器。
+每个出口仍有独立注册材料、配置、端口与进程，独立注册不保证不同公网 IP。
+创建前明确勾选条款，成功判据为本地监听、WARP 检测成功与出口 IP；账号绑定后还需真实
+Telegram 验证。失败先核对镜像依赖和网络，保留注册材料；回滚先切回原代理并停止新出口。
+完整步骤见 [轻量 WARP 部署](../deployment/wgcf-wireproxy.md)。
+
+## 旧容器 WARP 维护
+
+普通代理、Resin 和轻量 WARP 不需要 Docker Socket。只有需要面板维护已有 WARP 容器时，才叠加
 受管 WARP 配置：
 
 ```bash
@@ -163,24 +172,17 @@ TP_WARP_CONTAINER_CPU_LIMIT=0
 TP_WARP_CONTAINER_PIDS_LIMIT=0
 ```
 
-WARP 镜像中的 GOST 端口同时支持 HTTP 和 SOCKS5。默认协议决定账号管理、批量绑定和账号导入
-“创建一对一 WARP”自动创建 WARP 时宿主使用哪种握手；代理管理中的一键创建弹窗可以覆盖单次
-创建协议。账号导入“自动分配已有 WARP”时沿用代理记录自身的协议，不读取该创建默认值。
+旧 WARP 镜像中的 GOST 端口同时支持 HTTP 和 SOCKS5。“自动分配已有 WARP”沿用代理记录
+自身的协议，不读取轻量创建设置。以下创建模板仅适用于 v1.31.80 及更早版本。
 
-每个 WARP 都对应一个独立 Docker 容器和数据卷，并持续占用一定的服务器内存与 CPU。
+每个旧 WARP 都对应一个独立 Docker 容器和数据卷，并持续占用一定的服务器内存与 CPU。
 `TP_WARP_MAX_MANAGED_PROXY_COUNT` 可限制面板可创建的受管 WARP 数量，达到上限时会在创建
 Docker 卷或容器前失败。`TP_WARP_CONTAINER_MEMORY_LIMIT_BYTES`、`TP_WARP_CONTAINER_CPU_LIMIT`
 （例如 `0.5`）和 `TP_WARP_CONTAINER_PIDS_LIMIT` 会映射到 Docker HostConfig 的 `Memory`、
 `NanoCpus` 和 `PidsLimit`，只影响后续新建容器；值为 `0` 或留空时不写对应限制。
 
-账号导入提供两种受管 WARP 模式：“自动分配已有 WARP”只复用这些现有容器，并优先选择绑定
-账号较少的 WARP；“创建一对一 WARP”会在每个账号首次 Telegram 验证前创建新容器和代理记录，
-成功入库后把新 `ProxyId` 长期绑定到账号。创建模式单次最多 10 个账号，达到数量上限、Docker
-不可用或资源模板无效时会在连接 Telegram 前失败。成功标准是账号绑定到新建 WARP 且导入结果
-显示该出口 IP；失败时未绑定账号的新代理会被删除，运行档案保留 `deleted` 状态用于审计。
-排查 `.env` 是否由 Compose 注入、Docker Socket 是否可用、数值是否为正数，以及宿主 Docker
-版本是否支持对应 HostConfig 字段。回滚时改选自动分配已有 WARP、已有代理或全局代理；已创建
-并绑定的容器需先把账号切换到其它出口，再在代理管理中删除。
+“自动分配已有 WARP”只复用现有旧容器，优先选择绑定账号较少的 WARP。迁移旧容器时先
+为单账号绑定新的轻量出口，确认 Telegram 连接后再显式清理旧容器；不要直接删除数据卷。
 
 默认 `container` 模式由 Docker 网络按容器名访问，不占用宿主机代理端口。若在其他
 拓扑中把 `Proxy:Warp:ProxyHostMode` 配为 `published`，面板会从

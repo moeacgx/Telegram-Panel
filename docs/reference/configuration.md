@@ -346,6 +346,12 @@ https://bucket.example.com/telegram-panel/tp-{timestamp}.zip?X-Amz-Signature=...
 
 ## 配置受管 WARP 默认值
 
+从 v1.31.81 起，所有新建 WARP 使用 Linux 主容器内置 wgcf＋wireproxy，固定 SOCKS5，
+无需开启 `Proxy:Warp:Enabled` 或挂载 Docker Socket。下面配置用于旧容器的维护和历史版本；
+旧协议和 Docker 创建模板不会控制新的轻量出口。轻量档案固定最多 100 份，保存于持久根
+`wgcf-warp/`，每份一个进程，不代表已经验证的账号容量。依赖不可用时必须更新并重新创建
+Docker 镜像，参见 [部署与验收](../deployment/wgcf-wireproxy.md)。
+
 使用 `docker-compose.warp.yml` 时，在 `.env` 设置：
 
 ```dotenv
@@ -365,8 +371,7 @@ TP_WARP_SCHEDULED_REFRESH_INTERVAL_MINUTES=720
 
 Compose 会映射为 `Proxy:Warp:Network`、`Proxy:Warp:Protocol`、`Proxy:Warp:MaxManagedProxyCount`
 和 `Proxy:Warp:Container:*`。修改后需要使用包含 `docker-compose.warp.yml` 的命令重新创建
-面板容器；已存在的 WARP 容器不会自动重建，资源限制只应用到后续创建的受管容器。代理管理中
-的一键创建弹窗可以覆盖单次创建协议；登录和批量绑定自动创建 WARP 时使用这里的默认值。账号
+面板容器；已存在的 WARP 容器不会自动重建，资源限制只应用到历史版本后续创建的受管容器。账号
 导入的自动 WARP 池不会创建新容器，并沿用已有代理记录自身的协议。
 
 `TP_WARP_MAX_MANAGED_PROXY_COUNT=0` 表示不限制数量，保持旧安装行为；设置为正整数后，达到上限
