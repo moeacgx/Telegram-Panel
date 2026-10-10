@@ -373,19 +373,7 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
                     if (entry == null || Path.GetFileNameWithoutExtension(file) != entry.Profile
                         || ProfileFor(entry.Profile[4..]) != entry.Profile) continue;
                     ValidateName(entry.Name);
-                    _entries[entry.Profile] = entry;
-                    if (entry.Temporary)
-                    {
-                        await using var scope = _scopes.CreateAsyncScope();
-                        var bound = await scope.ServiceProvider.GetRequiredService<AppDbContext>().OutboundProxies
-                            .AnyAsync(x => x.ManagedWgcfProfile == entry.Profile && x.Accounts.Any(), stoppingToken);
-                        if (!bound)
-                        {
-                            Persist(entry with { StopRequested = true });
-                            _queue.Writer.TryWrite(entry.Profile);
-                        }
-                    }
-                    else if (entry.Phase == "creating") _queue.Writer.TryWrite(entry.Profile);
+                    await RestoreEntryAsync(entry, stoppingToken);
                 }
                 catch (Exception ex) when (ex is IOException or JsonException or ArgumentException or InvalidOperationException)
                 { _logger.LogWarning("轻量 WARP 请求档案无法恢复，已跳过"); }
@@ -394,7 +382,45 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
         catch (Exception) { _logger.LogError("轻量 WARP 运行器不可用，面板其它功能继续运行"); }
-        finally { _supervisorReady = false; }
+        finally
+        {
+            _supervisorReady = false;
+            // 后台任务完全结束后再释放未消费的恢复占用，避免停机取消期间提前放开首连。
+            ReleaseQueuedClaims();
+        }
+    }
+
+    public override void Dispose()
+    {
+        base.Dispose();
+        // 正在执行的后台任务由其 finally 收尾，尚未启动的服务可以直接释放队列占用。
+        if (ExecuteTask == null || ExecuteTask.IsCompleted) ReleaseQueuedClaims();
+    }
+
+    private void ReleaseQueuedClaims()
+    {
+        foreach (var profile in _queuedClaims.Keys)
+            if (_queuedClaims.TryRemove(profile, out var claim)) claim.Dispose();
+    }
+
+    private async Task RestoreEntryAsync(Entry entry, CancellationToken ct)
+    {
+        _entries[entry.Profile] = entry;
+        if (entry.Temporary)
+        {
+            await using var scope = _scopes.CreateAsyncScope();
+            var bound = await scope.ServiceProvider.GetRequiredService<AppDbContext>().OutboundProxies
+                .AnyAsync(x => x.ManagedWgcfProfile == entry.Profile && x.Accounts.Any(), ct);
+            if (!bound)
+            {
+                // 重启后的孤儿清理仍占用原创建请求，收尾前不允许重复排队。
+                _pendingTemporary[entry.Profile] = 0;
+                Persist(entry with { StopRequested = true });
+                _queue.Writer.TryWrite(entry.Profile);
+                return;
+            }
+        }
+        if (entry.Phase == "creating") _queue.Writer.TryWrite(entry.Profile);
     }
 
     private async Task ProcessQueueAsync(CancellationToken ct)
