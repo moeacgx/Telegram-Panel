@@ -1045,7 +1045,7 @@ async function loadDictionaries() {
 }
 
 async function loadProxies() {
-  proxies.value = await panelApi.proxies()
+  proxies.value = (await panelApi.proxies()).filter((proxy) => proxy.kind !== 'warp')
 }
 
 async function loadWarpStatus() {

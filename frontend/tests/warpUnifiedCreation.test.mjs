@@ -117,5 +117,5 @@ test('创建可用性取轻量运行器，登录和导入的已有代理仍排�
     assert.match(source, /panelApi\.wgcfStatus\(\)/)
     assert.doesNotMatch(source, /panelApi\.warpStatus\(\)|warpStatus\.value\.dockerAvailable/)
   }
-  for (const source of [login, imports]) assert.match(source, /filter\(\(proxy\) => !proxy\.managedWgcfProfile\)/)
+  for (const source of [login, imports]) assert.match(source, /filter\(\(proxy\) => !proxy\.managedWgcfProfile && proxy\.kind !== 'warp'\)/)
 })

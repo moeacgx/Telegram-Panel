@@ -30,7 +30,7 @@
       >
         <el-radio-button value="existing">已有代理</el-radio-button>
         <el-radio-button value="proxy_per_account">批量代理一对一</el-radio-button>
-        <el-radio-button value="warp_pool" :disabled="availableWarpPoolCount === 0">自动分配已有 WARP</el-radio-button>
+        <el-radio-button value="warp_pool" :disabled="availableWarpPoolCount === 0">自动分配空闲 WARP</el-radio-button>
         <el-radio-button value="warp_per_account" :disabled="!warpCreateAvailable">创建一对一 WARP</el-radio-button>
         <el-radio-button value="global">全局设置</el-radio-button>
         <el-radio-button value="direct">直连（确认风险）</el-radio-button>
@@ -44,7 +44,7 @@
         :disabled="busy"
       >
         <el-option
-          v-for="proxy in proxies"
+          v-for="proxy in selectableProxies"
           :key="proxy.id"
           :value="proxy.id"
           :label="`${proxy.name} · ${proxy.protocol.toUpperCase()} · ${proxy.egressIp || `${proxy.host}:${proxy.port}`}`"
@@ -52,16 +52,16 @@
         />
       </el-select>
       <div v-if="!proxyStrategy" class="proxy-route-notice warning">
-        为防止首个 Telegram 请求使用面板直连 IP，请明确选择已有代理或自动分配已有 WARP。
+        为防止首个 Telegram 请求使用面板直连 IP，请明确选择已有代理或自动分配空闲 WARP。
       </div>
       <div v-else-if="proxyStrategy === 'direct'" class="proxy-route-notice danger">
         已明确选择直连：Telegram 从首次验证开始即可看到面板公网 IP。
       </div>
       <div v-else-if="proxyStrategy === 'global'" class="proxy-route-notice warning">
-        仅在已配置全局代理时可用；未配置会在首次连接前拒绝，请改选已有代理、自动分配已有 WARP 或明确直连。
+        仅在已配置全局代理时可用；未配置会在首次连接前拒绝，请改选已有代理、自动分配空闲 WARP 或明确直连。
       </div>
       <div v-else-if="proxyStrategy === 'warp_pool'" class="proxy-route-notice warning">
-        将按当前账号绑定数自动选择已有 WARP；不会创建新容器。当前已启用 {{ availableWarpPoolCount }} 个 WARP。
+        每个账号独占分配一个已检测通过的空闲 WARP；不会创建新容器。当前可分配 {{ availableWarpPoolCount }} 个出口。
       </div>
       <div v-else-if="proxyStrategy === 'warp_per_account'" class="proxy-route-notice warning">
         将为每个成功导入账号创建并绑定一个轻量 WARP；单次最多 {{ WARP_PER_ACCOUNT_IMPORT_LIMIT }} 个账号，失败会在账号首次连接前停止。
@@ -392,6 +392,7 @@ import {
   UploadFilled,
 } from '@element-plus/icons-vue'
 import { panelApi } from '@/api/panel'
+import { countAvailableWgcfPool } from '@/utils/proxyRows'
 import type {
   AccountCategory,
   AccountListItem,
@@ -448,11 +449,8 @@ watch(proxyStrategy, () => { acceptWarpTerms.value = false }, { flush: 'sync' })
 
 const busy = computed(() => importingZip.value || importingSessions.value || importingString.value)
 const shouldBlockApiImport = computed(() => telegramApiChecked.value && !telegramApiConfigured.value)
-const availableWarpPoolCount = computed(() => proxies.value.filter(
-  (proxy) => proxy.kind === 'warp'
-    && proxy.isEnabled
-    && proxy.warpRuntimeStatus === 'active',
-).length)
+const selectableProxies = computed(() => proxies.value.filter((proxy) => !proxy.managedWgcfProfile && proxy.kind !== 'warp'))
+const availableWarpPoolCount = computed(() => countAvailableWgcfPool(proxies.value, warpStatus.value))
 const warpCreateAvailable = computed(() => Boolean(
   warpStatus.value?.available,
 ))
@@ -755,7 +753,7 @@ async function loadCategories() {
 }
 
 async function loadProxies() {
-  proxies.value = (await panelApi.proxies()).filter((proxy) => !proxy.managedWgcfProfile)
+  proxies.value = await panelApi.proxies()
 }
 
 async function loadWarpStatus() {

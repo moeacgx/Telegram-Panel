@@ -28,7 +28,6 @@ export interface ProxyBatchResult {
 export type ProxyKind = 'manual' | 'resin' | 'warp' | 'wireguard_warp'
 
 export type ProxyProtocol = 'http' | 'socks5' | 'mtproto'
-export type WarpProxyProtocol = Extract<ProxyProtocol, 'http' | 'socks5'>
 export type GlobalProxySourceMode = 'manual' | 'existing'
 
 export interface ProxyCategory {
@@ -113,55 +112,6 @@ export interface SaveOutboundProxyRequest {
 export interface ProxyImportRequest {
   text: string
   testAfterImport: boolean
-}
-
-export interface WarpRuntimeStatus {
-  platformSupported: boolean
-  enabled: boolean
-  dockerAvailable: boolean
-  dockerVersion?: string | null
-  error?: string | null
-  image: string
-  network: string
-  proxyHostMode: string
-  defaultProtocol: WarpProxyProtocol
-  maintenance?: WarpMaintenanceRuntimeStatus | null
-}
-
-export interface WarpMaintenanceRuntimeStatus {
-  enabled: boolean
-  running: boolean
-  healthCheckIntervalMinutes: number
-  failureThreshold: number
-  recoveryCooldownMinutes: number
-  scheduledRefreshEnabled: boolean
-  scheduledRefreshIntervalMinutes: number
-  lastRunAtUtc?: string | null
-  nextRunAtUtc?: string | null
-  lastError?: string | null
-  checkedCount: number
-  healthyCount: number
-  recoveredCount: number
-  failedCount: number
-}
-
-export interface WarpMaintenanceResult {
-  proxyId: number
-  name: string
-  success: boolean
-  restarted: boolean
-  recovered: boolean
-  runtimeStatus: string
-  summary: string
-  error?: string | null
-}
-
-export interface WarpMaintenanceBatchResult {
-  checked: number
-  healthy: number
-  recovered: number
-  failed: number
-  items: WarpMaintenanceResult[]
 }
 
 export interface WgcfProfile {
