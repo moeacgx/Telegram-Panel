@@ -70,17 +70,13 @@ docker compose up -d
 ### 导入或登录前先选择账号出口
 
 导入账号、手机号登录和二维码登录会在第一条 Telegram 请求前要求选择代理出口、自动分配
-已有 WARP、有效的全局代理或明确直连。导入和登录都只复用已准备好的 WARP，不会为每个账号
-新建容器。系统不会先用面板公网 IP 登录，再补绑代理。
+空闲轻量 WARP、创建一对一轻量 WARP、有效的全局代理或明确直连。新建轻量出口在主容器内
+运行独立进程，必须先接受条款并通过出口检测。系统不会先用面板公网 IP 登录，再补绑代理。
 
-普通 HTTP、SOCKS5、MTProxy 和 Resin 可直接在 **代理管理** 中添加。需要面板一键创建
-WARP 时，使用受管 WARP 叠加配置：
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.warp.yml up -d
-```
-
-该配置会挂载 Docker Socket，仅应在可信主机启用。完整说明见
+普通 HTTP、SOCKS5、MTProxy 和 Resin 可直接在 **代理管理** 中添加。“一键创建 WARP”
+使用 Linux 镜像内置 wgcf＋wireproxy，无需额外 Compose 文件、Docker Socket 或每出口容器。
+v1.31.82 起所有轻量出口与普通代理显示在同一列表，旧容器 WARP 已退役；旧安装必须先完成
+[升级前迁移](../deployment/wgcf-wireproxy.md)。完整使用说明见
 [代理管理与账号出口](../guides/proxy-management.md)。
 
 ### 数据持久化（别乱删）
