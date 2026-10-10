@@ -625,8 +625,11 @@ public sealed class ManualLoginProxyRoutingTests
     public async Task 自动分配已有WARP会选择空闲候选并绑定正式账号()
     {
         await using var fixture = await Fixture.CreateAsync();
-        var busyWarp = await fixture.AddActiveWarpProxyAsync("busy-warp");
-        var freeWarp = await fixture.AddActiveWarpProxyAsync("free-warp");
+        var unavailableWarp = await fixture.ManagedWarp.AddManagedProxyAsync();
+        fixture.ManagedWarp.UnavailableProxyIds.Add(unavailableWarp.Id);
+        var busyWarp = await fixture.ManagedWarp.AddManagedProxyAsync();
+        var freeWarp = await fixture.ManagedWarp.AddManagedProxyAsync();
+        await fixture.AddActiveWarpProxyAsync("retired-warp");
         var busyState = await fixture.Coordinator.PrepareAsync(1004, "existing", busyWarp.Id);
         Assert.Equal(busyWarp.Id, busyState.Resolution.Proxy?.ProxyId);
         var account = await fixture.AddInactiveAccountAsync();
@@ -643,6 +646,22 @@ public sealed class ManualLoginProxyRoutingTests
         var saved = await fixture.Db.Accounts.AsNoTracking().SingleAsync(x => x.Id == account.Id);
         Assert.True(saved.IsActive);
         Assert.Equal(freeWarp.Id, saved.ProxyId);
+        Assert.Empty(fixture.ManagedWarp.Requests);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Coordinator.PrepareAsync(1006, "warp_pool", null));
+    }
+
+    [Theory]
+    [InlineData("existing")]
+    [InlineData("warp_pool")]
+    public async Task 旧容器记录不能用于登录首次连接或加入轻量池(string strategy)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var legacy = await fixture.AddActiveWarpProxyAsync("retired-warp");
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Coordinator.PrepareAsync(1007, strategy, legacy.Id));
+        Assert.False(fixture.Coordinator.HasState(1007));
+        Assert.Empty(fixture.ManagedWarp.Requests);
     }
 
     [Fact]
@@ -653,71 +672,11 @@ public sealed class ManualLoginProxyRoutingTests
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             fixture.Coordinator.PrepareAsync(1008, "warp_pool", null));
 
-        Assert.Contains("没有可自动分配的已有 WARP", error.Message);
+        Assert.Contains("没有可自动分配的空闲轻量 WARP", error.Message);
         Assert.False(fixture.Coordinator.HasState(1008));
         Assert.Empty(await fixture.Db.OutboundProxies.AsNoTracking()
             .Where(x => x.Kind == OutboundProxyKinds.Warp)
             .ToListAsync());
-    }
-
-    [Fact]
-    public void 重启孤儿清理只选择过期且未被登录会话持有的WARP()
-    {
-        var store = new AccountLoginProxyStateStore();
-        var temporaryWarpClaims = new TemporaryWarpClaimStore();
-        var cutoff = DateTimeOffset.UtcNow.AddMinutes(-15);
-        var proxy = new OutboundProxy
-        {
-            Id = 501,
-            Kind = OutboundProxyKinds.Warp,
-            Accounts = new List<Account>(),
-            WarpProfile = new WarpProfile
-            {
-                RequestId = $"{AccountLoginProxyCoordinator.ManagedWarpRequestPrefix}123.abc",
-                CreatedAtUtc = cutoff.UtcDateTime.AddMinutes(-1)
-            }
-        };
-
-        Assert.True(AccountLoginProxyCleanupService.IsRestartOrphan(
-            proxy,
-            cutoff,
-            store,
-            temporaryWarpClaims));
-
-        store.ClaimWarpProxy(proxy.Id);
-        Assert.False(AccountLoginProxyCleanupService.IsRestartOrphan(
-            proxy,
-            cutoff,
-            store,
-            temporaryWarpClaims));
-
-        store.ReleaseWarpProxyClaim(proxy.Id);
-        proxy.WarpProfile.RequestId = "account-123";
-        Assert.False(AccountLoginProxyCleanupService.IsRestartOrphan(
-            proxy,
-            cutoff,
-            store,
-            temporaryWarpClaims));
-
-        Assert.True(AccountLoginProxyCoordinator.IsManagedWarpRequestId(
-            $"{AccountLoginProxyCoordinator.ManagedWarpRequestPrefix}99.abc"));
-        Assert.False(AccountLoginProxyCoordinator.IsManagedWarpRequestId("login-99-abc"));
-
-        proxy.WarpProfile.RequestId = $"{AccountImportService.ManagedWarpRequestPrefix}abc";
-        Assert.True(AccountImportService.IsManagedWarpRequestId(proxy.WarpProfile.RequestId));
-        using (temporaryWarpClaims.ClaimRequest(proxy.WarpProfile.RequestId!))
-        {
-            Assert.False(AccountLoginProxyCleanupService.IsRestartOrphan(
-                proxy,
-                cutoff,
-                store,
-                temporaryWarpClaims));
-        }
-        Assert.True(AccountLoginProxyCleanupService.IsRestartOrphan(
-            proxy,
-            cutoff,
-            store,
-            temporaryWarpClaims));
     }
 
     [Fact]
@@ -1098,16 +1057,10 @@ public sealed class ManualLoginProxyRoutingTests
             var probe = new ProxyEgressProbeService();
             var stateStore = new AccountLoginProxyStateStore();
             var temporaryWarpClaims = new TemporaryWarpClaimStore();
-            var warpManager = new WarpContainerManager(
-                db,
-                configuration,
-                probe,
-                NullLogger<WarpContainerManager>.Instance);
             var proxyManagement = new ProxyManagementService(
                 db,
                 pool,
                 probe,
-                warpManager,
                 NullLogger<ProxyManagementService>.Instance,
                 configuration,
                 temporaryWarpClaims,
@@ -1213,6 +1166,7 @@ public sealed class ManualLoginProxyRoutingTests
 
     private sealed class StubManagedWarpProvisioner(AppDbContext db, TemporaryWarpClaimStore claims) : IManagedWarpProvisioner
     {
+        public HashSet<int> UnavailableProxyIds { get; } = new();
         public List<string> Requests { get; } = new();
         public List<int> Stopped { get; } = new();
         public int ReleaseCount { get; private set; }
@@ -1243,7 +1197,7 @@ public sealed class ManualLoginProxyRoutingTests
                 ManagedWgcfProfile = "web-" + Guid.NewGuid().ToString("N"),
                 Protocol = "socks5",
                 Host = "127.0.0.1",
-                Port = 42000,
+                Port = 42000 + await db.OutboundProxies.CountAsync(),
                 Username = "user",
                 Password = "password",
                 IsEnabled = true,
@@ -1259,6 +1213,8 @@ public sealed class ManualLoginProxyRoutingTests
 
         public async Task<ManagedWarpProxyLease> AcquireAsync(int proxyId, CancellationToken cancellationToken = default)
         {
+            if (UnavailableProxyIds.Contains(proxyId))
+                throw new InvalidOperationException("运行器档案尚未就绪");
             var proxy = await db.OutboundProxies.SingleAsync(x => x.Id == proxyId, cancellationToken);
             var claim = claims.ClaimManagedProfile(proxy.ManagedWgcfProfile!);
             return new ManagedWarpProxyLease(proxy, claim.Token, new ReleaseAction(() =>

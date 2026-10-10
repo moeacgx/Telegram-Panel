@@ -22,6 +22,19 @@ namespace TelegramPanel.Web.Tests;
 public sealed class GlobalProxyBindingSelectionTests
 {
     [Fact]
+    public async Task 旧容器全局代理会闭锁且不能降级直连()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var legacy = fixture.AddProxy("retired", OutboundProxyKinds.Warp, OutboundProxyProtocols.Socks5);
+        await fixture.Db.SaveChangesAsync();
+        fixture.SetGlobalProxy(legacy.Id);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new GlobalProxyResolver(fixture.Db, fixture.Configuration).ResolveRequiredAsync("tg_account_42"));
+        Assert.Contains("已退役", error.Message);
+        Assert.Contains("阻止", error.Message);
+    }
+
+    [Fact]
     public async Task 导入existing代理会持久化专属ProxyId且不受全局切换影响()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -64,8 +77,8 @@ public sealed class GlobalProxyBindingSelectionTests
     {
         await using var fixture = await TestFixture.CreateAsync();
         var globalProxy = fixture.AddProxy(
-            "global-warp",
-            OutboundProxyKinds.Warp,
+            "global-manual",
+            OutboundProxyKinds.Manual,
             OutboundProxyProtocols.Socks5);
         await fixture.Db.SaveChangesAsync();
         fixture.SetGlobalProxy(globalProxy.Id);
@@ -88,9 +101,9 @@ public sealed class GlobalProxyBindingSelectionTests
     }
 
     [Theory]
-    [InlineData(OutboundProxyKinds.Warp, OutboundProxyProtocols.Socks5)]
+    [InlineData(OutboundProxyKinds.Manual, OutboundProxyProtocols.Socks5)]
     [InlineData(OutboundProxyKinds.Resin, OutboundProxyProtocols.Http)]
-    public async Task 全局existing模式按ProxyId解析WARP或Resin(string kind, string protocol)
+    public async Task 全局existing模式按ProxyId解析普通代理或Resin(string kind, string protocol)
     {
         await using var fixture = await TestFixture.CreateAsync();
         var proxy = fixture.AddProxy("selected", kind, protocol);
@@ -192,16 +205,10 @@ public sealed class GlobalProxyBindingSelectionTests
 
             var clientPool = new StubClientPool();
             var probe = new ProxyEgressProbeService();
-            var warpManager = new WarpContainerManager(
-                db,
-                configuration,
-                probe,
-                NullLogger<WarpContainerManager>.Instance);
             var proxyManagement = new ProxyManagementService(
                 db,
                 clientPool,
                 probe,
-                warpManager,
                 NullLogger<ProxyManagementService>.Instance,
                 configuration);
             var accountManagement = new AccountManagementService(

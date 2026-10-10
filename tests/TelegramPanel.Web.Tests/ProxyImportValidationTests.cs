@@ -24,16 +24,10 @@ public sealed class ProxyImportValidationTests
         await db.Database.EnsureCreatedAsync();
 
         var probe = new ProxyEgressProbeService();
-        var warp = new WarpContainerManager(
-            db,
-            new ConfigurationBuilder().Build(),
-            probe,
-            NullLogger<WarpContainerManager>.Instance);
         var service = new ProxyManagementService(
             db,
             new EmptyClientPool(),
             probe,
-            warp,
             NullLogger<ProxyManagementService>.Instance);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() =>
@@ -57,16 +51,10 @@ public sealed class ProxyImportValidationTests
         await db.Database.EnsureCreatedAsync();
 
         var probe = new ProxyEgressProbeService();
-        var warp = new WarpContainerManager(
-            db,
-            new ConfigurationBuilder().Build(),
-            probe,
-            NullLogger<WarpContainerManager>.Instance);
         var service = new ProxyManagementService(
             db,
             new EmptyClientPool(),
             probe,
-            warp,
             NullLogger<ProxyManagementService>.Instance);
         const string secret = "top-secret-proxy-token";
         var raw = $"http://proxy-user:{secret}@";

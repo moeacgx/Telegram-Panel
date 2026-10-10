@@ -47,7 +47,7 @@
         {
             <MudSelect T="int?" @bind-Value="selectedProxyId" Label="选择已有代理" Variant="Variant.Outlined"
                        Dense="true" Clearable="true" Disabled="@Busy" Class="mt-3">
-                @foreach (var proxy in proxyOptions)
+                @foreach (var proxy in proxyOptions.Where(x => x.ManagedWgcfProfile == null))
                 {
                     <MudSelectItem T="int?" Value="@((int?)proxy.Id)">
                         @FormatProxyOption(proxy)
@@ -90,7 +90,7 @@
         else if (proxyStrategy == "warp_pool")
         {
             <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-3">
-                将按当前账号绑定数自动选择已有 WARP；不会创建新容器。当前已启用 @WarpPoolCount 个 WARP。
+                将独占分配一个已就绪的空闲轻量 WARP。当前有 @WarpPoolCount 个空闲出口。
             </MudAlert>
         }
         else if (proxyStrategy == "warp_per_account")
@@ -98,6 +98,7 @@
             <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-3">
                 将为每个成功导入账号创建并绑定一个新的受管 WARP；单次最多 @AccountImportService.MaxWarpPerAccountImportCount 个账号，失败会在首次连接前停止。
             </MudAlert>
+            <MudCheckBox T="bool" @bind-Value="acceptWarpTerms" Disabled="@Busy" Label="我已阅读并接受 Cloudflare WARP 条款" />
         }
     </MudCardContent>
 </MudCard>
@@ -358,11 +359,13 @@
     private List<OutboundProxy> proxyOptions = new();
     private int WarpPoolCount => proxyOptions.Count(x =>
         x.IsEnabled
-        && x.Kind == OutboundProxyKinds.Warp
-        && x.WarpProfile?.Status == "active");
+        && x.Kind == OutboundProxyKinds.WireGuardWarp
+        && x.ManagedWgcfProfile != null && x.Accounts.Count == 0
+        && x.TestStatus == "ok" && !string.IsNullOrWhiteSpace(x.EgressIp));
 
 
     private bool WarpCreateAvailable { get; set; }
+    private bool acceptWarpTerms;
     private bool GlobalProxyConfigured
     {
         get
@@ -384,7 +387,7 @@
             && (selectedProxyId is not > 0
                 || proxyOptions.All(x => x.Id != selectedProxyId.Value)))
         || (proxyStrategy == "warp_pool" && WarpPoolCount == 0)
-        || (proxyStrategy == "warp_per_account" && !WarpCreateAvailable)
+        || (proxyStrategy == "warp_per_account" && (!WarpCreateAvailable || !acceptWarpTerms))
         || (proxyStrategy == "global" && !GlobalProxyConfigured);
 
     private List<ImportResult> importResults = new();
@@ -402,11 +405,11 @@
     protected override async Task OnInitializedAsync()
     {
         var proxiesTask = ProxyManagement.ListAsync(_pageCts.Token);
-        var warpStatusTask = ProxyManagement.GetWarpStatusAsync(_pageCts.Token);
+        var warpStatusTask = ProxyManagement.GetManagedWarpAvailabilityAsync(_pageCts.Token);
         try
         {
             proxyOptions = (await proxiesTask)
-                .Where(x => x.IsEnabled)
+                .Where(x => x.IsEnabled && x.Kind != OutboundProxyKinds.Warp)
                 .OrderByDescending(x => x.Id)
                 .ToList();
         }
@@ -422,7 +425,7 @@
         try
         {
             var warpStatus = await warpStatusTask;
-            WarpCreateAvailable = warpStatus.PlatformSupported && warpStatus.Enabled && warpStatus.DockerAvailable;
+            WarpCreateAvailable = warpStatus.Available;
         }
         catch (OperationCanceledException) when (_pageCts.IsCancellationRequested)
         {
@@ -512,7 +515,12 @@
                     Snackbar.Add("当前环境无法创建 WARP，请先确认受管 WARP 运行环境", Severity.Error);
                     return false;
                 }
-                binding = new AccountProxyBindingInput("warp_per_account");
+                if (!acceptWarpTerms)
+                {
+                    Snackbar.Add("请先阅读并接受 Cloudflare WARP 条款", Severity.Warning);
+                    return false;
+                }
+                binding = new AccountProxyBindingInput("warp_per_account", AcceptWarpTerms: true);
                 return true;
             default:
                 Snackbar.Add("请先明确选择导入账号首次连接使用的代理方式", Severity.Warning);

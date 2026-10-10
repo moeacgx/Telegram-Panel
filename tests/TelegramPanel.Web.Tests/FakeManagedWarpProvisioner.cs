@@ -11,6 +11,7 @@ internal sealed class FakeManagedWarpProvisioner(AppDbContext db, TemporaryWarpC
     : IManagedWarpProvisioner
 {
     public bool Ready { get; set; } = true;
+    public HashSet<int> UnavailableProxyIds { get; } = new();
     public int ProvisionCalls { get; private set; }
     public int StopCalls { get; private set; }
     public Func<OutboundProxy, Task>? OnProvision { get; set; }
@@ -49,6 +50,8 @@ internal sealed class FakeManagedWarpProvisioner(AppDbContext db, TemporaryWarpC
 
     public async Task<ManagedWarpProxyLease> AcquireAsync(int proxyId, CancellationToken cancellationToken = default)
     {
+        if (UnavailableProxyIds.Contains(proxyId))
+            throw new InvalidOperationException("运行器档案尚未就绪");
         var proxy = await db.OutboundProxies.SingleAsync(x => x.Id == proxyId, cancellationToken);
         if (await db.Accounts.AnyAsync(x => x.ProxyId == proxyId, cancellationToken))
             throw new InvalidOperationException("出口已有账号绑定");

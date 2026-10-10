@@ -32,7 +32,6 @@ public sealed partial class ProxyManagementService
     private readonly AppDbContext _db;
     private readonly ITelegramClientPool _clientPool;
     private readonly IProxyEgressProbeService _probeService;
-    private readonly WarpContainerManager _warpManager;
     private readonly ILogger<ProxyManagementService> _logger;
     private readonly IConfiguration? _configuration;
     private readonly TemporaryWarpClaimStore? _temporaryWarpClaims;
@@ -43,7 +42,6 @@ public sealed partial class ProxyManagementService
         AppDbContext db,
         ITelegramClientPool clientPool,
         IProxyEgressProbeService probeService,
-        WarpContainerManager warpManager,
         ILogger<ProxyManagementService> logger,
         IConfiguration? configuration = null,
         TemporaryWarpClaimStore? temporaryWarpClaims = null,
@@ -53,7 +51,6 @@ public sealed partial class ProxyManagementService
         _db = db;
         _clientPool = clientPool;
         _probeService = probeService;
-        _warpManager = warpManager;
         _logger = logger;
         _configuration = configuration;
         _temporaryWarpClaims = temporaryWarpClaims;
@@ -186,49 +183,7 @@ public sealed partial class ProxyManagementService
             var categoryId = NormalizeCategoryId(input.CategoryId);
             await EnsureCategoryExistsAsync(categoryId, cancellationToken);
 
-            if (proxy.Kind == OutboundProxyKinds.Warp)
-            {
-                var warpProfile = proxy.WarpProfile
-                    ?? throw new InvalidOperationException("WARP 运行配置缺失，请删除后重新创建");
-                var enabledChanged = proxy.IsEnabled != input.IsEnabled;
-                var lifecycleChangeRequired = enabledChanged
-                    || warpProfile.DesiredEnabled != input.IsEnabled
-                    || (input.IsEnabled
-                        ? warpProfile.Status != "active"
-                        : warpProfile.Status != "stopped");
-                IReadOnlyDictionary<int, bool>? warpActivationStates = null;
-                if (lifecycleChangeRequired)
-                {
-                    warpActivationStates = await QuiesceBoundAccountsAsync(
-                        boundAccounts,
-                        cancellationToken);
-                    await ReleaseClientsStrictAsync(boundAccounts.Select(x => x.Id));
-                    await _warpManager.SetContainerEnabledAsync(
-                        warpProfile,
-                        input.IsEnabled,
-                        cancellationToken);
-                }
-
-                var now = DateTime.UtcNow;
-                proxy.Name = NormalizeName(input.Name, proxy.Name);
-                proxy.CategoryId = categoryId;
-                proxy.IsEnabled = input.IsEnabled;
-                warpProfile.DesiredEnabled = input.IsEnabled;
-                if (lifecycleChangeRequired)
-                {
-                    warpProfile.Status = input.IsEnabled ? "active" : "stopped";
-                    warpProfile.LastError = null;
-                    warpProfile.UpdatedAtUtc = now;
-                    ResetProbeState(proxy);
-                }
-                if (lifecycleChangeRequired && input.IsEnabled)
-                    RestoreBoundAccountActivation(boundAccounts, warpActivationStates!);
-                proxy.UpdatedAtUtc = now;
-                await _db.SaveChangesAsync(cancellationToken);
-                return input.TestAfterSave
-                    ? await TestAsyncCore(proxy, cancellationToken)
-                    : proxy;
-            }
+            AccountProxyResolver.RejectRetiredWarp(proxy);
 
             var normalized = NormalizeInput(input, proxy);
             if (normalized.Kind == OutboundProxyKinds.Warp)
@@ -478,10 +433,6 @@ public sealed partial class ProxyManagementService
             throw new InvalidOperationException("轻量 WARP 出口尚未就绪，未发起首次连接");
         EnsureWireGuardWarpReadyForBinding(lease.Proxy);
     }
-
-    public Task<WarpRuntimeStatus> GetWarpStatusAsync(
-        CancellationToken cancellationToken = default) =>
-        _warpManager.GetStatusAsync(cancellationToken);
 
     private static void ResetProbeState(OutboundProxy proxy)
     {

@@ -702,16 +702,10 @@ public sealed class BatchProxyAccountImportTests
             var probe = new RecordingProbeService(events);
             var clientPool = new RecordingClientPool();
             var temporaryWarpClaims = new TemporaryWarpClaimStore();
-            var warp = new WarpContainerManager(
-                db,
-                configuration,
-                probe,
-                NullLogger<WarpContainerManager>.Instance);
             var proxyManagement = new ProxyManagementService(
                 db,
                 clientPool,
                 probe,
-                warp,
                 NullLogger<ProxyManagementService>.Instance,
                 configuration,
                 temporaryWarpClaims);

@@ -41,11 +41,6 @@ public sealed class ProxyEgressMaintenanceTests
             db,
             new EmptyClientPool(),
             probe,
-            new WarpContainerManager(
-                db,
-                configuration,
-                probe,
-                NullLogger<WarpContainerManager>.Instance),
             NullLogger<ProxyManagementService>.Instance,
             configuration);
 

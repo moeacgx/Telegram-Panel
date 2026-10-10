@@ -38,6 +38,8 @@ public sealed partial class ProxyManagementService
         var kind = (input.Kind ?? existing?.Kind ?? OutboundProxyKinds.Manual)
             .Trim()
             .ToLowerInvariant();
+        if (kind == OutboundProxyKinds.Warp)
+            throw new ArgumentException("旧版容器 WARP 已退役，请使用一键创建轻量 WARP");
         var protocol = (input.Protocol ?? existing?.Protocol ?? OutboundProxyProtocols.Http)
             .Trim()
             .ToLowerInvariant();

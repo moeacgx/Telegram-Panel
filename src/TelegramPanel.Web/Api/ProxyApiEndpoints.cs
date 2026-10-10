@@ -29,10 +29,7 @@ public static class ProxyApiEndpoints
         group.MapPost("/proxies/batch/enabled", BatchSetEnabledAsync);
         group.MapPost("/proxies/batch/test", BatchTestAsync);
         group.MapPost("/proxies/batch/delete", BatchDeleteAsync);
-        group.MapGet("/proxies/warp/status", GetWarpStatusAsync);
         group.MapPost("/proxies/warp", CreateWarpAsync);
-        group.MapPost("/proxies/{id:int}/warp/refresh", RefreshWarpAsync);
-        group.MapPost("/proxies/warp/refresh-all", RefreshAllWarpAsync);
 
         group.MapPost("/accounts/{id:int}/proxy", BindAccountAsync);
         group.MapPost("/accounts/batch/proxy", BindAccountsAsync);
@@ -182,20 +179,6 @@ public static class ProxyApiEndpoints
         {
             return ToError(ex);
         }
-    }
-
-    private static async Task<IResult> GetWarpStatusAsync(
-        ProxyManagementService service,
-        IConfiguration configuration,
-        WarpMaintenanceState maintenanceState,
-        CancellationToken cancellationToken)
-    {
-        var status = await service.GetWarpStatusAsync(cancellationToken);
-        var options = WarpMaintenanceOptions.From(configuration);
-        return Results.Ok(status with
-        {
-            Maintenance = maintenanceState.Snapshot(options)
-        });
     }
 
     private static async Task<IResult> ListCategoriesAsync(
@@ -432,39 +415,6 @@ public static class ProxyApiEndpoints
         {
             return ToError(ex);
         }
-    }
-
-    private static async Task<IResult> RefreshWarpAsync(
-        int id,
-        ProxyManagementService service,
-        IConfiguration configuration,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            var result = await service.MaintainWarpAsync(
-                id,
-                WarpMaintenanceOptions.From(configuration),
-                forceRestart: true,
-                cancellationToken);
-            return Results.Ok(result);
-        }
-        catch (Exception ex) when (IsClientError(ex))
-        {
-            return ToError(ex);
-        }
-    }
-
-    private static async Task<IResult> RefreshAllWarpAsync(
-        ProxyManagementService service,
-        IConfiguration configuration,
-        CancellationToken cancellationToken)
-    {
-        var result = await service.MaintainAllWarpAsync(
-            WarpMaintenanceOptions.From(configuration),
-            forceRestart: true,
-            cancellationToken);
-        return Results.Ok(result);
     }
 
     private static async Task<IResult> BindAccountAsync(

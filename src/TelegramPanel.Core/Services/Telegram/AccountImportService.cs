@@ -1358,8 +1358,8 @@ public class AccountImportService
     }
 
     /// <summary>
-    /// 校验导入专用代理策略。自动 WARP 池只复用已经存在且运行中的容器，
-    /// 不允许回退到创建新容器或面板直连。
+    /// 校验导入专用代理策略。自动 WARP 池只复用已经存在的空闲轻量出口，
+    /// 不允许回退到创建出口或面板直连。
     /// </summary>
     public async Task ValidateImportProxyBindingAsync(
         AccountProxyBindingInput binding,
@@ -1400,37 +1400,25 @@ public class AccountImportService
             var binding = new AccountProxyBindingInput("existing", proxy.Id);
             try
             {
-                if (proxy.ManagedWgcfProfile != null)
+                var managedLease = await _proxyManagement.AcquireManagedWarpLeaseAsync(proxy.Id, cancellationToken);
+                try
                 {
-                    var managedLease = await _proxyManagement.AcquireManagedWarpLeaseAsync(proxy.Id, cancellationToken);
-                    try
-                    {
-                        var stableImportKey = BuildImportStableKey(stableKeySeed, operationNonce);
-                        var connection = AccountProxyResolver.BuildConnectionOptions(managedLease.Proxy, stableImportKey);
-                        return (binding with { ExpectedConnection = connection }, new PreparedImportProxy(
-                            connection, null, null, stableImportKey, null,
-                            EgressIp: managedLease.Proxy.EgressIp, ManagedWarpLease: managedLease));
-                    }
-                    catch { managedLease.Dispose(); throw; }
+                    var stableImportKey = BuildImportStableKey(stableKeySeed, operationNonce);
+                    var connection = AccountProxyResolver.BuildConnectionOptions(managedLease.Proxy, stableImportKey);
+                    return (binding with { ExpectedConnection = connection }, new PreparedImportProxy(
+                        connection, null, null, stableImportKey, null,
+                        EgressIp: managedLease.Proxy.EgressIp, ManagedWarpLease: managedLease));
                 }
-                var prepared = await PrepareImportProxyAsync(
-                    stableKeySeed,
-                    operationNonce,
-                    binding,
-                    cancellationToken);
-                return (binding, prepared);
+                catch { managedLease.Dispose(); throw; }
             }
-            catch (InvalidOperationException ex) when (
-                ex.Message.Contains("首次连接流程使用", StringComparison.Ordinal)
-                || ex.Message.Contains("正在维护", StringComparison.Ordinal)
-                || ex.Message.Contains("占用", StringComparison.Ordinal))
+            catch (InvalidOperationException ex)
             {
                 busyError = ex;
             }
         }
 
         throw new InvalidOperationException(
-            "现有 WARP 当前都在维护或被其他首次连接流程占用，请稍后重试；未创建新容器",
+            "现有轻量 WARP 已被占用或尚未就绪，请稍后重试；未创建新出口",
             busyError);
     }
 
@@ -1490,24 +1478,16 @@ public class AccountImportService
     {
         var proxies = await _proxyManagement.ListAsync(cancellationToken);
         var candidates = proxies
-            .Where(x => x.IsEnabled && ((x.ManagedWgcfProfile != null
+            .Where(x => x.IsEnabled && x.ManagedWgcfProfile != null
                         && x.Kind == OutboundProxyKinds.WireGuardWarp
                         && x.Accounts.Count == 0 && x.TestStatus == "ok" && !string.IsNullOrWhiteSpace(x.EgressIp)
                         && !_temporaryWarpClaims.IsManagedProfileClaimed(x.ManagedWgcfProfile))
-                        || (x.Kind == OutboundProxyKinds.Warp
-                        && x.WarpProfile is
-                        {
-                            DesiredEnabled: true,
-                            Status: "active"
-                        }
-                        && !_temporaryWarpClaims.OwnsRequest(x.WarpProfile.RequestId))))
-            .OrderBy(x => x.Accounts.Count)
-            .ThenBy(x => x.Id)
+            .OrderBy(x => x.Id)
             .ToList();
         if (candidates.Count == 0)
         {
             throw new InvalidOperationException(
-                "没有可自动分配的已有 WARP；请先在代理管理中准备并启用 WARP，系统不会为导入创建新容器");
+                "没有可自动分配的空闲轻量 WARP；请先在代理管理中创建并检测出口，系统不会自动改为直连");
         }
 
         return candidates;
