@@ -77,14 +77,8 @@ jobs:
             printf '%s\n' "$UPDATE_MODE" > "$DATA_DIR/update-mode.txt"
 
             docker pull "$IMAGE"
-            if [ -f docker-compose.warp.yml ]; then
-              docker compose \
-                -f docker-compose.yml \
-                -f docker-compose.warp.yml \
-                up -d --force-recreate telegram-panel
-            else
-              docker compose up -d --force-recreate telegram-panel
-            fi
+            # 轻量 WARP 在主容器内运行，部署不再挂载旧容器管理所需的 Docker Socket。
+            docker compose -f docker-compose.yml up -d --force-recreate telegram-panel
 
             sleep 5
             docker ps --filter name=telegram-panel --format 'container={{.Names}} image={{.Image}} status={{.Status}}'
