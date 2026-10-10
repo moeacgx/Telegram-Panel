@@ -71,6 +71,7 @@ public sealed class WgcfLifecycleConcurrencyTests
         try
         {
             while (f.PersistedPhase() == "creating") await Task.Delay(10, timeout.Token);
+            await f.WaitQueueCleanupAsync(timeout.Token);
             Assert.Equal("ready", f.PersistedPhase());
             Assert.False(claims.IsManagedProfileClaimed(f.Profile));
         }
@@ -102,6 +103,7 @@ public sealed class WgcfLifecycleConcurrencyTests
         try
         {
             while (f.PersistedPhase() == "creating") await Task.Delay(10, timeout.Token);
+            await f.WaitQueueCleanupAsync(timeout.Token);
             Assert.Equal("ready", f.PersistedPhase());
             Assert.True(f.PersistedTemporary());
             Assert.Equal(request, f.PersistedRequestId());
@@ -145,6 +147,7 @@ public sealed class WgcfLifecycleConcurrencyTests
         try
         {
             while (f.PersistedPhase() != "stopped") await Task.Delay(10, timeout.Token);
+            await f.WaitQueueCleanupAsync(timeout.Token);
             Assert.Equal(new[] { "stop" }, f.Commands);
             Assert.False((await f.ProxyAsync()).IsEnabled);
             using var lease = await f.Service.ProvisionAsync("并发验收出口", request, true, timeout.Token);
@@ -179,6 +182,7 @@ public sealed class WgcfLifecycleConcurrencyTests
         try
         {
             while (f.PersistedPhase() != "ready") await Task.Delay(10, timeout.Token);
+            await f.WaitQueueCleanupAsync(timeout.Token);
             Assert.Equal(new[] { "provision" }, f.Commands);
             Assert.True(f.PersistedTemporary());
             Assert.Equal(request, f.PersistedRequestId());
@@ -485,6 +489,14 @@ public sealed class WgcfLifecycleConcurrencyTests
 
         public Task ProcessQueueAsync(CancellationToken ct) =>
             (Task)typeof(WgcfWarpService).GetMethod("ProcessQueueAsync", PrivateInstance)!.Invoke(Service, new object[] { ct })!;
+
+        public async Task WaitQueueCleanupAsync(CancellationToken ct)
+        {
+            // 终态持久化发生在 finally 之前；工具锁释放才代表排队标记和租约已清理。
+            var toolLock = Field<SemaphoreSlim>("_toolLock");
+            await toolLock.WaitAsync(ct);
+            toolLock.Release();
+        }
 
         public Task RestoreEntryAsync(CancellationToken ct, string? phase = null)
         {
