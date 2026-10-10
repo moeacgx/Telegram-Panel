@@ -217,7 +217,6 @@ public sealed class ManagedWgcfProxyGuardTests
             Configuration = new ConfigurationBuilder().AddInMemoryCollection().Build();
             var probe = new Probe();
             Service = new(db, new EmptyPool(), probe,
-                new WarpContainerManager(db, Configuration, probe, NullLogger<WarpContainerManager>.Instance),
                 NullLogger<ProxyManagementService>.Instance, Configuration, temporaryWarpClaims: Claims);
         }
         public static async Task<Fixture> CreateAsync(SaveChangesInterceptor? interceptor = null)

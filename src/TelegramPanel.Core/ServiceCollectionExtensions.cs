@@ -33,7 +33,6 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ProxyEgressProbeService>();
         services.AddScoped<IProxyEgressProbeService>(sp =>
             sp.GetRequiredService<ProxyEgressProbeService>());
-        services.AddScoped<WarpContainerManager>();
         services.AddScoped<GlobalProxyResolver>();
         services.AddScoped<ProxyManagementService>();
 

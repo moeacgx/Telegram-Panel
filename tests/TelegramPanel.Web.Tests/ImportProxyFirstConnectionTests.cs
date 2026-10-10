@@ -24,125 +24,19 @@ namespace TelegramPanel.Web.Tests;
 
 public sealed class ImportProxyFirstConnectionTests
 {
-    [Fact]
-    public async Task 全局WARP导入与自动维护双向互斥且不会提前连接()
+    [Theory]
+    [InlineData("existing")]
+    [InlineData("warp_pool")]
+    public async Task 旧容器记录不能用于导入首次连接或加入轻量池(string strategy)
     {
-        var usageGuard = new AccountLoginProxyStateStore();
-        await using var fixture = await ImportFixture.CreateAsync(
-            OutboundProxyProtocols.Http,
-            new Dictionary<string, string?>
-            {
-                ["Telegram:Proxy:Enabled"] = "true",
-                ["Telegram:Proxy:SourceMode"] = GlobalTelegramProxyConfiguration.ExistingSourceMode,
-                ["Telegram:Proxy:ProxyId"] = "1"
-            },
-            usageGuard);
-        fixture.Proxy.Kind = OutboundProxyKinds.Warp;
-        await fixture.Db.SaveChangesAsync();
-
-        using (var maintenanceLease = usageGuard.TryAcquireMaintenance(fixture.Proxy.Id))
-        {
-            Assert.NotNull(maintenanceLease);
-            var blocked = await fixture.Service.ImportFromStringSessionAsync(
-                "session-data",
-                12345,
-                "0123456789abcdef0123456789abcdef",
-                proxyBinding: new AccountProxyBindingInput("global"));
-
-            Assert.False(blocked.Success);
-            Assert.Contains("正在维护", blocked.Error);
-            Assert.Equal(0, fixture.Importer.ImportCount);
-        }
-
-        fixture.Importer.BeforeImport = () =>
-        {
-            Assert.True(usageGuard.OwnsWarpProxy(fixture.Proxy.Id));
-            Assert.Null(usageGuard.TryAcquireMaintenance(fixture.Proxy.Id));
-        };
-        var imported = await fixture.Service.ImportFromStringSessionAsync(
-            "session-data",
-            12345,
-            "0123456789abcdef0123456789abcdef",
-            proxyBinding: new AccountProxyBindingInput("global"));
-
-        Assert.True(imported.Success, imported.Error);
-        Assert.False(usageGuard.OwnsWarpProxy(fixture.Proxy.Id));
-        var account = await fixture.Db.Accounts.AsNoTracking().SingleAsync();
-        Assert.Null(account.ProxyId);
-        Assert.True(account.UseGlobalProxy);
-    }
-
-    [Fact]
-    public async Task 已有WARP导入与自动维护双向互斥且不会提前连接()
-    {
-        var usageGuard = new AccountLoginProxyStateStore();
-        await using var fixture = await ImportFixture.CreateAsync(
-            OutboundProxyProtocols.Http,
-            warpProxyUsageGuard: usageGuard);
-        fixture.Proxy.Kind = OutboundProxyKinds.Warp;
-        await fixture.Db.SaveChangesAsync();
-
-        var maintenanceLease = usageGuard.TryAcquireMaintenance(fixture.Proxy.Id);
-        Assert.NotNull(maintenanceLease);
-        var blocked = await fixture.Service.ImportFromStringSessionAsync(
-            "session-data",
-            12345,
-            "0123456789abcdef0123456789abcdef",
-            proxyBinding: new AccountProxyBindingInput("existing", fixture.Proxy.Id));
-
-        Assert.False(blocked.Success);
-        Assert.Contains("正在维护", blocked.Error);
+        await using var fixture = await ImportFixture.CreateAsync(OutboundProxyProtocols.Socks5, enableManaged: true);
+        var legacy = await fixture.AddWarpAsync("retired", 42080);
+        var result = await fixture.Service.ImportFromStringSessionAsync("session-data", 12345,
+            "0123456789abcdef0123456789abcdef", proxyBinding: new(strategy, legacy.Id));
+        Assert.False(result.Success);
         Assert.Equal(0, fixture.Importer.ImportCount);
-
-        maintenanceLease!.Dispose();
-        fixture.Importer.BeforeImport = () =>
-        {
-            Assert.True(usageGuard.OwnsWarpProxy(fixture.Proxy.Id));
-            Assert.Null(usageGuard.TryAcquireMaintenance(fixture.Proxy.Id));
-        };
-        var imported = await fixture.Service.ImportFromStringSessionAsync(
-            "session-data",
-            12345,
-            "0123456789abcdef0123456789abcdef",
-            proxyBinding: new AccountProxyBindingInput("existing", fixture.Proxy.Id));
-
-        Assert.True(imported.Success, imported.Error);
-        Assert.False(usageGuard.OwnsWarpProxy(fixture.Proxy.Id));
-    }
-
-    [Fact]
-    public async Task 已有WARP仍属另一临时创建流程时导入不会开始首次连接()
-    {
-        var temporaryWarpClaims = new TemporaryWarpClaimStore();
-        await using var fixture = await ImportFixture.CreateAsync(
-            OutboundProxyProtocols.Http,
-            temporaryWarpClaims: temporaryWarpClaims);
-        fixture.Proxy.Kind = OutboundProxyKinds.Warp;
-        var profile = new WarpProfile
-        {
-            ProfileId = "active-import-owner",
-            RequestId = "telegram-panel.internal.import.active-owner",
-            ContainerName = "active-import-owner-container",
-            ContainerId = "active-import-owner-container-id",
-            VolumeName = "active-import-owner-volume",
-            HostPort = 42095,
-            Status = "active",
-            DesiredEnabled = true,
-            Proxy = fixture.Proxy
-        };
-        fixture.Db.WarpProfiles.Add(profile);
-        await fixture.Db.SaveChangesAsync();
-
-        using var ownerClaim = temporaryWarpClaims.ClaimRequest(profile.RequestId);
-        var blocked = await fixture.Service.ImportFromStringSessionAsync(
-            "session-data",
-            12345,
-            "0123456789abcdef0123456789abcdef",
-            proxyBinding: new AccountProxyBindingInput("existing", fixture.Proxy.Id));
-
-        Assert.False(blocked.Success);
-        Assert.Contains("另一个账号首次连接流程", blocked.Error);
-        Assert.Equal(0, fixture.Importer.ImportCount);
+        Assert.Equal(0, fixture.ManagedWarp!.ProvisionCalls);
+        Assert.Empty(await fixture.Db.Accounts.ToListAsync());
     }
 
     [Theory]
@@ -525,61 +419,18 @@ public sealed class ImportProxyFirstConnectionTests
             proxyBinding: new AccountProxyBindingInput("warp_pool"));
 
         Assert.False(result.Success);
-        Assert.Contains("没有可自动分配的已有 WARP", result.Error);
+        Assert.Contains("没有可自动分配的空闲轻量 WARP", result.Error);
         Assert.Equal(0, fixture.Importer.ImportCount);
         Assert.Empty(await fixture.Db.Accounts.AsNoTracking().ToListAsync());
     }
 
-    [Fact]
-    public async Task 自动WARP池复用已有容器并优先分配当前绑定较少的出口()
-    {
-        await using var fixture = await ImportFixture.CreateAsync(OutboundProxyProtocols.Http);
-        var firstWarp = await fixture.AddWarpAsync("WARP 1", 21080);
-        var secondWarp = await fixture.AddWarpAsync("WARP 2", 21081);
-        fixture.Importer.ResultFactory = count => new ImportResult(
-            true,
-            $"86138000000{count}",
-            10000 + count,
-            $"imported-{count}",
-            $"sessions/86138000000{count}.session");
-        var files = new[]
-        {
-            new AccountImportFile("first.session", new MemoryStream(new byte[] { 1 })),
-            new AccountImportFile("second.session", new MemoryStream(new byte[] { 2 }))
-        };
-
-        try
-        {
-            var results = await fixture.Service.ImportFromSessionFileStreamsAsync(
-                files,
-                12345,
-                "0123456789abcdef0123456789abcdef",
-                proxyBinding: new AccountProxyBindingInput("warp_pool"));
-
-            Assert.All(results, result => Assert.True(result.Success, result.Error));
-            Assert.Equal(new[] { firstWarp.Id, secondWarp.Id },
-                fixture.Importer.SeenProxies.Select(x => x!.ProxyId));
-            Assert.Equal(2, await fixture.Db.OutboundProxies.CountAsync(
-                x => x.Kind == OutboundProxyKinds.Warp));
-            var bindings = await fixture.Db.Accounts.AsNoTracking()
-                .OrderBy(x => x.Id)
-                .Select(x => x.ProxyId)
-                .ToListAsync();
-            Assert.Equal(new int?[] { firstWarp.Id, secondWarp.Id }, bindings);
-        }
-        finally
-        {
-            foreach (var file in files)
-                await file.Content.DisposeAsync();
-        }
-    }
 
     [Fact]
     public async Task 创建一对一WARP导入会先创建轻量出口并把首连出口绑定到账号()
     {
         await using var fixture = await ImportFixture.CreateAsync(
             OutboundProxyProtocols.Http,
-            warpDocker: new WarpLifecycleRegressionTests.FakeWarpDockerClient(),
+            enableManaged: true,
             warpProbe: new SuccessfulWarpProbeService());
         fixture.Importer.ResultFactory = count => new ImportResult(
             true,
@@ -615,7 +466,7 @@ public sealed class ImportProxyFirstConnectionTests
     {
         await using var fixture = await ImportFixture.CreateAsync(
             OutboundProxyProtocols.Http,
-            warpDocker: new WarpLifecycleRegressionTests.FakeWarpDockerClient(),
+            enableManaged: true,
             warpProbe: new SuccessfulWarpProbeService());
         fixture.Importer.ResultFactory = _ => new ImportResult(
             false,
@@ -644,12 +495,11 @@ public sealed class ImportProxyFirstConnectionTests
     }
 
     [Fact]
-    public async Task 创建一对一WARP导入数量超过十个会在创建容器前拒绝()
+    public async Task 创建一对一WARP导入数量超过十个会在创建出口前拒绝()
     {
-        var docker = new WarpLifecycleRegressionTests.FakeWarpDockerClient();
         await using var fixture = await ImportFixture.CreateAsync(
             OutboundProxyProtocols.Http,
-            warpDocker: docker,
+            enableManaged: true,
             warpProbe: new SuccessfulWarpProbeService());
         var files = Enumerable.Range(1, AccountImportService.MaxWarpPerAccountImportCount + 1)
             .Select(index => new AccountImportFile($"{index}.session", new MemoryStream(new byte[] { (byte)index })))
@@ -665,7 +515,7 @@ public sealed class ImportProxyFirstConnectionTests
                     proxyBinding: new AccountProxyBindingInput("warp_per_account")));
 
             Assert.Contains("单次最多导入 10 个账号", error.Message);
-            Assert.Equal(0, docker.CreateVolumeCalls);
+            Assert.Equal(0, fixture.ManagedWarp!.ProvisionCalls);
             Assert.Equal(0, fixture.Importer.ImportCount);
             Assert.Empty(await fixture.Db.OutboundProxies.AsNoTracking()
                 .Where(x => x.Kind == OutboundProxyKinds.Warp)
@@ -682,7 +532,7 @@ public sealed class ImportProxyFirstConnectionTests
     public async Task 轻量出口未检测就绪时不发起首次连接且停止保留材料()
     {
         await using var fixture = await ImportFixture.CreateAsync(OutboundProxyProtocols.Http,
-            warpDocker: new WarpLifecycleRegressionTests.FakeWarpDockerClient(), managedReady: false);
+            enableManaged: true, managedReady: false);
         var result = await fixture.Service.ImportFromStringSessionAsync("session-data", 12345,
             "0123456789abcdef0123456789abcdef",
             proxyBinding: new("warp_per_account", AcceptWarpTerms: true));
@@ -698,7 +548,7 @@ public sealed class ImportProxyFirstConnectionTests
     public async Task 导入未接受条款时不创建出口且不发起首次连接()
     {
         await using var fixture = await ImportFixture.CreateAsync(OutboundProxyProtocols.Http,
-            warpDocker: new WarpLifecycleRegressionTests.FakeWarpDockerClient());
+            enableManaged: true);
         var result = await fixture.Service.ImportFromStringSessionAsync("session-data", 12345,
             "0123456789abcdef0123456789abcdef", proxyBinding: new("warp_per_account"));
         Assert.False(result.Success);
@@ -713,7 +563,7 @@ public sealed class ImportProxyFirstConnectionTests
     public async Task 导入严格断开失败保留轻量出口独占直到重启且拒绝他人抢绑定(string strategy)
     {
         await using var fixture = await ImportFixture.CreateAsync(OutboundProxyProtocols.Http,
-            warpDocker: new WarpLifecycleRegressionTests.FakeWarpDockerClient());
+            enableManaged: true);
         if (strategy == "warp_pool")
         {
             using var ready = await fixture.ManagedWarp!.ProvisionAsync("pool", Guid.NewGuid().ToString("D"), true);
@@ -745,7 +595,9 @@ public sealed class ImportProxyFirstConnectionTests
     public async Task 自动WARP池可独占未绑定轻量出口且第二账号不会复用同出口()
     {
         await using var fixture = await ImportFixture.CreateAsync(OutboundProxyProtocols.Http,
-            warpDocker: new WarpLifecycleRegressionTests.FakeWarpDockerClient());
+            enableManaged: true);
+        using (var unavailable = await fixture.ManagedWarp!.ProvisionAsync("stale", Guid.NewGuid().ToString("D"), true))
+            fixture.ManagedWarp.UnavailableProxyIds.Add(unavailable.Proxy.Id);
         int managedId;
         using (var ready = await fixture.ManagedWarp!.ProvisionAsync("pool", Guid.NewGuid().ToString("D"), true))
             managedId = ready.Proxy.Id;
@@ -766,8 +618,8 @@ public sealed class ImportProxyFirstConnectionTests
         var second = await fixture.Service.ImportFromStringSessionAsync("other-session", 12345,
             "0123456789abcdef0123456789abcdef", proxyBinding: new("warp_pool"));
         Assert.False(second.Success);
-        Assert.Contains("没有可自动分配", second.Error);
-        Assert.Equal(1, fixture.ManagedWarp!.ProvisionCalls);
+        Assert.Contains("尚未就绪", second.Error);
+        Assert.Equal(2, fixture.ManagedWarp!.ProvisionCalls);
     }
 
     [Fact]
@@ -1049,7 +901,7 @@ public sealed class ImportProxyFirstConnectionTests
             IEnumerable<KeyValuePair<string, string?>>? configurationValues = null,
             IWarpProxyUsageGuard? warpProxyUsageGuard = null,
             TemporaryWarpClaimStore? temporaryWarpClaims = null,
-            WarpLifecycleRegressionTests.FakeWarpDockerClient? warpDocker = null,
+            bool enableManaged = false,
             IProxyEgressProbeService? warpProbe = null,
             bool managedReady = true)
         {
@@ -1077,9 +929,6 @@ public sealed class ImportProxyFirstConnectionTests
             var configurationBuilder = new ConfigurationBuilder();
             var values = new Dictionary<string, string?>
             {
-                ["Proxy:Warp:Enabled"] = warpDocker == null ? null : "true",
-                ["Proxy:Warp:DockerSocketPath"] = Path.Combine(Path.GetTempPath(), "fake-docker.sock"),
-                ["Proxy:Warp:HostPortStart"] = "42180"
             };
             if (configurationValues != null)
             {
@@ -1091,27 +940,14 @@ public sealed class ImportProxyFirstConnectionTests
             var pool = new StubClientPool();
             var probe = warpProbe ?? new ProxyEgressProbeService();
             temporaryWarpClaims ??= new TemporaryWarpClaimStore();
-            var managedWarp = warpDocker == null ? null : new FakeManagedWarpProvisioner(db, temporaryWarpClaims)
+            var managedWarp = !enableManaged ? null : new FakeManagedWarpProvisioner(db, temporaryWarpClaims)
             {
                 Ready = managedReady
             };
-            var warp = warpDocker == null
-                ? new WarpContainerManager(
-                    db,
-                    configuration,
-                    probe,
-                    NullLogger<WarpContainerManager>.Instance)
-                : new WarpContainerManager(
-                    db,
-                    configuration,
-                    probe,
-                    NullLogger<WarpContainerManager>.Instance,
-                    new FakeDockerClientFactory(warpDocker));
             var proxyManagement = new ProxyManagementService(
                 db,
                 pool,
                 probe,
-                warp,
                 NullLogger<ProxyManagementService>.Instance,
                 configuration,
                 temporaryWarpClaims: temporaryWarpClaims,
@@ -1149,19 +985,7 @@ public sealed class ImportProxyFirstConnectionTests
             await _connection.DisposeAsync();
         }
 
-        private sealed class FakeDockerClientFactory : WarpContainerManager.IWarpDockerClientFactory
-        {
-            private readonly WarpLifecycleRegressionTests.FakeWarpDockerClient _client;
 
-            public FakeDockerClientFactory(WarpLifecycleRegressionTests.FakeWarpDockerClient client)
-            {
-                _client = client;
-            }
-
-            public bool PlatformSupported => true;
-
-            public WarpContainerManager.IWarpDockerClient Create(string socketPath) => _client;
-        }
     }
 
     private sealed class RecordingSessionImporter : ISessionImporter

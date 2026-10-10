@@ -399,7 +399,6 @@ public sealed class WgcfLifecycleConcurrencyTests
                 var db = provider.GetRequiredService<AppDbContext>();
                 var probe = new Probe();
                 return new ProxyManagementService(db, new EmptyPool(), probe,
-                    new WarpContainerManager(db, config, probe, NullLogger<WarpContainerManager>.Instance),
                     NullLogger<ProxyManagementService>.Instance, config,
                     provider.GetRequiredService<TemporaryWarpClaimStore>());
             });

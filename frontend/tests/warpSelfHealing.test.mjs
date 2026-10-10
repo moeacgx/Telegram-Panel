@@ -6,30 +6,25 @@ const proxiesSource = await readFile(new URL('../src/views/Proxies.vue', import.
 const panelApiSource = await readFile(new URL('../src/api/panel.ts', import.meta.url), 'utf8')
 const typesSource = await readFile(new URL('../src/api/types.ts', import.meta.url), 'utf8')
 
-test('WARP 页面明确区分读取状态、检测出口和重启恢复', () => {
+test('统一代理表提供运行状态、出口检测与失败恢复操作', () => {
   assert.match(proxiesSource, />刷新页面状态</)
-  assert.match(proxiesSource, />\s*立即刷新旧版 WARP\s*</)
-  assert.match(proxiesSource, /content="检测出口 IP（不重启）"/)
-  assert.match(proxiesSource, /content="重启并恢复此 WARP"/)
+  for (const label of ['继续创建此出口', '启动出口', '停止出口', '检测 WARP 出口', '绑定单个账号']) {
+    assert.ok(proxiesSource.includes(`aria-label="${label}"`))
+  }
+  assert.match(proxiesSource, /wgcfPhaseLabel\(row\.wgcfProfile\)/)
+  assert.match(proxiesSource, /wgcfRuntimeLabel\(row\.wgcfProfile\.runtime\)/)
 })
 
-test('WARP 自动维护状态展示巡检阈值和定时刷新语义', () => {
-  assert.match(typesSource, /interface WarpMaintenanceRuntimeStatus/)
-  assert.match(typesSource, /healthCheckIntervalMinutes: number/)
-  assert.match(typesSource, /failureThreshold: number/)
-  assert.match(typesSource, /scheduledRefreshEnabled: boolean/)
-  assert.match(proxiesSource, /连续 \{\{ maintenance\.failureThreshold \}\} 次失败后自动恢复/)
-  assert.match(proxiesSource, /健康时保持当前出口，不主动更换 IP/)
+test('旧容器的运行环境、自动巡检、刷新 API 和客户端合同全部退出', () => {
+  assert.doesNotMatch(proxiesSource, /旧版容器 WARP|立即刷新旧版 WARP|自动维护状态|loadWarpStatus|refreshAllWarps|refreshWarp\(/)
+  assert.doesNotMatch(panelApiSource, /proxies\/warp\/status|warp\/refresh|refreshWarpProxy|refreshAllWarpProxies/)
+  assert.doesNotMatch(typesSource, /interface WarpMaintenance|interface WarpRuntimeStatus/)
+  assert.match(proxiesSource, /旧出口待迁移/)
 })
 
-test('WARP 支持单个与批量手动恢复并自动更新页面状态', () => {
-  assert.match(panelApiSource, /\/proxies\/\$\{id\}\/warp\/refresh/)
-  assert.match(panelApiSource, /\/proxies\/warp\/refresh-all/)
+test('页面刷新会同步轻量运行器，离开页面时停止轮询', () => {
+  assert.match(proxiesSource, /wgcfWarpPanel\.value\?\.loadStatus\(\)/)
   assert.match(proxiesSource, /const AUTO_STATUS_REFRESH_MS = 30_000/)
   assert.match(proxiesSource, /onBeforeUnmount/)
-  assert.match(proxiesSource, /refreshingIds/)
-  assert.match(proxiesSource, /refreshingAllWarps\.value \|\| refreshingIds\.size > 0/)
-  assert.match(typesSource, /warpRuntimeStatus\?: string \| null/)
-  assert.match(typesSource, /warpConsecutiveFailures\?: number/)
-  assert.match(proxiesSource, /row\.warpRuntimeStatus/)
+  assert.match(proxiesSource, /clearInterval\(autoStatusRefreshTimer\)/)
 })

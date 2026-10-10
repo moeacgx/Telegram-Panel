@@ -697,7 +697,23 @@ public sealed class AccountLoginProxyCoordinator
 
                 case "warp_pool":
                     {
-                        var proxy = (await ListAvailableWarpPoolAsync(cancellationToken)).First();
+                        if (_managedWarp == null)
+                            throw new InvalidOperationException("轻量 WARP 运行器未配置");
+                        var candidates = await ListAvailableWarpPoolAsync(cancellationToken);
+                        foreach (var candidate in candidates)
+                        {
+                            try
+                            {
+                                managedWarpLease = await _managedWarp.AcquireAsync(candidate.Id, cancellationToken);
+                                break;
+                            }
+                            catch (InvalidOperationException)
+                            {
+                                // 数据库快照可能落后于占用或运行状态，继续尝试剩余出口。
+                            }
+                        }
+                        var proxy = managedWarpLease?.Proxy
+                            ?? throw new InvalidOperationException("现有轻量 WARP 已被占用或尚未就绪，请准备新的空闲出口");
                         var connection = AccountProxyResolver.BuildConnectionOptions(
                             proxy,
                             $"tg_login_{loginId}");
@@ -777,21 +793,17 @@ public sealed class AccountLoginProxyCoordinator
         var proxies = await _proxyManagement.ListAsync(cancellationToken);
         var candidates = proxies
             .Where(x => x.IsEnabled
-                        && x.Kind == OutboundProxyKinds.Warp
-                        && x.WarpProfile is
-                        {
-                            DesiredEnabled: true,
-                            Status: "active"
-                        }
-                        && _store.CanUseWarpProxy(x.Id)
-                        && !_temporaryWarpClaims.OwnsRequest(x.WarpProfile.RequestId))
-            .OrderBy(x => x.Accounts.Count)
-            .ThenBy(x => x.Id)
+                        && x.Kind == OutboundProxyKinds.WireGuardWarp
+                        && x.ManagedWgcfProfile != null
+                        && x.Accounts.Count == 0
+                        && x.TestStatus == "ok" && !string.IsNullOrWhiteSpace(x.EgressIp)
+                        && !_temporaryWarpClaims.IsManagedProfileClaimed(x.ManagedWgcfProfile))
+            .OrderBy(x => x.Id)
             .ToList();
         if (candidates.Count == 0)
         {
             throw new InvalidOperationException(
-                "没有可自动分配的已有 WARP；请先在代理管理中准备并启用 WARP，系统不会为登录创建新容器");
+                "没有可自动分配的空闲轻量 WARP；请先在代理管理中创建并检测出口，系统不会自动改为直连");
         }
 
         return candidates;
@@ -1029,40 +1041,6 @@ public sealed class AccountLoginProxyCoordinator
             return;
         }
 
-        if (!keepOwnedWarp && state.OwnedWarpProxyId is > 0)
-        {
-            await DeleteOwnedWarpBestEffortAsync(
-                state.OwnedWarpProxyId.Value,
-                cancellationToken);
-        }
-    }
-
-    private async Task DeleteOwnedWarpBestEffortAsync(
-        int proxyId,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            await _proxyManagement.DeleteAsync(proxyId, cancellationToken);
-        }
-        catch (KeyNotFoundException)
-        {
-            // 已被其它清理流程删除。
-        }
-        catch (ProxyInUseException ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Login-created WARP proxy {ProxyId} is already bound and will be retained",
-                proxyId);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(
-                ex,
-                "Failed to clean login-created WARP proxy {ProxyId}",
-                proxyId);
-        }
     }
 
     private async Task ValidateRouteSnapshotAsync(

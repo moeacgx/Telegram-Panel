@@ -67,19 +67,6 @@ Docker 下常用环境变量（见 `docker-compose.yml`）：
 - `Telegram__Proxy__Server` / `Telegram__Proxy__Port`：Telegram 全局代理地址和端口
 - `Telegram__Proxy__Username` / `Telegram__Proxy__Password`：SOCKS5 代理认证（可选）
 - `Telegram__Proxy__Secret`：MTProxy Secret（仅 `mtproto` 使用）
-- `Proxy__Warp__Enabled`：允许面板管理独立 WARP 容器
-- `Proxy__Warp__Network`：WARP 容器加入的 Docker 网络
-- `Proxy__Warp__Protocol`：自动创建 WARP 时默认使用 `http` 或 `socks5`
-- `Proxy__Warp__MaxManagedProxyCount`：受管 WARP 最大数量；`0` 表示不限制
-- `Proxy__Warp__Container__MemoryLimitBytes`：单个受管 WARP 的内存上限字节数；`0` 表示不设置
-- `Proxy__Warp__Container__CpuLimit`：单个受管 WARP 的 CPU 限制，示例 `0.5`；`0` 表示不设置
-- `Proxy__Warp__Container__PidsLimit`：单个受管 WARP 的 PIDs 上限；`0` 表示不设置
-- `Proxy__Warp__Maintenance__Enabled`：启用受管 WARP 出口巡检与故障恢复
-- `Proxy__Warp__Maintenance__HealthCheckIntervalMinutes`：巡检周期，默认 5 分钟
-- `Proxy__Warp__Maintenance__FailureThreshold`：连续失败恢复阈值，默认 2 次
-- `Proxy__Warp__Maintenance__RecoveryCooldownMinutes`：失败恢复冷却，默认 30 分钟
-- `Proxy__Warp__Maintenance__ScheduledRefreshEnabled`：是否定时重启健康出口，默认关闭
-- `Proxy__Warp__Maintenance__ScheduledRefreshIntervalMinutes`：健康出口定时刷新周期，默认 720 分钟
 - `Proxy__Egress__ProbeUrl`：普通代理、外部 WireGuard WARP 和 Resin 后台巡检使用的轻量探针 URL，默认 `https://208.67.222.222/`
 - `Proxy__Egress__MetadataUrl`：手动检测面板或代理出口元数据时使用的 URL，默认 `https://cloudflare.com/cdn-cgi/trace`
 - `Proxy__Egress__Maintenance__Enabled`：v1.31.44 起启用普通代理、外部 WireGuard WARP 和 Resin 出口健康巡检，默认开启
@@ -256,7 +243,8 @@ https://bucket.example.com/telegram-panel/tp-{timestamp}.zip?X-Amz-Signature=...
 
 ## 账号代理优先于全局代理
 
-代理管理中的 HTTP、SOCKS5、MTProxy、外部 WireGuard WARP、WARP 和 Resin 可以绑定到单个或多个账号。
+代理管理中的 HTTP、SOCKS5、MTProxy、外部 WireGuard WARP 和 Resin 可以绑定到单个或多个账号。
+内置轻量 WARP 每个出口只能绑定一个账号，不可用作全局代理；v1.31.82 已移除旧容器 WARP 路由。
 账号的 Telegram 客户端、后台任务和模块操作都会复用这条账号路由。完整操作说明见
 [代理管理与账号出口](../guides/proxy-management.md)。
 
@@ -314,9 +302,9 @@ https://bucket.example.com/telegram-panel/tp-{timestamp}.zip?X-Amz-Signature=...
 
 ## 外部 WireGuard WARP 端点
 
-计划 v1.31.79 提供可选独立工具 `tools/wgcf-warp`，由共享 userspace wireproxy 容器管理
-多份独立配置，通过既有 `wireguard_warp` API 接入。它不改变面板主容器配置，不读取
-`Proxy__Warp__*`。完整前置、条款选择、恢复和回滚见
+可选独立工具 `tools/wgcf-warp` 由共享 userspace wireproxy 容器管理多份独立配置，通过既有
+`wireguard_warp` API 接入。它不改变面板主容器配置；内置轻量运行器则随 Linux 镜像提供。
+完整前置、条款选择、恢复和回滚见
 [共享 WireGuard 运维工具](../deployment/wgcf-wireproxy.md)。
 
 - `TP_WGCF_NETWORK`：工具加入的现有 Docker 网络，默认 `telegram-panel_default`。
@@ -344,51 +332,25 @@ https://bucket.example.com/telegram-panel/tp-{timestamp}.zip?X-Amz-Signature=...
 对应 `wireguard_warp` 代理记录。面板不会停止外部 WireGuard/gost/3proxy 进程；这些进程
 需要由运营方按原部署方式回滚。
 
-## 配置受管 WARP 默认值
+## 轻量 WARP 配置与旧配置退役（v1.31.82）
 
 从 v1.31.81 起，所有新建 WARP 使用 Linux 主容器内置 wgcf＋wireproxy，固定 SOCKS5，
-无需开启 `Proxy:Warp:Enabled` 或挂载 Docker Socket。下面配置用于旧容器的维护和历史版本；
-旧协议和 Docker 创建模板不会控制新的轻量出口。轻量档案固定最多 100 份，保存于持久根
+无需开启 `Proxy:Warp:Enabled` 或挂载 Docker Socket。v1.31.82 已删除旧容器管理器、巡检和
+刷新接口，旧 `Proxy:Warp:*` / `Proxy__Warp__*` / `TP_WARP_*` 配置不再生效，应从部署环境
+移除。轻量档案固定最多 100 份，保存于持久根
 `wgcf-warp/`，每份一个进程，不代表已经验证的账号容量。依赖不可用时必须更新并重新创建
 Docker 镜像，参见 [部署与验收](../deployment/wgcf-wireproxy.md)。
 
-使用 `docker-compose.warp.yml` 时，在 `.env` 设置：
+部署仅使用主 `docker-compose.yml`，不再叠加旧 WARP Compose 文件或 Docker Socket 挂载。
+旧 `kind=warp` 记录不会被自动删除，但无法用于账号或全局路由；残留引用将明确报错，
+不回退直连。升级前先备份，再逐账号迁往新轻量出口并验证 Telegram 只读连接，全部成功后
+才清理旧全局引用和容器资源。
 
-```dotenv
-TP_WARP_DOCKER_NETWORK=telegram-panel_default
-TP_WARP_PROXY_PROTOCOL=http
-TP_WARP_MAX_MANAGED_PROXY_COUNT=0
-TP_WARP_CONTAINER_MEMORY_LIMIT_BYTES=0
-TP_WARP_CONTAINER_CPU_LIMIT=0
-TP_WARP_CONTAINER_PIDS_LIMIT=0
-TP_WARP_AUTO_RECOVERY_ENABLED=true
-TP_WARP_HEALTH_CHECK_INTERVAL_MINUTES=5
-TP_WARP_FAILURE_THRESHOLD=2
-TP_WARP_RECOVERY_COOLDOWN_MINUTES=30
-TP_WARP_SCHEDULED_REFRESH_ENABLED=false
-TP_WARP_SCHEDULED_REFRESH_INTERVAL_MINUTES=720
-```
-
-Compose 会映射为 `Proxy:Warp:Network`、`Proxy:Warp:Protocol`、`Proxy:Warp:MaxManagedProxyCount`
-和 `Proxy:Warp:Container:*`。修改后需要使用包含 `docker-compose.warp.yml` 的命令重新创建
-面板容器；已存在的 WARP 容器不会自动重建，资源限制只应用到历史版本后续创建的受管容器。账号
-导入的自动 WARP 池不会创建新容器，并沿用已有代理记录自身的协议。
-
-`TP_WARP_MAX_MANAGED_PROXY_COUNT=0` 表示不限制数量，保持旧安装行为；设置为正整数后，达到上限
-会在创建 Docker 卷或容器前失败。`TP_WARP_CONTAINER_MEMORY_LIMIT_BYTES`、
-`TP_WARP_CONTAINER_CPU_LIMIT`（例如 `0.5`）和 `TP_WARP_CONTAINER_PIDS_LIMIT` 为单容器模板，
-任一项为 `0` 或留空时不写入对应 Docker HostConfig。成功标准是新建 WARP 的 Docker inspect
-中出现配置的 `Memory`、`NanoCpus` 或 `PidsLimit`，达到上限时没有新增代理记录或 Docker 资源；
-排障先检查 `.env` 是否被 Compose 读入、数值是否为正数且在有效范围内。回滚时把这些值改回 `0`
-并 `docker compose -f docker-compose.yml -f docker-compose.warp.yml up -d --force-recreate telegram-panel`，
-无需迁移数据库；已创建容器如需移除限制，需要删除后按新模板重建。
-
-默认 `Proxy:Warp:ProxyHostMode=container` 不发布宿主端口。自定义为 `published` 时，
-`Proxy:Warp:HostPortStart` 默认从 `42080` 起步；已占用或 Docker 绑定时发生冲突的端口会
-自动跳过并递增重试，失败重建不会删除已经创建的 WARP 数据卷。
-
-自动恢复会保留原数据卷，只重启容器并重新检测出口。健康出口的周期刷新默认关闭，
-因为它可能改变账号公网 IP；需要与 tokens-pro 相同的 720 分钟刷新行为时再显式开启。
+成功判据：代理管理只显示一张统一列表，创建中与失败的轻量档案仍可见；就绪出口显示
+检测结果和代理编号，单账号绑定在重启后保持；面板容器不再挂载 Docker Socket。
+排障时先检查实际镜像版本、内置运行器依赖、持久目录和网络，不要重新启用已退役配置。
+回滚至支持轻量运行器的 v1.31.81 时保留新账号路由和注册材料；不能恢复迁移前数据库，
+以免账号重新引用已经删除的旧容器。
 
 ## 计划任务随机延迟
 

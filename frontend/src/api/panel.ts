@@ -89,9 +89,6 @@ import type {
   ProxyImportRequest,
   SaveOutboundProxyRequest,
   TextPreset,
-  WarpMaintenanceBatchResult,
-  WarpMaintenanceResult,
-  WarpRuntimeStatus,
   WgcfProfile,
   WgcfRuntimeStatus,
   CreateWgcfProfileRequest,
@@ -100,7 +97,6 @@ import type {
 const PROXY_SAVE_TIMEOUT_MS = 120_000
 const PROXY_DELETE_TIMEOUT_MS = 900_000
 const PROXY_IMPORT_TIMEOUT_MS = 900_000
-const WARP_OPERATION_TIMEOUT_MS = 900_000
 
 export const panelApi = {
   me: () => api.get<AuthMe>('/auth/me').then((r) => r.data),
@@ -131,7 +127,6 @@ export const panelApi = {
   testProxy: (id: number) => api.post<OutboundProxy>(`/proxies/${id}/test`, {}, { timeout: 60_000 }).then((r) => r.data),
   importProxies: (payload: ProxyImportRequest) =>
     api.post<OutboundProxy[]>('/proxies/import', payload, { timeout: PROXY_IMPORT_TIMEOUT_MS }).then((r) => r.data),
-  warpStatus: () => api.get<WarpRuntimeStatus>('/proxies/warp/status').then((r) => r.data),
   wgcfStatus: () => api.get<WgcfRuntimeStatus>('/proxies/wgcf').then((r) => r.data),
   createWgcfProfile: (payload: CreateWgcfProfileRequest) =>
     api.post<WgcfProfile>('/proxies/wgcf', payload).then((r) => r.data),
@@ -143,10 +138,6 @@ export const panelApi = {
     api.post<WgcfProfile>(`/proxies/wgcf/${encodeURIComponent(profile)}/stop`, {}).then((r) => r.data),
   testWgcfProfile: (profile: string) =>
     api.post<WgcfProfile>(`/proxies/wgcf/${encodeURIComponent(profile)}/test`, {}, { timeout: 60_000 }).then((r) => r.data),
-  refreshWarpProxy: (id: number) =>
-    api.post<WarpMaintenanceResult>(`/proxies/${id}/warp/refresh`, {}, { timeout: WARP_OPERATION_TIMEOUT_MS }).then((r) => r.data),
-  refreshAllWarpProxies: () =>
-    api.post<WarpMaintenanceBatchResult>('/proxies/warp/refresh-all', {}, { timeout: WARP_OPERATION_TIMEOUT_MS }).then((r) => r.data),
   accountCategories: () => api.get<AccountCategory[]>('/account-categories').then((r) => r.data),
   createAccountCategory: (payload: { name: string; color?: string | null; description?: string | null; excludeFromOperations: boolean }) =>
     api.post<AccountCategory>('/account-categories', payload).then((r) => r.data),

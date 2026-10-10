@@ -281,16 +281,10 @@ public sealed class ProxyCatalogRegressionTests
                 .AddInMemoryCollection(new Dictionary<string, string?>())
                 .Build();
             var probe = new ProxyEgressProbeService();
-            var warp = new WarpContainerManager(
-                db,
-                configuration,
-                probe,
-                NullLogger<WarpContainerManager>.Instance);
             var service = new ProxyManagementService(
                 db,
                 new EmptyClientPool(),
                 probe,
-                warp,
                 NullLogger<ProxyManagementService>.Instance,
                 configuration);
             return new Fixture(connection, db, configuration, service);

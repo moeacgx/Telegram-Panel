@@ -9,7 +9,7 @@ Telegram Panel 按账号管理 Telegram 连接出口。导入、登录，以及�
 对应代理或账号的出口，两者互不等价。
 
 - 顶部显示“未使用 WARP”：只表示面板服务自身没有通过 Cloudflare WARP。
-- WARP 代理行显示“WARP 已连接”：表示该独立受管 WARP 容器的出口检测成功。
+- WARP 代理行显示“WARP 已连接”：表示该轻量出口的 WARP 检测成功。
 - 出口地址包含冒号时通常是 IPv6。IPv6 同样是有效公网出口。
 - 当前出口检测先使用 Cloudflare Trace 验证公网 IP，再按 IP 补充国家/地区、城市和 ISP。
   地理服务临时不可用时仍会保留已验证的 IP 和国家码，不会把代理误判为失败。
@@ -49,7 +49,8 @@ Telegram Panel 按账号管理 Telegram 连接出口。导入、登录，以及�
 ## 配置全局代理
 
 在 **代理管理 → 全局代理** 中可以直接启用 HTTP、SOCKS5 或 MTProxy，也可以从已有的
-普通代理、外部 WireGuard WARP、Resin 或受管 WARP 中选择。选择已有代理时保存的是代理引用，后续编辑该代理会对
+普通代理、外部 WireGuard WARP 或 Resin 中选择。内置轻量 WARP 是单账号专属出口，不能
+作为全局代理；旧容器 WARP 在 v1.31.82 起不再支持。选择已有代理时保存的是代理引用，后续编辑该代理会对
 继承全局的账号生效。
 保存后面板会立即重载配置并清理 Telegram 客户端缓存；继承“全局设置”的账号会在下一次
 连接时使用新出口，账号已绑定的独立代理和明确直连不受全局代理覆盖。配置缺失或无效时
@@ -131,100 +132,41 @@ wg-warp+http://10.0.0.5:8080
 
 ### 不支持的托管模式
 
-当前服务托管用户态 wireproxy 进程，并保留旧 Docker WARP 容器维护。直接管理宿主 WireGuard 需要 root 级网络权限、
+当前服务托管用户态 wireproxy 进程，已移除旧 Docker WARP 容器管理。直接管理宿主 WireGuard 需要 root 级网络权限、
 路由表和防火墙改写，以及对 WARP 注册材料的生命周期保证；这些都超出当前面板服务权限，
 所以不会实现为“复制配置并改 key”的一键托管功能。
 
-## 统一创建 WARP（v1.31.81）
+## 在统一列表管理 WARP（v1.31.82）
 
 升级 Linux Docker 镜像后，“一键创建 WARP”直接创建轻量出口。登录、导入及账号绑定的
 “创建一对一 WARP”也使用同一运行器，固定 SOCKS5，无需为每个出口创建 Docker 容器。
 每个出口仍有独立注册材料、配置、端口与进程，独立注册不保证不同公网 IP。
 创建前明确勾选条款，成功判据为本地监听、WARP 检测成功与出口 IP；账号绑定后还需真实
-Telegram 验证。失败先核对镜像依赖和网络，保留注册材料；回滚先切回原代理并停止新出口。
+Telegram 验证。失败先核对镜像依赖和网络并保留注册材料。
 完整步骤见 [轻量 WARP 部署](../deployment/wgcf-wireproxy.md)。
 
-## 旧容器 WARP 维护
+新建后直接查看下方代理列表，不再显示单独的轻量 WARP 列表。创建中和失败档案即使尚未
+生成代理编号也会显示，完成后合并到同一行。该行提供启动、停止、恢复、检测和账号绑定；
+期望启停、监听状态及 WARP 检测分别展示，监听成功不代表公网出口检测已经通过。
 
-普通代理、Resin 和轻量 WARP 不需要 Docker Socket。只有需要面板维护已有 WARP 容器时，才叠加
-受管 WARP 配置：
+每份轻量出口最多绑定一个账号。导入的“自动分配已有 WARP”只选择已就绪、检测成功且
+无人使用的轻量出口，池为空时会明确失败。已绑定出口不可直接停止；先为账号切换其它
+可用路由，再停止原出口。普通代理的编辑、删除和批量操作不会绕过轻量运行器的保护。
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.warp.yml up -d
-```
+## 旧容器升级与故障处理
 
-`docker-compose.warp.yml` 会把 `/var/run/docker.sock` 挂入面板容器。该权限接近宿主机
-`root`，只应在可信主机启用。
+v1.31.82 已删除旧 WARP 状态、刷新和自动维护入口，也不再加载旧 WARP Compose 配置或
+Docker Socket。历史 `kind=warp` 记录保留用于迁移识别，但不能继续承载账号或全局路由；
+残留引用会阻止连接，不会自动直连。
 
-可以在 `.env` 设置：
+仍使用旧容器时，先在升级前为每个账号建立独立轻量出口并验证 Telegram 只读资料获取。
+确认全部账号已迁移、旧全局引用和直接绑定均清空后，再删除旧代理与容器。备份、逐账号
+验收和回滚步骤见 [轻量 WARP 部署](../deployment/wgcf-wireproxy.md)。回滚面板至 v1.31.81
+应保留新路由和注册材料，不能恢复指向已删除容器的旧数据库。
 
-```dotenv
-# Compose 项目名不是 telegram-panel 时，改为面板所在的实际 Docker 网络
-TP_WARP_DOCKER_NETWORK=telegram-panel_default
-
-# 自动创建 WARP 的默认连接协议：http 或 socks5
-TP_WARP_PROXY_PROTOCOL=http
-
-# 受管 WARP 最大数量和单容器 Docker 创建模板；0 表示不设置，保持旧安装行为
-TP_WARP_MAX_MANAGED_PROXY_COUNT=0
-TP_WARP_CONTAINER_MEMORY_LIMIT_BYTES=0
-TP_WARP_CONTAINER_CPU_LIMIT=0
-TP_WARP_CONTAINER_PIDS_LIMIT=0
-```
-
-旧 WARP 镜像中的 GOST 端口同时支持 HTTP 和 SOCKS5。“自动分配已有 WARP”沿用代理记录
-自身的协议，不读取轻量创建设置。以下创建模板仅适用于 v1.31.80 及更早版本。
-
-每个旧 WARP 都对应一个独立 Docker 容器和数据卷，并持续占用一定的服务器内存与 CPU。
-`TP_WARP_MAX_MANAGED_PROXY_COUNT` 可限制面板可创建的受管 WARP 数量，达到上限时会在创建
-Docker 卷或容器前失败。`TP_WARP_CONTAINER_MEMORY_LIMIT_BYTES`、`TP_WARP_CONTAINER_CPU_LIMIT`
-（例如 `0.5`）和 `TP_WARP_CONTAINER_PIDS_LIMIT` 会映射到 Docker HostConfig 的 `Memory`、
-`NanoCpus` 和 `PidsLimit`，只影响后续新建容器；值为 `0` 或留空时不写对应限制。
-
-“自动分配已有 WARP”只复用现有旧容器，优先选择绑定账号较少的 WARP。迁移旧容器时先
-为单账号绑定新的轻量出口，确认 Telegram 连接后再显式清理旧容器；不要直接删除数据卷。
-
-默认 `container` 模式由 Docker 网络按容器名访问，不占用宿主机代理端口。若在其他
-拓扑中把 `Proxy:Warp:ProxyHostMode` 配为 `published`，面板会从
-`Proxy:Warp:HostPortStart`（默认 `42080`）开始递增寻找空闲端口。若检测通过后端口又在
-Docker 创建或启动时被抢占，面板会删除失败的容器壳、保留数据卷，并继续尝试下一端口。
-
-## 自动巡检与故障恢复
-
-Docker 的 `unless-stopped` 只能处理容器进程退出，不能处理“容器仍显示 running，
-但 WARP 隧道或 GOST 已经卡死”。面板因此还会执行出口级自动维护：
-
-- 默认每 5 分钟检测所有期望启用的受管 WARP。
-- 连续失败 2 次后重启原容器，保留 WARP 数据卷，并最多复测 6 次。
-- 恢复失败后进入 30 分钟冷却，避免检测源抖动造成重启风暴。
-- 重启前后释放绑定账号的 Telegram 客户端；客户端只能沿原 WARP 路由重建，代理不可用时
-  会失败，不会回退为面板直连。
-- 正在用于账号导入、手机号登录或二维码登录的 WARP（包括已有 WARP 和导入/账号管理新建 WARP）
-  会保持首次出口冻结；后台巡检、手动刷新、修改和删除都不会打断首次连接。
-- 代理页每 30 秒更新维护状态，也可手动刷新单个或全部 WARP。
-
-参考 tokens-pro 的“720 分钟定时刷新”也可以开启：
-
-```dotenv
-TP_WARP_AUTO_RECOVERY_ENABLED=true
-TP_WARP_HEALTH_CHECK_INTERVAL_MINUTES=5
-TP_WARP_FAILURE_THRESHOLD=2
-TP_WARP_RECOVERY_COOLDOWN_MINUTES=30
-TP_WARP_SCHEDULED_REFRESH_ENABLED=false
-TP_WARP_SCHEDULED_REFRESH_INTERVAL_MINUTES=720
-```
-
-故障自愈默认开启；健康出口的定时强制重启默认关闭，因为重启可能更换账号出口 IP。
-只有确实需要周期轮换时才把 `TP_WARP_SCHEDULED_REFRESH_ENABLED` 改为 `true`。
-
-参考项目界面中的 `WARP_SLEEP=2` 是 WARP 镜像内部启动等待参数，`GOST_ARGS=-L :1080`
-是代理监听参数；它们本身都不等于定时健康巡检。
-
-修改 `.env` 后重新创建面板容器：
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.warp.yml up -d --force-recreate
-```
+轻量出口失效时，在对应代理行执行“检测”确认出口状态，必要时使用“恢复”。先检查
+运行器依赖、持久目录权限、UDP/DNS 网络与上游状态；不要删除注册材料或反复创建新出口。
+进程异常退出由运行器处理，不能把旧容器的定时重启或巡检参数套用到轻量出口。
 
 ## 对接 Resin 动态代理
 

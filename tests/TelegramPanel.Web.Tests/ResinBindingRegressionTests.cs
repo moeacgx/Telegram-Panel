@@ -1002,16 +1002,10 @@ public sealed class ResinBindingRegressionTests
         pool ??= new NoopClientPool();
         configuration ??= new ConfigurationBuilder().Build();
         var probe = new ProxyEgressProbeService();
-        var warp = new WarpContainerManager(
-            db,
-            configuration,
-            probe,
-            NullLogger<WarpContainerManager>.Instance);
         return new ProxyManagementService(
             db,
             pool,
             probe,
-            warp,
             NullLogger<ProxyManagementService>.Instance,
             configuration);
     }

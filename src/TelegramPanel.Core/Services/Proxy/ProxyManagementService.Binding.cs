@@ -501,6 +501,7 @@ public sealed partial class ProxyManagementService
 
     private static void EnsureWireGuardWarpReadyForBinding(OutboundProxy proxy)
     {
+        AccountProxyResolver.RejectRetiredWarp(proxy);
         if (proxy.Kind != OutboundProxyKinds.WireGuardWarp)
             return;
 

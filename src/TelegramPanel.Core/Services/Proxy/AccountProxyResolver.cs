@@ -73,6 +73,7 @@ public sealed class AccountProxyResolver : IAccountProxyResolver
         OutboundProxy proxy,
         string stableAccountKey)
     {
+        RejectRetiredWarp(proxy);
         var username = proxy.Username;
         var password = proxy.Password;
 
@@ -104,5 +105,11 @@ public sealed class AccountProxyResolver : IAccountProxyResolver
             .ToArray();
         var normalized = new string(chars);
         return string.IsNullOrWhiteSpace(normalized) ? "telegram_panel" : normalized;
+    }
+
+    public static void RejectRetiredWarp(OutboundProxy proxy)
+    {
+        if (proxy.Kind == OutboundProxyKinds.Warp)
+            throw new InvalidOperationException("旧版容器 WARP 已退役，请先迁移至轻量 WARP；已阻止连接或降级为直连");
     }
 }
