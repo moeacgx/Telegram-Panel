@@ -5,6 +5,7 @@
 @inject AccountTelegramToolsService AccountTelegramTools
 @inject TelegramPanel.Core.Services.AccountRiskService RiskService
 @inject TelegramPanel.Core.Services.Proxy.ProxyManagementService ProxyManagement
+@inject TelegramPanel.Web.Services.WgcfWarpService WgcfWarp
 @inject IConfiguration Configuration
 @inject TelegramApiProfilePool ApiProfilePool
 @inject ISnackbar Snackbar
@@ -47,7 +48,7 @@
         {
             <MudSelect T="int?" @bind-Value="selectedProxyId" Label="选择已有代理" Variant="Variant.Outlined"
                        Dense="true" Clearable="true" Disabled="@Busy" Class="mt-3">
-                @foreach (var proxy in proxyOptions.Where(x => x.ManagedWgcfProfile == null))
+                @foreach (var proxy in ExistingProxyOptions)
                 {
                     <MudSelectItem T="int?" Value="@((int?)proxy.Id)">
                         @FormatProxyOption(proxy)
@@ -55,7 +56,7 @@
                 }
             </MudSelect>
 
-            @if (proxyOptions.Count == 0)
+            @if (!ExistingProxyOptions.Any())
             {
                 <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-3">
                     当前没有已启用代理，请先到新版【代理管理】新增代理。
@@ -357,11 +358,11 @@
     private string proxyStrategy = "";
     private int? selectedProxyId;
     private List<OutboundProxy> proxyOptions = new();
-    private int WarpPoolCount => proxyOptions.Count(x =>
-        x.IsEnabled
-        && x.Kind == OutboundProxyKinds.WireGuardWarp
-        && x.ManagedWgcfProfile != null && x.Accounts.Count == 0
-        && x.TestStatus == "ok" && !string.IsNullOrWhiteSpace(x.EgressIp));
+    private IEnumerable<OutboundProxy> ExistingProxyOptions => proxyOptions.Where(x =>
+        x.IsEnabled && x.Kind != OutboundProxyKinds.Warp && x.ManagedWgcfProfile == null);
+    private WgcfEnvironmentDto? warpEnvironment;
+    private int WarpPoolCount => LegacyWarpPoolSelection.Count(
+        proxyOptions, warpEnvironment, GlobalTelegramProxyConfiguration.GetSelectedProxyId(Configuration));
 
 
     private bool WarpCreateAvailable { get; set; }
@@ -385,7 +386,7 @@
         string.IsNullOrWhiteSpace(proxyStrategy)
         || (proxyStrategy == "existing"
             && (selectedProxyId is not > 0
-                || proxyOptions.All(x => x.Id != selectedProxyId.Value)))
+                || ExistingProxyOptions.All(x => x.Id != selectedProxyId.Value)))
         || (proxyStrategy == "warp_pool" && WarpPoolCount == 0)
         || (proxyStrategy == "warp_per_account" && (!WarpCreateAvailable || !acceptWarpTerms))
         || (proxyStrategy == "global" && !GlobalProxyConfigured);
@@ -405,7 +406,6 @@
     protected override async Task OnInitializedAsync()
     {
         var proxiesTask = ProxyManagement.ListAsync(_pageCts.Token);
-        var warpStatusTask = ProxyManagement.GetManagedWarpAvailabilityAsync(_pageCts.Token);
         try
         {
             proxyOptions = (await proxiesTask)
@@ -424,8 +424,8 @@
 
         try
         {
-            var warpStatus = await warpStatusTask;
-            WarpCreateAvailable = warpStatus.Available;
+            warpEnvironment = await WgcfWarp.ListAsync(_pageCts.Token);
+            WarpCreateAvailable = warpEnvironment.Available;
         }
         catch (OperationCanceledException) when (_pageCts.IsCancellationRequested)
         {
@@ -494,7 +494,7 @@
                 return true;
             case "existing":
                 if (selectedProxyId is not > 0
-                    || proxyOptions.All(x => x.Id != selectedProxyId.Value))
+                    || ExistingProxyOptions.All(x => x.Id != selectedProxyId.Value))
                 {
                     Snackbar.Add("请选择一个已启用的代理", Severity.Warning);
                     return false;
