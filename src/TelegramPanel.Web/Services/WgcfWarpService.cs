@@ -241,7 +241,7 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
     {
         EnsureAvailable();
         var profile = ProfileFor(requestId);
-        name = ValidateName(name);
+        name = string.IsNullOrWhiteSpace(name) ? DefaultNameFor(profile) : ValidateName(name);
         if (!acceptTerms) throw new ArgumentException("请先阅读并接受 Cloudflare WARP 条款");
         await _stateLock.WaitAsync(ct);
         try
@@ -655,6 +655,12 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
     private static bool Bool(JsonElement json, string key) => json.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.True;
     internal static string ProfileFor(string requestId) => Guid.TryParse(requestId, out var id) && id != Guid.Empty
         ? "web-" + id.ToString("N") : throw new ArgumentException("请求标识必须是有效 UUID");
+    internal static string DefaultNameFor(string profile)
+    {
+        const string prefix = "web-";
+        var suffix = profile.StartsWith(prefix, StringComparison.Ordinal) ? profile[prefix.Length..] : profile;
+        return $"轻量 WARP-{suffix[..Math.Min(8, suffix.Length)].ToUpperInvariant()}";
+    }
     internal static string ValidateName(string name)
     {
         name = (name ?? string.Empty).Trim();

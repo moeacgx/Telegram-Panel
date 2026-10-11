@@ -16,11 +16,14 @@ public sealed class WgcfWebStateTests
     }
 
     [Fact]
-    public void 注册前拒绝空名称和控制字符()
+    public void 一键创建空名称按请求标识稳定自动命名()
     {
         Assert.Equal("测试出口", WgcfWarpService.ValidateName(" 测试出口 "));
         Assert.Throws<ArgumentException>(() => WgcfWarpService.ValidateName(" "));
         Assert.Throws<ArgumentException>(() => WgcfWarpService.ValidateName("出口\n秘密"));
+        var profile = WgcfWarpService.ProfileFor("0efca5bd-b7b0-4a77-92b7-112c686ef591");
+        Assert.Equal("轻量 WARP-0EFCA5BD", WgcfWarpService.DefaultNameFor(profile));
+        Assert.Equal(WgcfWarpService.DefaultNameFor(profile), WgcfWarpService.DefaultNameFor(profile));
     }
 
     [Fact]

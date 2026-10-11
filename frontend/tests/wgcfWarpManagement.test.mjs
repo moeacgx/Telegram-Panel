@@ -45,14 +45,15 @@ test('环境不可用时禁止打开创建并且不提交注册', async () => {
   assert.equal(calls, 0)
 })
 
-test('未接受 WARP 条款时不能创建', async () => {
+test('不填写出口名称也可以创建并自动提交已接受条款', async () => {
   let calls = 0
-  const state = setup({ createWgcfProfile: async () => { calls++; return profile() } })
+  const requests = []
+  const state = setup({ createWgcfProfile: async (payload) => { calls++; requests.push(payload); return profile() } })
   state.openCreate()
-  state.createDialog.name = '出口'
   await state.createProfile()
-  assert.equal(calls, 0)
-  assert.equal(state.createDialog.visible, true)
+  assert.equal(calls, 1)
+  assert.deepEqual(requests, [{ name: '', acceptTerms: true, requestId: '0efca5bd-b7b0-4a77-92b7-112c686ef591' }])
+  assert.equal(state.createDialog.visible, false)
 })
 
 test('请求超时后重试保持同一 requestId，成功后显示后台创建', async () => {
@@ -64,7 +65,6 @@ test('请求超时后重试保持同一 requestId，成功后显示后台创建'
   } })
   state.openCreate()
   state.createDialog.name = ' 出口 '
-  state.createDialog.acceptTerms = true
   await state.createProfile()
   assert.equal(state.createDialog.visible, true)
   await state.createProfile()
@@ -151,7 +151,6 @@ test('操作结果通过状态事件传递到统一列表，旧轮询不能抹�
   const polling = state.loadStatus()
   state.openCreate()
   state.createDialog.name = '新出口'
-  state.createDialog.acceptTerms = true
   await state.createProfile()
   const event = state.events.find(([name]) => name === 'state')
   assert.equal(event[1].profiles[0].profile, 'wgcf-one')
@@ -164,7 +163,6 @@ test('已持久化的同一请求也会关闭创建对话框', async () => {
   const state = setup({ createWgcfProfile: async () => profile() })
   state.openCreate()
   state.createDialog.name = '出口'
-  state.createDialog.acceptTerms = true
   await state.createProfile()
   assert.equal(state.createDialog.visible, false)
   assert.equal(state.createDialog.running, false)
@@ -175,7 +173,6 @@ test('创建响应早于首次状态读取时仍会收口对话框', async () =>
   const state = setup({ createWgcfProfile: () => new Promise((resolve) => { complete = resolve }) })
   state.openCreate()
   state.createDialog.name = '出口'
-  state.createDialog.acceptTerms = true
   const pending = state.createProfile()
   // 模拟请求已经发出后，首轮状态读取尚未落地的窗口。
   state.status.value = null

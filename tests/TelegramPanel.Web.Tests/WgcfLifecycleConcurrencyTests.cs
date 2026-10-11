@@ -25,6 +25,18 @@ namespace TelegramPanel.Web.Tests;
 
 public sealed class WgcfLifecycleConcurrencyTests
 {
+    [Fact]
+    public async Task 一键创建允许空名称且同一请求重试保持自动名称()
+    {
+        await using var f = await Fixture.CreateAsync();
+        var requestId = Guid.NewGuid().ToString();
+        var first = await f.Service.CreateAsync(requestId, "", true, default);
+        var retry = await f.Service.CreateAsync(requestId, "", true, default);
+
+        Assert.Equal(WgcfWarpService.DefaultNameFor(first.Profile), first.Name);
+        Assert.Equal(first.Name, retry.Name);
+    }
+
     [Theory]
     [InlineData("stopRequested")]
     [InlineData("undesired")]

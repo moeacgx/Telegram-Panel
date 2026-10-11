@@ -2,16 +2,14 @@
     <el-dialog v-model="createDialog.visible" title="一键创建 WARP" width="min(480px, calc(100vw - 24px))"
       :before-close="beforeCreateClose" :close-on-click-modal="!createDialog.running" :close-on-press-escape="!createDialog.running" :show-close="!createDialog.running">
       <el-form label-position="top" :disabled="createDialog.running">
-        <el-form-item label="出口名称" required>
-          <el-input v-model="createDialog.name" maxlength="80" :disabled="createDialog.submittedName !== null" placeholder="例如：账号专属出口" />
+        <el-form-item label="出口名称">
+          <el-input v-model="createDialog.name" maxlength="80" :disabled="createDialog.submittedName !== null" placeholder="可选，留空自动命名" />
         </el-form-item>
-        <el-checkbox v-model="createDialog.acceptTerms" :disabled="createDialog.submittedName !== null">我已阅读并接受</el-checkbox>
-        <a class="wgcf-terms" href="https://www.cloudflare.com/application/terms/" target="_blank" rel="noopener noreferrer">Cloudflare WARP 条款</a>
       </el-form>
       <div v-if="createDialog.error" class="wgcf-error" role="alert">{{ createDialog.error }}</div>
       <template #footer>
         <el-button :disabled="createDialog.running" @click="createDialog.visible = false">取消</el-button>
-        <el-button type="primary" :loading="createDialog.running" :disabled="!createDialog.acceptTerms || !createDialog.name.trim()" @click="createProfile">
+        <el-button type="primary" :loading="createDialog.running" :disabled="createDialog.running || !status?.available || !!loadError" @click="createProfile">
           {{ createDialog.submittedName === null ? '创建' : '重试提交' }}
         </el-button>
       </template>
@@ -47,7 +45,7 @@ const profiles = computed(() => status.value?.profiles ?? [])
 const loading = ref(false)
 const loadError = ref('')
 const busyProfiles = reactive(new Set<string>())
-const createDialog = reactive({ visible: false, running: false, name: '', requestId: '', acceptTerms: false, submittedName: null as string | null, error: '' })
+const createDialog = reactive({ visible: false, running: false, name: '', requestId: '', submittedName: null as string | null, error: '' })
 const bindDialog = reactive({ visible: false, running: false, searching: false, profile: null as WgcfProfile | null, accountId: null as number | null, accounts: [] as AccountListItem[], error: '' })
 const selectedAccount = computed(() => bindDialog.accounts.find((account) => account.id === bindDialog.accountId))
 let searchToken = 0
@@ -113,7 +111,7 @@ async function loadStatus() {
 
 function openCreate() {
   if (!status.value?.available || loadError.value || createDialog.running) return
-  Object.assign(createDialog, { visible: true, name: '', requestId: crypto.randomUUID(), acceptTerms: false, submittedName: null, error: '' })
+  Object.assign(createDialog, { visible: true, name: '', requestId: crypto.randomUUID(), submittedName: null, error: '' })
 }
 
 defineExpose({ openCreate, loadStatus, operate, openBind, canBind, operationUnavailable, busyProfiles })
@@ -123,7 +121,7 @@ function beforeCreateClose(done: () => void) {
 }
 
 async function createProfile() {
-  if (!status.value?.available || loadError.value || createDialog.running || !createDialog.acceptTerms || !createDialog.name.trim()) return
+  if (!status.value?.available || loadError.value || createDialog.running) return
   createDialog.submittedName ??= createDialog.name.trim()
   const payload = { requestId: createDialog.requestId, name: createDialog.submittedName, acceptTerms: true }
   createDialog.running = true
@@ -233,7 +231,5 @@ onBeforeUnmount(() => {
 .wgcf-meta { color: var(--el-text-color-secondary); font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
 .wgcf-error, .wgcf-row-error { color: var(--el-color-danger); font-size: 13px; overflow-wrap: anywhere; }
 .wgcf-error { margin: 10px 0; }
-.wgcf-terms { color: var(--el-color-primary); font-size: 14px; margin-left: 8px; overflow-wrap: anywhere; }
 .wgcf-full { width: 100%; }
-@media (max-width: 600px) { .wgcf-terms { display: block; margin-left: 0; } }
 </style>
