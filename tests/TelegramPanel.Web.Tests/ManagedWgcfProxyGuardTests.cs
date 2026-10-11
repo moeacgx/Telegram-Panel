@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
@@ -9,6 +10,7 @@ using TelegramPanel.Core.Services.Proxy;
 using TelegramPanel.Data;
 using TelegramPanel.Data.Entities;
 using TelegramPanel.Data.Repositories;
+using TelegramPanel.Web.Api;
 using WTelegram;
 using Xunit;
 
@@ -16,6 +18,73 @@ namespace TelegramPanel.Web.Tests;
 
 public sealed class ManagedWgcfProxyGuardTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task 代理重命名只修改名称并保留绑定连接材料和检测结果(bool managed)
+    {
+        await using var f = await Fixture.CreateAsync();
+        var proxy = await f.ManagedAsync();
+        if (!managed)
+        {
+            proxy.ManagedWgcfProfile = null;
+            proxy.Kind = "manual";
+            await f.Db.SaveChangesAsync();
+        }
+        await f.AccountAsync("1", proxy);
+        f.Configuration["Telegram:Proxy:Enabled"] = "true";
+        f.Configuration["Telegram:Proxy:SourceMode"] = "existing";
+        f.Configuration["Telegram:Proxy:ProxyId"] = proxy.Id.ToString();
+        var before = f.Db.Entry(proxy).Properties
+            .Where(p => p.Metadata.Name is not ("Name" or "UpdatedAtUtc"))
+            .ToDictionary(p => p.Metadata.Name, p => p.CurrentValue);
+
+        var result = await ProxyApiEndpoints.RenameAsync(proxy.Id, new("  新的出口名称  "), f.Service, default);
+
+        Assert.Equal(StatusCodes.Status200OK, Assert.IsAssignableFrom<IStatusCodeHttpResult>(result).StatusCode);
+        Assert.True(Assert.IsType<OperationResultDto>(Assert.IsAssignableFrom<IValueHttpResult>(result).Value).Success);
+        await f.Db.Entry(proxy).ReloadAsync();
+        Assert.Equal("新的出口名称", proxy.Name);
+        foreach (var property in before)
+            Assert.Equal(property.Value, f.Db.Entry(proxy).Property(property.Key).CurrentValue);
+        var account = await f.Db.Accounts.AsNoTracking().SingleAsync();
+        Assert.Equal(proxy.Id, account.ProxyId);
+        Assert.True(account.IsActive);
+        Assert.Equal(proxy.Id, f.Service.GetEnabledGlobalProxyId());
+        if (managed)
+        {
+            var recreated = await f.Service.CreateManagedWgcfProxyAsync("profile-one", "旧档案名称", 18081, "user", "secret");
+            Assert.Equal("新的出口名称", recreated.Name);
+        }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("too-long")]
+    public async Task 重命名拒绝空名称和超长名称且不写入(string? name)
+    {
+        await using var f = await Fixture.CreateAsync();
+        var proxy = await f.ManagedAsync();
+        var result = await ProxyApiEndpoints.RenameAsync(proxy.Id,
+            new(name == "too-long" ? new string('名', 81) : name), f.Service, default);
+        Assert.Equal(StatusCodes.Status400BadRequest, Assert.IsAssignableFrom<IStatusCodeHttpResult>(result).StatusCode);
+        Assert.Equal("managed", (await f.Db.OutboundProxies.AsNoTracking().SingleAsync()).Name);
+    }
+
+    [Fact]
+    public async Task 重命名支持八十字符且不存在的代理返回四零四()
+    {
+        await using var f = await Fixture.CreateAsync();
+        var proxy = await f.ManagedAsync();
+        var name = new string('名', 80);
+        await f.Service.RenameAsync(proxy.Id, "  " + name + "  ");
+        Assert.Equal(name, (await f.Db.OutboundProxies.AsNoTracking().SingleAsync()).Name);
+        var result = await ProxyApiEndpoints.RenameAsync(proxy.Id + 1, new("不存在"), f.Service, default);
+        Assert.Equal(StatusCodes.Status404NotFound, Assert.IsAssignableFrom<IStatusCodeHttpResult>(result).StatusCode);
+    }
+
     [Fact]
     public async Task 受管出口允许显式多人绑定且保留激活状态()
     {

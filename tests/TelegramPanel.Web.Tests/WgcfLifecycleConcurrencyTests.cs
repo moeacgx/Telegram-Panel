@@ -26,6 +26,23 @@ namespace TelegramPanel.Web.Tests;
 public sealed class WgcfLifecycleConcurrencyTests
 {
     [Fact]
+    public async Task 受管出口重命名后列表与档案恢复始终使用数据库名称()
+    {
+        await using var f = await Fixture.CreateAsync();
+        var proxy = await f.ProxyAsync();
+        await using (var scope = f.Provider.CreateAsyncScope())
+            await scope.ServiceProvider.GetRequiredService<ProxyManagementService>().RenameAsync(proxy.Id, "已重命名出口");
+        var renamed = Assert.Single((await f.Service.ListAsync(default)).Profiles);
+        Assert.Equal("已重命名出口", renamed.Name);
+        Assert.Equal("listening", renamed.Runtime);
+        Assert.Empty(f.Commands);
+        await f.RestoreEntryAsync(default);
+        Assert.Equal("已重命名出口", Assert.Single((await f.Service.ListAsync(default)).Profiles).Name);
+        Assert.Equal("已重命名出口", (await f.ProxyAsync()).Name);
+        Assert.Empty(f.Commands);
+    }
+
+    [Fact]
     public async Task 删除中断的内部请求不能覆盖删除标记重新注册()
     {
         const string request = "telegram-panel.internal.deletion-retry";

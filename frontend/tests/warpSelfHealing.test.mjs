@@ -8,7 +8,7 @@ const typesSource = await readFile(new URL('../src/api/types.ts', import.meta.ur
 
 test('统一代理表提供运行状态、出口检测与失败恢复操作', () => {
   assert.match(proxiesSource, />刷新页面状态</)
-  for (const label of ['继续创建此出口', '启动出口', '停止出口', '检测 WARP 出口', '添加绑定账号', '已绑定账号', '删除 WARP 出口']) {
+  for (const label of ['继续创建此出口', '启动出口', '停止出口', '检测出口 IP', '添加绑定账号', '已绑定账号', '删除出口']) {
     assert.ok(proxiesSource.includes(`aria-label="${label}"`))
   }
   assert.match(proxiesSource, /wgcfPhaseLabel\(row\.wgcfProfile\)/)

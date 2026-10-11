@@ -6,6 +6,21 @@ namespace TelegramPanel.Core.Services.Proxy;
 
 public sealed partial class ProxyManagementService
 {
+    public async Task RenameAsync(int id, string? name, CancellationToken cancellationToken = default)
+    {
+        name = (name ?? string.Empty).Trim();
+        if (name.Length is 0 or > 80)
+            throw new ArgumentException("代理名称不能为空且不能超过 80 个字符", nameof(name));
+
+        // 名称属于展示元数据，与启停、绑定和删除共用变更锁，但不变更连接状态。
+        await using var lease = await AcquireMutationLeaseAsync(cancellationToken);
+        var proxy = await _db.OutboundProxies.SingleOrDefaultAsync(x => x.Id == id, cancellationToken)
+            ?? throw new KeyNotFoundException("代理不存在");
+        proxy.Name = name;
+        proxy.UpdatedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync(cancellationToken);
+    }
+
     public int? GetEnabledGlobalProxyId() =>
         _configuration == null
             ? null

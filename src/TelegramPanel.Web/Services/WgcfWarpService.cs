@@ -699,7 +699,8 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         catch (Exception ex) when (ex is IOException or JsonException or InvalidOperationException) { }
         var isGlobal = proxy != null && GlobalTelegramProxyConfiguration.GetSelectedProxyId(_configuration) == proxy.Id;
         var claimed = _claims.IsManagedProfileClaimed(entry.Profile) && !_claims.OwnsManagedProfile(entry.Profile, claimToken);
-        return new(entry.Profile, entry.Name, entry.Phase, registered, generated, desired, runtime,
+        // 落库后以代理名称为准，档案名称仅用于首次创建，避免恢复覆盖用户重命名。
+        return new(entry.Profile, proxy?.Name ?? entry.Name, entry.Phase, registered, generated, desired, runtime,
             proxy?.Id, proxy?.Accounts.Count ?? 0, proxy?.TestStatus ?? "unknown", proxy?.EgressIp, entry.Error)
         {
             IsGlobal = isGlobal,

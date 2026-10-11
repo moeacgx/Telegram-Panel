@@ -63,6 +63,19 @@
 
     <WgcfWarpPanel ref="wgcfWarpPanel" @changed="loadProxies(false)" @state="updateWgcfState" />
     <ProxyBoundAccountsDialog ref="boundAccountsDialog" @changed="refreshBindings" />
+    <el-dialog v-model="renameDialog.visible" title="重命名代理" width="min(440px, calc(100vw - 24px))"
+      :close-on-click-modal="!renameDialog.saving" :close-on-press-escape="!renameDialog.saving" :show-close="!renameDialog.saving">
+      <el-form label-position="top" @submit.prevent="saveRename">
+        <el-form-item label="代理名称">
+          <el-input v-model="renameDialog.name" maxlength="80" show-word-limit :disabled="renameDialog.saving" placeholder="请输入代理名称" />
+        </el-form-item>
+      </el-form>
+      <el-alert v-if="renameDialog.error" :title="renameDialog.error" type="error" :closable="false" />
+      <template #footer>
+        <el-button :disabled="renameDialog.saving" @click="closeRename">取消</el-button>
+        <el-button type="primary" :loading="renameDialog.saving" @click="saveRename">保存</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog
       v-model="globalProxyDialog.visible"
@@ -400,18 +413,19 @@
             <el-dropdown trigger="click" placement="bottom-end" :teleported="true">
               <el-button class="proxy-menu-button" :aria-label="`操作：${row.name}`" :loading="row.wgcfProfile ? wgcfBusy(row.wgcfProfile) || deletingProfiles.has(row.managedWgcfProfile) : testingIds.has(row.id) || deletingIds.has(row.id)">操作<el-icon><ArrowDown /></el-icon></el-button>
               <template #dropdown><el-dropdown-menu>
+                <el-dropdown-item :icon="Edit" :disabled="row.id <= 0 || renameDialog.saving || deletingIds.has(row.id) || deletingProfiles.has(row.managedWgcfProfile)" aria-label="重命名" @click="openRename(row)">重命名</el-dropdown-item>
                 <template v-if="row.wgcfProfile">
                   <el-dropdown-item v-if="row.wgcfProfile.phase === 'failed'" :icon="RefreshRight" :disabled="wgcfUnavailable(row.wgcfProfile)" aria-label="继续创建此出口" @click="wgcfWarpPanel?.operate(row.wgcfProfile, 'resume')"><div>继续创建此出口</div></el-dropdown-item>
                   <el-dropdown-item v-else-if="!row.wgcfProfile.desired" :icon="VideoPlay" :disabled="wgcfUnavailable(row.wgcfProfile) || !row.wgcfProfile.generated || row.wgcfProfile.phase === 'creating'" aria-label="启动出口" @click="wgcfWarpPanel?.operate(row.wgcfProfile, 'start')"><div>启动出口</div></el-dropdown-item>
                   <el-dropdown-item v-else :icon="SwitchButton" :disabled="wgcfUnavailable(row.wgcfProfile) || proxyIsUsed(row) || row.wgcfProfile.phase === 'creating'" aria-label="停止出口" @click="wgcfWarpPanel?.operate(row.wgcfProfile, 'stop')"><div>停止出口<small v-if="proxyIsUsed(row)" class="proxy-menu-reason">请先解绑账号，并停用或切换全局代理</small></div></el-dropdown-item>
-                  <el-dropdown-item :icon="Connection" :disabled="wgcfUnavailable(row.wgcfProfile) || !row.wgcfProfile.desired || row.wgcfProfile.runtime !== 'listening' || row.wgcfProfile.phase !== 'ready'" aria-label="检测 WARP 出口" @click="wgcfWarpPanel?.operate(row.wgcfProfile, 'test')"><div>检测 WARP 出口</div></el-dropdown-item>
+                  <el-dropdown-item :icon="Connection" :disabled="wgcfUnavailable(row.wgcfProfile) || !row.wgcfProfile.desired || row.wgcfProfile.runtime !== 'listening' || row.wgcfProfile.phase !== 'ready'" aria-label="检测出口 IP" @click="wgcfWarpPanel?.operate(row.wgcfProfile, 'test')"><div>检测出口 IP</div></el-dropdown-item>
                   <el-dropdown-item v-if="row.id > 0" :icon="User" aria-label="已绑定账号" @click="boundAccountsDialog?.open(row)">已绑定账号（{{ row.accountCount || 0 }}）</el-dropdown-item>
                   <el-dropdown-item :icon="CirclePlus" :disabled="wgcfUnavailable(row.wgcfProfile) || !wgcfWarpPanel?.canBind(row.wgcfProfile)" aria-label="添加绑定账号" @click="wgcfWarpPanel?.openBind(row.wgcfProfile)"><div>添加绑定账号</div></el-dropdown-item>
-                  <el-dropdown-item divided :icon="Delete" :disabled="!!proxyDeleteReason(row)" aria-label="删除 WARP 出口" @click="removeProxy(row)"><div>删除 WARP 出口<small v-if="proxyDeleteReason(row)" class="proxy-menu-reason">{{ proxyDeleteReason(row) }}</small></div></el-dropdown-item>
+                  <el-dropdown-item divided :icon="Delete" :disabled="!!proxyDeleteReason(row)" aria-label="删除出口" @click="removeProxy(row)"><div>删除出口<small v-if="proxyDeleteReason(row)" class="proxy-menu-reason">{{ proxyDeleteReason(row) }}</small></div></el-dropdown-item>
                 </template>
                 <template v-else-if="row.managedWgcfProfile">
                   <el-dropdown-item :icon="User" :disabled="row.id <= 0" @click="boundAccountsDialog?.open(row)">已绑定账号</el-dropdown-item>
-                  <el-dropdown-item divided :icon="Delete" disabled aria-label="删除 WARP 出口"><div>删除 WARP 出口<small v-if="proxyDeleteReason(row)" class="proxy-menu-reason">{{ proxyDeleteReason(row) }}</small></div></el-dropdown-item>
+                  <el-dropdown-item divided :icon="Delete" disabled aria-label="删除出口"><div>删除出口<small v-if="proxyDeleteReason(row)" class="proxy-menu-reason">{{ proxyDeleteReason(row) }}</small></div></el-dropdown-item>
                 </template>
                 <el-dropdown-item v-else-if="row.kind === 'warp'" disabled>请迁移至 WARP 新出口</el-dropdown-item>
                 <template v-else>
@@ -425,8 +439,8 @@
                       @click="openEdit(row)"><div>编辑代理</div></el-dropdown-item>
                   <el-dropdown-item divided :icon="Delete"
                       :disabled="deletingIds.has(row.id) || testingIds.has(row.id)"
-                      title="删除代理"
-                      @click="removeProxy(row)"><div>删除代理</div></el-dropdown-item>
+                      title="删除出口"
+                      @click="removeProxy(row)"><div>删除出口</div></el-dropdown-item>
                 </template>
               </el-dropdown-menu></template>
             </el-dropdown>
@@ -774,6 +788,7 @@ const wgcfStatus = ref<WgcfRuntimeStatus | null>(null)
 const wgcfError = ref('')
 const proxyCategoryLoading = ref(false)
 const testingIds = reactive(new Set<number>())
+const renameDialog = reactive({ visible: false, saving: false, id: 0, name: '', error: '' })
 const deletingIds = reactive(new Set<number>())
 const deletingProfiles = reactive(new Set<string>())
 const deleteFailures = ref<string[]>([])
@@ -1400,6 +1415,40 @@ function closeProxyDialog() {
   proxyDialog.visible = false
 }
 
+function openRename(proxy: ProxyTableRow) {
+  if (renameDialog.saving || proxy.id <= 0 || deletingIds.has(proxy.id)
+    || (proxy.managedWgcfProfile && deletingProfiles.has(proxy.managedWgcfProfile))) return
+  Object.assign(renameDialog, { visible: true, id: proxy.id, name: proxy.name, error: '' })
+}
+
+function closeRename() {
+  if (renameDialog.saving) return
+  renameDialog.visible = false
+}
+
+async function saveRename() {
+  if (renameDialog.saving || !renameDialog.visible || renameDialog.id <= 0) return
+  const name = renameDialog.name.trim()
+  if (!name || name.length > 80) {
+    renameDialog.error = '代理名称不能为空且不能超过 80 个字符'
+    return
+  }
+  renameDialog.saving = true
+  renameDialog.error = ''
+  try {
+    const result = await panelApi.renameProxy(renameDialog.id, { name })
+    if (!result.success) throw new Error(result.message || '重命名失败')
+    renameDialog.visible = false
+    ElMessage.success('代理名称已更新')
+    await Promise.allSettled([loadProxies(false), wgcfWarpPanel.value?.loadStatus()])
+  } catch (error) {
+    const data = (error as { response?: { data?: unknown } })?.response?.data
+    renameDialog.error = extractApiErrorMessage(data) || (error instanceof Error ? error.message : '重命名失败，请重试')
+  } finally {
+    renameDialog.saving = false
+  }
+}
+
 function openEdit(proxy: OutboundProxy) {
   if (proxyDialog.saving || proxy.managedWgcfProfile || !isSelectableProxy(proxy)) return
   proxySaveOperationToken += 1
@@ -1564,8 +1613,8 @@ async function removeProxy(proxy: ProxyTableRow) {
   try {
     await ElMessageBox.confirm(
       proxy.managedWgcfProfile
-        ? `确定删除 WARP 出口“${proxy.name}”吗？会停止进程并删除本地记录与注册材料，不会注销 Cloudflare 账户。`
-        : `确定删除代理“${proxy.name}”吗？已绑定账号需要先切换为直连或其他代理。`,
+        ? `确定删除出口“${proxy.name}”吗？会停止进程并删除本地记录与注册材料，不会注销 Cloudflare 账户。`
+        : `确定删除出口“${proxy.name}”吗？已绑定账号需要先切换为直连或其他代理。`,
       '确认删除',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
     )

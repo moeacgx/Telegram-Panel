@@ -25,6 +25,7 @@ public static class ProxyApiEndpoints
         group.MapGet("/proxies/{id:int}/accounts", ListBoundAccountsAsync);
         group.MapPost("/proxies", CreateAsync);
         group.MapPut("/proxies/{id:int}", UpdateAsync);
+        group.MapPut("/proxies/{id:int}/name", RenameAsync);
         group.MapDelete("/proxies/{id:int}", DeleteAsync);
         group.MapPost("/proxies/{id:int}/test", TestAsync);
         group.MapPost("/proxies/import", ImportAsync);
@@ -149,6 +150,23 @@ public static class ProxyApiEndpoints
                 cancellationToken);
             var proxy = await service.UpdateAsync(id, ToInput(request), cancellationToken);
             return Results.Ok(ToDto(proxy));
+        }
+        catch (Exception ex) when (IsClientError(ex))
+        {
+            return ToError(ex);
+        }
+    }
+
+    internal static async Task<IResult> RenameAsync(
+        int id,
+        ProxyRenameRequestDto request,
+        ProxyManagementService service,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await service.RenameAsync(id, request.Name, cancellationToken);
+            return Results.Ok(new OperationResultDto(true, "代理名称已更新"));
         }
         catch (Exception ex) when (IsClientError(ex))
         {
@@ -690,6 +708,8 @@ public static class ProxyApiEndpoints
         _ => Results.BadRequest(new OperationResultDto(false, exception.Message))
     };
 }
+
+public sealed record ProxyRenameRequestDto(string? Name);
 
 public sealed record ProxySaveRequestDto(
     string? Name,
