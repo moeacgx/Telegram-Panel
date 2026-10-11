@@ -154,6 +154,8 @@ export const panelApi = {
     search?: string
     onlyWaste?: boolean
   }) => api.get<PagedResult<AccountListItem>>('/accounts', { params }).then((r) => r.data),
+  proxyAccounts: (id: number, page = 1) =>
+    api.get<PagedResult<import('./types').ProxyBoundAccount>>(`/proxies/${id}/accounts`, { params: { page, pageSize: 20 } }).then((r) => r.data),
   setAccountProxy: (id: number, payload: AccountProxyBindingRequest) =>
     api.post<AccountProxyBatchResult>(`/accounts/${id}/proxy`, payload, { timeout: 900_000 }).then((r) => r.data),
   batchSetAccountProxy: (accountIds: number[], payload: AccountProxyBindingRequest) =>

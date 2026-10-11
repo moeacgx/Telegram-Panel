@@ -274,6 +274,7 @@ proxyText: http://user-a:password-a@proxy-a.example.com:8080
 - `POST /api/panel/settings/global-proxy`：启用、修改或关闭账号全局代理并清理客户端缓存
 - `GET /api/panel/proxies`：代理列表
 - `GET /api/panel/proxies?usage=used|unused&categoryId={id}`：按使用状态或分类筛选代理
+- `GET /api/panel/proxies/{id}/accounts?page=1&pageSize=50`：分页查看该代理的专属绑定账号
 - `GET/POST/PUT/DELETE /api/panel/proxy-categories[/{id}]`：查询和管理代理分类
 - `POST /api/panel/proxies/batch/category`：批量设置代理分类
 - `POST /api/panel/proxies/batch/delete`：逐项删除所选代理并返回成功、失败数及每项原因
@@ -290,6 +291,23 @@ proxyText: http://user-a:password-a@proxy-a.example.com:8080
 `POST /api/panel/settings/global-proxy` 使用 `sourceMode=manual|existing`。`existing` 模式
 必须提供 `proxyId`，服务端只保存引用并在运行时解析代理；不会把 WARP 或 Resin 的连接
 凭据复制到全局配置。
+
+v1.31.82 起，`GET /api/panel/proxies/{id}/accounts` 在面板认证后可用，仅查询
+`ProxyId == id` 的专属绑定账号，不包含仅继承全局代理的账号。返回
+`{ items, total, page, pageSize }`，按账号内部 `id` 升序分页；`page` 默认 1、最小 1，
+`pageSize` 默认 50、限制在 1～200，超出范围会被钳制。超出最后一页返回空 `items`，
+但 `total` 保留当前总数。代理不存在返回 `404` 和中文 `message`。
+每项仅包含 `id`、`displayNumber`、`remark`、`nickname`、`phoneLastFour`、`proxyId`、
+`useGlobalProxy`；手机号不足四位时 `phoneLastFour` 为空，不返回完整手机号、Session、
+API Hash 或二级密码。此端点只读，不触发账号连接或改变路由。
+
+代理页的解绑、全局代理切换和换绑复用 `POST /api/panel/accounts/{id}/proxy`，分别使用
+`strategy=direct|global|existing`，并提交列表快照中的 `expectedProxyId` 和
+`expectedUseGlobalProxy`；换绑指定代理时同时传入目标 `proxyId`，必须一次提交完成，
+不能先解绑再绑定。返回 `409` 时说明绑定已变化，应刷新列表后重新选择，不能覆盖新绑定。
+验收以专属账号正确分页、敏感字段未返回、解绑后刷新列表移除该账号为准；若列表与页面
+使用数不同，先区分全局继承人数与专属绑定人数。回滚旧版本会移除该查看端点和快捷操作，
+已完成的路由切换需重新绑定原代理恢复。
 
 v1.31.82 已撤除旧 `GET /proxies/warp/status`、`POST /proxies/{id}/warp/refresh` 与
 `POST /proxies/warp/refresh-all`，旧客户端必须改用下文轻量档案 API。历史 `kind=warp`

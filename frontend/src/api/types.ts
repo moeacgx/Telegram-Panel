@@ -160,6 +160,16 @@ export interface AccountProxyBindingRequest {
   proxyText?: string | null
 }
 
+export interface ProxyBoundAccount {
+  id: number
+  displayNumber: number
+  remark: string | null
+  nickname: string | null
+  phoneLastFour: string
+  proxyId: number
+  useGlobalProxy: boolean
+}
+
 export interface AccountProxyOperationItem {
   accountId: number
   phone?: string | null

@@ -1,8 +1,10 @@
+using Microsoft.EntityFrameworkCore;
 using TelegramPanel.Core.Interfaces;
 using TelegramPanel.Core.Models;
 using TelegramPanel.Core.Services.Proxy;
 using TelegramPanel.Core.Services.Telegram;
 using TelegramPanel.Data.Entities;
+using TelegramPanel.Data;
 using TelegramPanel.Web.Services;
 
 namespace TelegramPanel.Web.Api;
@@ -20,6 +22,7 @@ public static class ProxyApiEndpoints
         group.MapPut("/proxy-categories/{id:int}", UpdateCategoryAsync);
         group.MapDelete("/proxy-categories/{id:int}", DeleteCategoryAsync);
         group.MapGet("/proxies/{id:int}", GetAsync);
+        group.MapGet("/proxies/{id:int}/accounts", ListBoundAccountsAsync);
         group.MapPost("/proxies", CreateAsync);
         group.MapPut("/proxies/{id:int}", UpdateAsync);
         group.MapDelete("/proxies/{id:int}", DeleteAsync);
@@ -79,6 +82,37 @@ public static class ProxyApiEndpoints
                 proxy,
                 proxy.Id == service.GetEnabledGlobalProxyId(),
                 await service.GetGlobalFallbackAccountCountAsync(cancellationToken)));
+    }
+
+    internal static async Task<IResult> ListBoundAccountsAsync(
+        int id,
+        int? page,
+        int? pageSize,
+        AppDbContext db,
+        CancellationToken cancellationToken)
+    {
+        if (!await db.OutboundProxies.AsNoTracking().AnyAsync(proxy => proxy.Id == id, cancellationToken))
+            return Results.NotFound(new OperationResultDto(false, "代理不存在"));
+
+        var currentPage = Math.Max(1, page ?? 1);
+        var currentPageSize = Math.Clamp(pageSize ?? 50, 1, 200);
+        // 仅列出显式专属绑定；继承全局代理的账号不属于此代理的绑定列表。
+        var query = db.Accounts.AsNoTracking().Where(account => account.ProxyId == id);
+        var total = await query.CountAsync(cancellationToken);
+        var offset = Math.Min((long)(currentPage - 1) * currentPageSize, int.MaxValue);
+        var items = await query.OrderBy(account => account.Id)
+            .Skip((int)offset)
+            .Take(currentPageSize)
+            .Select(account => new ProxyBoundAccountDto(
+                account.Id,
+                account.DisplayNumber,
+                account.Remark,
+                account.Nickname,
+                account.Phone.Length >= 4 ? account.Phone.Substring(account.Phone.Length - 4) : string.Empty,
+                account.ProxyId,
+                account.UseGlobalProxy))
+            .ToListAsync(cancellationToken);
+        return Results.Ok(new ProxyBoundAccountsDto(items, total, currentPage, currentPageSize));
     }
 
     private static async Task<IResult> CreateAsync(
@@ -676,6 +710,19 @@ public sealed record ProxySaveRequestDto(
     int? CategoryId = null);
 
 public sealed record ProxyImportRequestDto(string? Text, bool TestAfterImport = false);
+public sealed record ProxyBoundAccountDto(
+    int Id,
+    int DisplayNumber,
+    string? Remark,
+    string? Nickname,
+    string PhoneLastFour,
+    int? ProxyId,
+    bool UseGlobalProxy);
+public sealed record ProxyBoundAccountsDto(
+    IReadOnlyList<ProxyBoundAccountDto> Items,
+    int Total,
+    int Page,
+    int PageSize);
 public sealed record WarpCreateRequestDto(
     string? Name,
     string? RequestId,

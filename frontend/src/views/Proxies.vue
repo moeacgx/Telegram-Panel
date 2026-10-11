@@ -62,6 +62,7 @@
     </el-card>
 
     <WgcfWarpPanel ref="wgcfWarpPanel" @changed="loadProxies(false)" @state="updateWgcfState" />
+    <ProxyBoundAccountsDialog ref="boundAccountsDialog" @changed="refreshBindings" />
 
     <el-dialog
       v-model="globalProxyDialog.visible"
@@ -389,7 +390,8 @@
             <el-tag :type="proxyIsUsed(row) ? 'success' : 'info'" size="small">
               {{ proxyIsUsed(row) ? '使用中' : '未使用' }}
             </el-tag>
-            <div class="cell-sub">{{ proxyUsageCount(row) }} 个账号</div>
+            <el-button v-if="row.managedWgcfProfile && row.id > 0" link type="primary" @click="boundAccountsDialog?.open(row)">{{ proxyUsageCount(row) }} 个账号</el-button>
+            <div v-else class="cell-sub">{{ proxyUsageCount(row) }} 个账号</div>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="158" fixed="right">
@@ -401,17 +403,20 @@
               <el-tooltip v-else-if="!row.wgcfProfile.desired" content="启动出口" placement="top">
                 <el-button link type="success" :icon="VideoPlay" :loading="wgcfBusy(row.wgcfProfile)" :disabled="wgcfUnavailable(row.wgcfProfile) || !row.wgcfProfile.generated || row.wgcfProfile.phase === 'creating'" aria-label="启动出口" @click="wgcfWarpPanel?.operate(row.wgcfProfile, 'start')" />
               </el-tooltip>
-              <el-tooltip v-else :content="row.accountCount > 0 ? '请先在账号页面切换已绑定账号的代理' : '停止出口'" placement="top">
+              <el-tooltip v-else :content="row.accountCount > 0 ? '请先点击已绑定账号解绑或换绑代理' : '停止出口'" placement="top">
                 <el-button link type="warning" :icon="SwitchButton" :loading="wgcfBusy(row.wgcfProfile)" :disabled="wgcfUnavailable(row.wgcfProfile) || row.accountCount > 0 || row.wgcfProfile.phase === 'creating'" aria-label="停止出口" @click="wgcfWarpPanel?.operate(row.wgcfProfile, 'stop')" />
               </el-tooltip>
               <el-tooltip content="检测 WARP 出口" placement="top">
                 <el-button link type="primary" :icon="Connection" :disabled="wgcfUnavailable(row.wgcfProfile) || !row.wgcfProfile.desired || row.wgcfProfile.runtime !== 'listening' || row.wgcfProfile.phase !== 'ready'" aria-label="检测 WARP 出口" @click="wgcfWarpPanel?.operate(row.wgcfProfile, 'test')" />
               </el-tooltip>
-              <el-tooltip content="绑定单个账号" placement="top">
-                <el-button link type="primary" :icon="User" :disabled="!wgcfWarpPanel?.canBind(row.wgcfProfile)" aria-label="绑定单个账号" @click="wgcfWarpPanel?.openBind(row.wgcfProfile)" />
+              <el-tooltip v-if="row.accountCount > 0" content="已绑定账号" placement="top">
+                <el-button link type="primary" :icon="User" :disabled="row.id <= 0" aria-label="已绑定账号" @click="boundAccountsDialog?.open(row)" />
+              </el-tooltip>
+              <el-tooltip v-else content="绑定账号" placement="top">
+                <el-button link type="primary" :icon="User" :disabled="!wgcfWarpPanel?.canBind(row.wgcfProfile)" aria-label="绑定账号" @click="wgcfWarpPanel?.openBind(row.wgcfProfile)" />
               </el-tooltip>
             </div>
-            <span v-else-if="row.managedWgcfProfile" class="cell-sub">请刷新运行状态</span>
+            <el-button v-else-if="row.managedWgcfProfile" link type="primary" :icon="User" :disabled="row.id <= 0" @click="boundAccountsDialog?.open(row)">已绑定账号</el-button>
             <span v-else-if="row.kind === 'warp'" class="cell-sub">请迁移至 WARP 新出口</span>
             <div v-else class="row-actions">
               <el-tooltip content="检测出口 IP（不重启）" placement="top">
@@ -750,6 +755,7 @@ import {
 } from '@element-plus/icons-vue'
 import { panelApi } from '@/api/panel'
 import WgcfWarpPanel from '@/components/WgcfWarpPanel.vue'
+import ProxyBoundAccountsDialog from '@/components/ProxyBoundAccountsDialog.vue'
 import type {
   GlobalProxySettings,
   NetworkEgress,
@@ -878,6 +884,11 @@ const importDialog = reactive({
 })
 
 const wgcfWarpPanel = ref<InstanceType<typeof WgcfWarpPanel> | null>(null)
+const boundAccountsDialog = ref<InstanceType<typeof ProxyBoundAccountsDialog> | null>(null)
+async function refreshBindings() {
+  const results = await Promise.allSettled([loadProxies(false), wgcfWarpPanel.value?.loadStatus()])
+  if (results.some((result) => result.status === 'rejected')) ElMessage.warning('账号绑定已处理，代理列表刷新失败，请手动刷新')
+}
 const lightweightWarpAvailable = computed(() => !!wgcfStatus.value?.available && !wgcfError.value)
 const proxyRows = computed(() => mergeProxyRows(proxies.value, wgcfStatus.value?.profiles ?? []))
 const usageCounts = computed(() => {
