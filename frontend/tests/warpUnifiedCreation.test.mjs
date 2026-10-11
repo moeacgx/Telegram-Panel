@@ -24,7 +24,7 @@ test('轻量登录未接受条款不能提交；同意后重试复用 UUID', () 
   const values = {
     proxyStrategy: ref('warp_per_account'), proxyId: ref(null), availableWarpPoolCount: ref(0),
     warpStatus: ref({ available: true }), acceptWarpTerms: ref(false), warpRequestId: ref(''),
-    crypto: { randomUUID: () => requestId }, computed, ElMessage: { warning() {} },
+    createRequestId: () => requestId, computed, ElMessage: { warning() {} },
   }
   const selection = login.match(/const proxySelectionInvalid = computed\([^]*?\n\)/)[0]
   const state = execute(`${selection}\n${body(login, 'ensureProxySelected')}\n${body(login, 'selectedProxyPayload')}`,
@@ -47,7 +47,7 @@ test('三种导入载荷携带条款和稳定 UUID，未接受时拒绝提交', 
     proxyStrategy: ref('warp_per_account'), proxyId: ref(null), availableWarpPoolCount: ref(0),
     warpCreateAvailable: ref(true), acceptWarpTerms: ref(false), warpRequestId: ref(''), warpRequestKind: ref(''),
     isPerAccountProxyBatch: ref(false), perAccountProxyCount: ref(0), perAccountProxyLimitExceeded: ref(false),
-    crypto: { randomUUID: () => requestId }, computed, ElMessage: { warning() {} }, warpStatus: ref({ available: true }),
+    createRequestId: () => requestId, computed, ElMessage: { warning() {} }, warpStatus: ref({ available: true }),
     busy: ref(false), ensureTelegramApiConfigured: () => true, sessionString: ref('secret-session'),
     importCategoryId: ref(null), deviceProfileKey: ref('random'), importingString: ref(false),
     panelApi: { importAccountsStringSession: async (payload) => { received.push(payload); throw new Error('timeout') } },
@@ -104,7 +104,7 @@ for (const accountIds of [[11], [11, 12]]) {
 test('切换导入类型分配新 UUID，同类型失败重试保留原 UUID', () => {
   let count = 0
   const state = execute(body(imports, 'ensureWarpRequestId'), ['ensureWarpRequestId'], {
-    warpRequestKind: ref(''), warpRequestId: ref(''), crypto: { randomUUID: () => `uuid-${++count}` },
+    warpRequestKind: ref(''), warpRequestId: ref(''), createRequestId: () => `uuid-${++count}`,
   })
   assert.equal(state.ensureWarpRequestId('zip'), 'uuid-1')
   assert.equal(state.ensureWarpRequestId('zip'), 'uuid-1')

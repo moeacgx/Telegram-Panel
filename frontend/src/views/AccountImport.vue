@@ -383,6 +383,7 @@
 </template>
 
 <script setup lang="ts">
+import { createRequestId } from '@/utils/requestId'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import type { UploadFile } from 'element-plus'
@@ -558,7 +559,7 @@ function ensureWarpRequestId(kind: 'zip' | 'session-files' | 'string-session') {
     warpRequestKind.value = kind
     warpRequestId.value = ''
   }
-  return warpRequestId.value ||= crypto.randomUUID()
+  return warpRequestId.value ||= createRequestId()
 }
 
 function appendProxyFields(

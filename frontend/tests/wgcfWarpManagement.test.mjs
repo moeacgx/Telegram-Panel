@@ -4,10 +4,14 @@ import test from 'node:test'
 import ts from 'typescript'
 import { computed, reactive, ref } from 'vue'
 
+const utility = await readFile(new URL('../src/utils/requestId.ts', import.meta.url), 'utf8')
+const moduleCode = ts.transpileModule(utility, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText
+const { createRequestId } = await import(`data:text/javascript;base64,${Buffer.from(moduleCode).toString('base64')}`)
+
 const component = await readFile(new URL('../src/components/WgcfWarpPanel.vue', import.meta.url), 'utf8').catch(() => '')
 const proxiesSource = await readFile(new URL('../src/views/Proxies.vue', import.meta.url), 'utf8')
 
-function setup(overrides = {}) {
+function setup(overrides = {}, browserCrypto = { randomUUID: () => '0efca5bd-b7b0-4a77-92b7-112c686ef591' }) {
   assert.ok(component, '轻量 WARP 管理组件尚未实现')
   const script = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)?.[1]
   assert.ok(script, '管理组件缺少脚本')
@@ -21,11 +25,11 @@ function setup(overrides = {}) {
   const js = ts.transpileModule(script.replace(/^import[\s\S]*?from ['"][^'"]+['"]\s*$/gm, ''), {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
   }).outputText.replace(/export \{\};?/, '')
-  const factory = new Function('ref', 'reactive', 'computed', 'onMounted', 'onBeforeUnmount', 'defineEmits', 'panelApi', 'ElMessage', 'crypto', 'defineExpose',
+  const factory = new Function('ref', 'reactive', 'computed', 'onMounted', 'onBeforeUnmount', 'defineEmits', 'panelApi', 'ElMessage', 'crypto', 'defineExpose', 'createRequestId',
     `${js}\nreturn {status, createDialog, bindDialog, profiles, busyProfiles, openCreate, createProfile, operate, canBind, openBind, bindAccount, loadStatus};`)
   const state = factory(ref, reactive, computed, () => {}, () => {}, () => (...args) => events.push(args), api,
     Object.fromEntries(['success', 'warning', 'error'].map((type) => [type, (message) => messages.push({ type, message })])),
-    { randomUUID: () => '0efca5bd-b7b0-4a77-92b7-112c686ef591' }, () => {})
+    browserCrypto, () => {}, () => createRequestId(browserCrypto))
   state.status.value = { available: true, reason: null, profiles: [] }
   return { ...state, messages, events }
 }
@@ -216,3 +220,19 @@ for (const view of ['AccountLogin', 'AccountImport']) {
     assert.match(source, /v-for="proxy in selectableProxies"/)
   })
 }
+
+test('HTTP 环境没有 randomUUID 仍能打开创建并在超时重试时复用请求编号', async () => {
+  const requests = []
+  const state = setup({ createWgcfProfile: async (payload) => {
+    requests.push(payload)
+    if (requests.length === 1) throw new Error('timeout')
+    return profile()
+  } }, { getRandomValues: (bytes) => { bytes.set(Array.from({ length: 16 }, (_, i) => i)); return bytes } })
+  state.openCreate()
+  assert.equal(state.createDialog.visible, true)
+  assert.match(state.createDialog.requestId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+  await state.createProfile()
+  await state.createProfile()
+  assert.equal(requests.length, 2)
+  assert.equal(requests[0].requestId, requests[1].requestId)
+})

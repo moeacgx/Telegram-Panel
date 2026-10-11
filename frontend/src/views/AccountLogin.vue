@@ -347,6 +347,7 @@
 </template>
 
 <script setup lang="ts">
+import { createRequestId } from '@/utils/requestId'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -481,7 +482,7 @@ function ensureProxySelected() {
 
 function selectedProxyPayload() {
   const strategy = proxyStrategy.value as AccountProxyStrategy
-  if (strategy === 'warp_per_account') warpRequestId.value ||= crypto.randomUUID()
+  if (strategy === 'warp_per_account') warpRequestId.value ||= createRequestId()
   return {
     proxyStrategy: strategy,
     proxyId: strategy === 'existing' ? proxyId.value : null,

@@ -34,6 +34,7 @@
 </template>
 
 <script setup lang="ts">
+import { createRequestId } from '@/utils/requestId'
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { panelApi } from '@/api/panel'
@@ -111,7 +112,7 @@ async function loadStatus() {
 
 function openCreate() {
   if (!status.value?.available || loadError.value || createDialog.running) return
-  Object.assign(createDialog, { visible: true, name: '', requestId: crypto.randomUUID(), submittedName: null, error: '' })
+  Object.assign(createDialog, { visible: true, name: '', requestId: createRequestId(), submittedName: null, error: '' })
 }
 
 defineExpose({ openCreate, loadStatus, operate, openBind, canBind, operationUnavailable, busyProfiles })

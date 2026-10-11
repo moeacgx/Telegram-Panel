@@ -722,6 +722,7 @@
 </template>
 
 <script setup lang="ts">
+import { createRequestId } from '@/utils/requestId'
 import { loginEmailDisplay } from '@/utils/loginEmailDisplay'
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import type { Component } from 'vue'
@@ -922,7 +923,7 @@ const warpAvailable = computed(() => Boolean(
 watch(() => proxyDialog.strategy, () => {
   if (!proxyDialog.running) {
     proxyDialog.acceptWarpTerms = false
-    proxyDialog.warpRequestId = crypto.randomUUID()
+    proxyDialog.warpRequestId = createRequestId()
   }
 }, { flush: 'sync' })
 
@@ -1572,7 +1573,7 @@ function openAccountProxy(accountIds: number[], row?: Row) {
   proxyDialog.proxyId = row?.proxy?.id ?? null
   proxyDialog.proxyText = ''
   proxyDialog.acceptWarpTerms = false
-  proxyDialog.warpRequestId = crypto.randomUUID()
+  proxyDialog.warpRequestId = createRequestId()
   proxyDialog.visible = true
 }
 
