@@ -24,13 +24,14 @@ test('批量删除展示逐项失败且保留被占用代理', () => {
 })
 
 function controller(api = {}) {
-  const methods = ['proxyUsageCount', 'proxyIsUsed', 'proxyDeleteReason', 'deleteProxyItem', 'isSelectableProxy', 'removeSelectedProxies']
+  const methods = ['proxyUsageCount', 'proxyIsUsed', 'proxyDeleteReason', 'deleteErrorMessage', 'deleteProxyItem', 'isSelectableProxy', 'removeSelectedProxies', 'removeProxy']
   const script = methods.map((name) => proxiesSource.match(new RegExp(`(?:async )?function ${name}\\([^]*?\\n\\}`))[0]).join('\n')
   const compiled = ts.transpileModule(script, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText
   const calls = []
   const dependencies = { deletingProfiles: new Set(), deletingIds: new Set(), wgcfUnavailable: () => false,
     selectedProxies: ref([]), proxyRows: ref([]), batchDeleting: ref(false), deleteFailures: ref([]),
-    ElMessageBox: { confirm: async () => {} }, ElMessage: { warning: () => {}, success: () => {} },
+    extractApiErrorMessage: (data) => data?.message || '',
+    ElMessageBox: { confirm: async () => {} }, ElMessage: { warning: () => {}, success: () => {}, error: () => {} },
     panelApi: { deleteWgcfProfile: async (id) => { calls.push(['wgcf', id]); return { success: true } },
       deleteProxy: async (id) => { calls.push(['ordinary', id]); return { success: true } }, ...api },
     loadProxies: async () => {}, loadProxyCategories: async () => {}, wgcfWarpPanel: ref(null), proxyTableRef: ref(null) }
@@ -68,4 +69,18 @@ test('混合批量删除逐项继续，所有失败有名称和原因且当前�
   assert.match(state.deleteFailures.value[0], /普通代理.*请求超时/)
   assert.match(state.deleteFailures.value[1], /已占用.*全局/)
   assert.equal(state.batchDeleting.value, false)
+})
+
+test('后端占用原因进入批删失败记录，单删后清除保留选择', async () => {
+  const state = controller({ deleteWgcfProfile: async () => { throw Object.assign(new Error('HTTP 409'), { response: { data: { message: '首次连接仍在占用出口' } } }) } })
+  state.selectedProxies.value = [managed]
+  state.proxyRows.value = [managed]
+  await state.removeSelectedProxies()
+  assert.match(state.deleteFailures.value[0], /首次连接仍在占用/)
+  let cleared = false
+  state.proxyTableRef.value = { clearSelection: () => { cleared = true } }
+  state.selectedProxies.value = [ordinary]
+  await state.removeProxy(ordinary)
+  assert.equal(cleared, true)
+  assert.deepEqual(state.selectedProxies.value, [])
 })

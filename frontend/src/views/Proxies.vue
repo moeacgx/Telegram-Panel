@@ -766,6 +766,7 @@ import {
   VideoPlay,
 } from '@element-plus/icons-vue'
 import { panelApi } from '@/api/panel'
+import { extractApiErrorMessage } from '@/api/client'
 import WgcfWarpPanel from '@/components/WgcfWarpPanel.vue'
 import ProxyBoundAccountsDialog from '@/components/ProxyBoundAccountsDialog.vue'
 import type {
@@ -1200,7 +1201,7 @@ async function removeSelectedProxies() {
         await deleteProxyItem(current)
         success++
       }
-      catch (error) { deleteFailures.value.push(`${proxy.name}：${error instanceof Error ? error.message : '删除失败，请刷新后重试'}`) }
+      catch (error) { deleteFailures.value.push(`${proxy.name}：${deleteErrorMessage(error)}`) }
     }
     if (deleteFailures.value.length) ElMessage.warning(`已删除 ${success} 个，${deleteFailures.value.length} 个未删除，详情见列表下方`)
     else ElMessage.success(`已删除 ${success} 个代理`)
@@ -1566,6 +1567,11 @@ function proxyDeleteReason(proxy: ProxyTableRow) {
   return ''
 }
 
+function deleteErrorMessage(error: unknown) {
+  const data = (error as { response?: { data?: unknown } })?.response?.data
+  return extractApiErrorMessage(data) || (error instanceof Error ? error.message : '删除失败，请刷新后重试')
+}
+
 async function deleteProxyItem(proxy: ProxyTableRow) {
   const reason = proxyDeleteReason(proxy)
   if (reason) throw new Error(reason)
@@ -1602,9 +1608,11 @@ async function removeProxy(proxy: ProxyTableRow) {
     const result = await deleteProxyItem(current)
     ElMessage.success(result.message || '代理已删除')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '删除失败，请刷新后重试')
+    ElMessage.error(deleteErrorMessage(error))
   } finally {
     await Promise.allSettled([loadProxies(), loadProxyCategories(), wgcfWarpPanel.value?.loadStatus()])
+    proxyTableRef.value?.clearSelection()
+    selectedProxies.value = []
   }
 }
 
