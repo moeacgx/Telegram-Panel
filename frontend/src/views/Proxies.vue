@@ -384,83 +384,52 @@
             <div v-if="row.lastError" class="cell-sub failure-count">{{ row.lastError }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="使用情况" width="110" align="center">
+        <el-table-column label="使用情况" width="150" align="center" class-name="proxy-usage-column">
           <template #default="{ row }">
             <el-tag v-if="row.isGlobal" type="warning" size="small">全局</el-tag>
             <el-tag :type="proxyIsUsed(row) ? 'success' : 'info'" size="small">
               {{ proxyIsUsed(row) ? '使用中' : '未使用' }}
             </el-tag>
-            <el-button v-if="row.managedWgcfProfile && row.id > 0" link type="primary" @click="boundAccountsDialog?.open(row)">{{ row.accountCount || 0 }} 个绑定账号</el-button>
+            <el-button v-if="row.managedWgcfProfile && row.id > 0" class="proxy-account-count" link type="primary" @click="boundAccountsDialog?.open(row)">{{ row.accountCount || 0 }} 个绑定账号</el-button>
             <div v-else class="cell-sub">{{ proxyUsageCount(row) }} 个账号</div>
             <div v-if="row.managedWgcfProfile && row.isGlobal" class="cell-sub">共 {{ proxyUsageCount(row) }} 个账号使用</div>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="202" fixed="right">
+        <el-table-column label="操作" width="104" align="center" fixed="right" class-name="proxy-actions-column">
           <template #default="{ row }">
-            <div v-if="row.wgcfProfile" class="row-actions">
-              <el-tooltip v-if="row.wgcfProfile.phase === 'failed'" content="继续创建此出口" placement="top">
-                <el-button link type="warning" :icon="RefreshRight" :loading="wgcfBusy(row.wgcfProfile)" :disabled="wgcfUnavailable(row.wgcfProfile)" aria-label="继续创建此出口" @click="wgcfWarpPanel?.operate(row.wgcfProfile, 'resume')" />
-              </el-tooltip>
-              <el-tooltip v-else-if="!row.wgcfProfile.desired" content="启动出口" placement="top">
-                <el-button link type="success" :icon="VideoPlay" :loading="wgcfBusy(row.wgcfProfile)" :disabled="wgcfUnavailable(row.wgcfProfile) || !row.wgcfProfile.generated || row.wgcfProfile.phase === 'creating'" aria-label="启动出口" @click="wgcfWarpPanel?.operate(row.wgcfProfile, 'start')" />
-              </el-tooltip>
-              <el-tooltip v-else :content="proxyIsUsed(row) ? '请先解绑账号，并停用或切换全局代理' : '停止出口'" placement="top">
-                <el-button link type="warning" :icon="SwitchButton" :loading="wgcfBusy(row.wgcfProfile)" :disabled="wgcfUnavailable(row.wgcfProfile) || proxyIsUsed(row) || row.wgcfProfile.phase === 'creating'" aria-label="停止出口" @click="wgcfWarpPanel?.operate(row.wgcfProfile, 'stop')" />
-              </el-tooltip>
-              <el-tooltip content="检测 WARP 出口" placement="top">
-                <el-button link type="primary" :icon="Connection" :disabled="wgcfUnavailable(row.wgcfProfile) || !row.wgcfProfile.desired || row.wgcfProfile.runtime !== 'listening' || row.wgcfProfile.phase !== 'ready'" aria-label="检测 WARP 出口" @click="wgcfWarpPanel?.operate(row.wgcfProfile, 'test')" />
-              </el-tooltip>
-              <el-tooltip v-if="row.accountCount > 0" content="已绑定账号" placement="top">
-                <el-button link type="primary" :icon="User" :disabled="row.id <= 0" aria-label="已绑定账号" @click="boundAccountsDialog?.open(row)" />
-              </el-tooltip>
-              <el-tooltip content="添加绑定账号（可共享出口）" placement="top">
-                <el-button link type="primary" :icon="CirclePlus" :disabled="wgcfUnavailable(row.wgcfProfile) || !wgcfWarpPanel?.canBind(row.wgcfProfile)" aria-label="添加绑定账号" @click="wgcfWarpPanel?.openBind(row.wgcfProfile)" />
-              </el-tooltip>
-              <el-tooltip :content="proxyDeleteReason(row) || '删除 WARP 出口'" placement="top">
-                <span><el-button link type="danger" :icon="Delete" :loading="deletingProfiles.has(row.managedWgcfProfile)" :disabled="!!proxyDeleteReason(row)" aria-label="删除 WARP 出口" @click="removeProxy(row)" /></span>
-              </el-tooltip>
-            </div>
-            <div v-else-if="row.managedWgcfProfile" class="row-actions">
-              <el-button link type="primary" :icon="User" :disabled="row.id <= 0" @click="boundAccountsDialog?.open(row)">已绑定账号</el-button>
-              <el-tooltip :content="proxyDeleteReason(row)" placement="top">
-                <span><el-button link type="danger" :icon="Delete" disabled aria-label="删除 WARP 出口" /></span>
-              </el-tooltip>
-            </div>
-            <span v-else-if="row.kind === 'warp'" class="cell-sub">请迁移至 WARP 新出口</span>
-            <div v-else class="row-actions">
-              <el-tooltip content="检测出口 IP（不重启）" placement="top">
-                <el-button
-                  link
-                  type="primary"
-                  :icon="VideoPlay"
-                  :loading="testingIds.has(row.id)"
-                  :disabled="testingIds.has(row.id) || deletingIds.has(row.id) || !row.isEnabled"
-                  title="检测出口 IP"
-                  @click="testProxy(row)"
-                />
-              </el-tooltip>
-              <el-tooltip content="编辑代理" placement="top">
-                <el-button
-                  link
-                  type="primary"
-                  :icon="Edit"
-                  :disabled="deletingIds.has(row.id)"
-                  title="编辑代理"
-                  @click="openEdit(row)"
-                />
-              </el-tooltip>
-              <el-tooltip content="删除代理" placement="top">
-                <el-button
-                  link
-                  type="danger"
-                  :icon="Delete"
-                  :loading="deletingIds.has(row.id)"
-                  :disabled="deletingIds.has(row.id) || testingIds.has(row.id)"
-                  title="删除代理"
-                  @click="removeProxy(row)"
-                />
-              </el-tooltip>
-            </div>
+            <el-dropdown trigger="click" placement="bottom-end" :teleported="true">
+              <el-button class="proxy-menu-button" :aria-label="`操作：${row.name}`" :loading="row.wgcfProfile ? wgcfBusy(row.wgcfProfile) || deletingProfiles.has(row.managedWgcfProfile) : testingIds.has(row.id) || deletingIds.has(row.id)">操作<el-icon><ArrowDown /></el-icon></el-button>
+              <template #dropdown><el-dropdown-menu>
+                <template v-if="row.wgcfProfile">
+                  <el-dropdown-item v-if="row.wgcfProfile.phase === 'failed'" :icon="RefreshRight" :disabled="wgcfUnavailable(row.wgcfProfile)" aria-label="继续创建此出口" @click="wgcfWarpPanel?.operate(row.wgcfProfile, 'resume')"><div>继续创建此出口</div></el-dropdown-item>
+                  <el-dropdown-item v-else-if="!row.wgcfProfile.desired" :icon="VideoPlay" :disabled="wgcfUnavailable(row.wgcfProfile) || !row.wgcfProfile.generated || row.wgcfProfile.phase === 'creating'" aria-label="启动出口" @click="wgcfWarpPanel?.operate(row.wgcfProfile, 'start')"><div>启动出口</div></el-dropdown-item>
+                  <el-dropdown-item v-else :icon="SwitchButton" :disabled="wgcfUnavailable(row.wgcfProfile) || proxyIsUsed(row) || row.wgcfProfile.phase === 'creating'" aria-label="停止出口" @click="wgcfWarpPanel?.operate(row.wgcfProfile, 'stop')"><div>停止出口<small v-if="proxyIsUsed(row)" class="proxy-menu-reason">请先解绑账号，并停用或切换全局代理</small></div></el-dropdown-item>
+                  <el-dropdown-item :icon="Connection" :disabled="wgcfUnavailable(row.wgcfProfile) || !row.wgcfProfile.desired || row.wgcfProfile.runtime !== 'listening' || row.wgcfProfile.phase !== 'ready'" aria-label="检测 WARP 出口" @click="wgcfWarpPanel?.operate(row.wgcfProfile, 'test')"><div>检测 WARP 出口</div></el-dropdown-item>
+                  <el-dropdown-item v-if="row.id > 0" :icon="User" aria-label="已绑定账号" @click="boundAccountsDialog?.open(row)">已绑定账号（{{ row.accountCount || 0 }}）</el-dropdown-item>
+                  <el-dropdown-item :icon="CirclePlus" :disabled="wgcfUnavailable(row.wgcfProfile) || !wgcfWarpPanel?.canBind(row.wgcfProfile)" aria-label="添加绑定账号" @click="wgcfWarpPanel?.openBind(row.wgcfProfile)"><div>添加绑定账号</div></el-dropdown-item>
+                  <el-dropdown-item divided :icon="Delete" :disabled="!!proxyDeleteReason(row)" aria-label="删除 WARP 出口" @click="removeProxy(row)"><div>删除 WARP 出口<small v-if="proxyDeleteReason(row)" class="proxy-menu-reason">{{ proxyDeleteReason(row) }}</small></div></el-dropdown-item>
+                </template>
+                <template v-else-if="row.managedWgcfProfile">
+                  <el-dropdown-item :icon="User" :disabled="row.id <= 0" @click="boundAccountsDialog?.open(row)">已绑定账号</el-dropdown-item>
+                  <el-dropdown-item divided :icon="Delete" disabled aria-label="删除 WARP 出口"><div>删除 WARP 出口<small v-if="proxyDeleteReason(row)" class="proxy-menu-reason">{{ proxyDeleteReason(row) }}</small></div></el-dropdown-item>
+                </template>
+                <el-dropdown-item v-else-if="row.kind === 'warp'" disabled>请迁移至 WARP 新出口</el-dropdown-item>
+                <template v-else>
+                  <el-dropdown-item :icon="VideoPlay"
+                      :disabled="testingIds.has(row.id) || deletingIds.has(row.id) || !row.isEnabled"
+                      title="检测出口 IP"
+                      @click="testProxy(row)"><div>检测出口 IP</div></el-dropdown-item>
+                  <el-dropdown-item :icon="Edit"
+                      :disabled="deletingIds.has(row.id)"
+                      title="编辑代理"
+                      @click="openEdit(row)"><div>编辑代理</div></el-dropdown-item>
+                  <el-dropdown-item divided :icon="Delete"
+                      :disabled="deletingIds.has(row.id) || testingIds.has(row.id)"
+                      title="删除代理"
+                      @click="removeProxy(row)"><div>删除代理</div></el-dropdown-item>
+                </template>
+              </el-dropdown-menu></template>
+            </el-dropdown>
           </template>
         </el-table-column>
         <template #empty>
@@ -750,6 +719,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
+  ArrowDown,
   CirclePlus,
   CollectionTag,
   Connection,
@@ -1671,6 +1641,14 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.proxy-menu-button { padding: 6px 10px; min-height: 32px; gap: 6px; }
+.proxy-menu-reason { display: block; max-width: 240px; white-space: normal; overflow-wrap: anywhere; line-height: 1.5; }
+.proxy-account-count { display: flex; width: 100%; min-width: 0; padding: 4px 0; white-space: normal; }
+.proxy-account-count :deep(span) { white-space: normal; overflow-wrap: anywhere; }
+.proxy-table :deep(.proxy-usage-column .cell) { overflow: hidden; overflow-wrap: anywhere; }
+/* 固定列使用不透明背景，避免横向滚动时下方账号数透出。 */
+.proxy-table :deep(td.proxy-actions-column) { background: var(--tp-panel); }
+.proxy-table :deep(th.proxy-actions-column) { background: var(--tp-table-header-bg); }
 .proxies-page {
   width: min(100%, 1536px);
   margin: 0 auto;
