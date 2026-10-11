@@ -47,64 +47,77 @@ public sealed partial class ProxyManagementService
         }
 
         await using var mutationLease = await AcquireMutationLeaseAsync(cancellationToken);
-        if (nextEnabled
-            && normalizedSourceMode == GlobalTelegramProxyConfiguration.ExistingSourceMode)
+        IDisposable? globalProfileClaim = null;
+        try
         {
-            var selectedProxy = await _db.OutboundProxies
-                .AsNoTracking()
-                .FirstOrDefaultAsync(
-                    x => x.Id == nextProxyId!.Value && x.IsEnabled,
-                    cancellationToken);
-            if (selectedProxy == null)
+            if (nextEnabled
+                && normalizedSourceMode == GlobalTelegramProxyConfiguration.ExistingSourceMode)
             {
-                throw new KeyNotFoundException(
-                    "所选全局代理不存在或已停用，未修改全局代理配置");
+                var selectedProxy = await _db.OutboundProxies
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(
+                        x => x.Id == nextProxyId!.Value && x.IsEnabled,
+                        cancellationToken);
+                if (selectedProxy == null)
+                {
+                    throw new KeyNotFoundException(
+                        "所选全局代理不存在或已停用，未修改全局代理配置");
+                }
+                if (selectedProxy.ManagedWgcfProfile is { } profile)
+                {
+                    EnsureManagedProfileClaimOwner(selectedProxy, null);
+                    globalProfileClaim = _managedWarpProvisioner != null
+                        ? await AcquireSharedManagedWarpLeaseAsync(selectedProxy.Id, cancellationToken)
+                        : _temporaryWarpClaims?.ClaimManagedProfile(profile);
+                }
+                EnsureWireGuardWarpReadyForBinding(selectedProxy);
             }
-            if (selectedProxy.ManagedWgcfProfile != null)
-                throw new InvalidOperationException("受管 WireGuard 出口仅允许绑定单个账号，不能作为全局代理");
-            EnsureWireGuardWarpReadyForBinding(selectedProxy);
+
+            var previousGlobalResin = await ResolveConfiguredGlobalResinProxyAsync(cancellationToken);
+            var keepsSameResinRoute = nextEnabled
+                && normalizedSourceMode == GlobalTelegramProxyConfiguration.ExistingSourceMode
+                && previousGlobalResin != null
+                && nextProxyId == previousGlobalResin.Id;
+
+            var affectedAccounts = previousGlobalResin != null && !keepsSameResinRoute
+                ? await _db.Accounts
+                    .Where(x => x.ProxyId == null && x.UseGlobalProxy)
+                    .ToListAsync(cancellationToken)
+                : new List<Account>();
+            var activationStates = affectedAccounts.ToDictionary(
+                x => x.Id,
+                x => x.IsActive);
+
+            if (affectedAccounts.Count > 0)
+            {
+                foreach (var account in affectedAccounts)
+                    account.IsActive = false;
+                if (activationStates.Values.Any(x => x))
+                    await _db.SaveChangesAsync(cancellationToken);
+
+                await ReleaseClientsStrictAsync(affectedAccounts.Select(x => x.Id));
+                foreach (var account in affectedAccounts)
+                    await ReleaseResinLeaseAsync(
+                        previousGlobalResin!,
+                        account.Id,
+                        cancellationToken);
+            }
+
+            // 只有旧 Lease 全部释放后才允许写入新配置。异常时保持失败闭锁，
+            // 防止账号在旧出口身份未清理的情况下继续运行。
+            await applyChangeAsync(cancellationToken);
+
+            if (affectedAccounts.Count == 0)
+                return;
+
+            foreach (var account in affectedAccounts)
+                account.IsActive = activationStates[account.Id];
+            await _db.SaveChangesAsync(cancellationToken);
         }
-
-        var previousGlobalResin = await ResolveConfiguredGlobalResinProxyAsync(cancellationToken);
-        var keepsSameResinRoute = nextEnabled
-            && normalizedSourceMode == GlobalTelegramProxyConfiguration.ExistingSourceMode
-            && previousGlobalResin != null
-            && nextProxyId == previousGlobalResin.Id;
-
-        var affectedAccounts = previousGlobalResin != null && !keepsSameResinRoute
-            ? await _db.Accounts
-                .Where(x => x.ProxyId == null && x.UseGlobalProxy)
-                .ToListAsync(cancellationToken)
-            : new List<Account>();
-        var activationStates = affectedAccounts.ToDictionary(
-            x => x.Id,
-            x => x.IsActive);
-
-        if (affectedAccounts.Count > 0)
+        finally
         {
-            foreach (var account in affectedAccounts)
-                account.IsActive = false;
-            if (activationStates.Values.Any(x => x))
-                await _db.SaveChangesAsync(cancellationToken);
-
-            await ReleaseClientsStrictAsync(affectedAccounts.Select(x => x.Id));
-            foreach (var account in affectedAccounts)
-                await ReleaseResinLeaseAsync(
-                    previousGlobalResin!,
-                    account.Id,
-                    cancellationToken);
+            globalProfileClaim?.Dispose();
         }
-
-        // 只有旧 Lease 全部释放后才允许写入新配置。异常时保持失败闭锁，
-        // 防止账号在旧出口身份未清理的情况下继续运行。
-        await applyChangeAsync(cancellationToken);
-
-        if (affectedAccounts.Count == 0)
-            return;
-
-        foreach (var account in affectedAccounts)
-            account.IsActive = activationStates[account.Id];
-        await _db.SaveChangesAsync(cancellationToken);
     }
 
     private async Task<OutboundProxy?> ResolveConfiguredGlobalResinProxyAsync(
@@ -314,13 +327,10 @@ public sealed partial class ProxyManagementService
                 {
                     EnsureManagedProfileClaimOwner(targetProxy, managedWarpClaimToken);
                     // 普通绑定也在落库前独占档案，阻止运行器首连租约跨过检查窗口。
-                    if (_temporaryWarpClaims != null
-                        && !_temporaryWarpClaims.OwnsManagedProfile(targetProxy.ManagedWgcfProfile, managedWarpClaimToken))
-                        managedBindingClaim = _temporaryWarpClaims.ClaimManagedProfile(targetProxy.ManagedWgcfProfile);
-                    if (ids.Length != 1 || IsEnabledGlobalProxy(targetProxy.Id)
-                        || await _db.Accounts.AnyAsync(
-                            account => account.ProxyId == targetProxy.Id && account.Id != ids[0], cancellationToken))
-                        throw new InvalidOperationException("受管 WireGuard 出口只能由一个账号独占，未修改任何绑定");
+                    if (_temporaryWarpClaims?.OwnsManagedProfile(targetProxy.ManagedWgcfProfile, managedWarpClaimToken) != true)
+                        managedBindingClaim = _managedWarpProvisioner != null
+                            ? await AcquireSharedManagedWarpLeaseAsync(targetProxy.Id, cancellationToken)
+                            : _temporaryWarpClaims?.ClaimManagedProfile(targetProxy.ManagedWgcfProfile);
                 }
             }
 
@@ -485,8 +495,6 @@ public sealed partial class ProxyManagementService
                 .FirstOrDefaultAsync(x => x.Id == input.ProxyId && x.IsEnabled, cancellationToken);
             if (proxy == null)
                 throw new KeyNotFoundException("所选代理不存在或已停用");
-            if (proxy.ManagedWgcfProfile != null)
-                throw new InvalidOperationException("受管 WireGuard 只支持已入库账号单独绑定，不能用于导入或登录首次连接");
             EnsureWireGuardWarpReadyForBinding(proxy);
         }
         else if (strategy == "warp_per_account")

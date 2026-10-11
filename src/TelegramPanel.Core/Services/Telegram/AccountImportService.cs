@@ -1260,8 +1260,15 @@ public class AccountImportService
             }
 
             IDisposable? warpUsageClaim = null;
+            ManagedWarpProxyLease? managedLease = null;
             try
             {
+                if (selectedGlobal?.ManagedWgcfProfile != null)
+                {
+                    managedLease = await _proxyManagement.AcquireSharedManagedWarpLeaseAsync(
+                        selectedGlobal.Id, cancellationToken);
+                    selectedGlobal = managedLease.Proxy;
+                }
                 if (selectedGlobal?.Kind == OutboundProxyKinds.Warp
                     && _warpProxyUsageGuard != null)
                 {
@@ -1292,11 +1299,13 @@ public class AccountImportService
                     resinLease,
                     resinLease == null ? null : stableImportKey,
                     stableImportKey,
-                    warpUsageClaim);
+                    warpUsageClaim,
+                    ManagedWarpLease: managedLease);
             }
             catch
             {
                 warpUsageClaim?.Dispose();
+                managedLease?.Dispose();
                 throw;
             }
         }
@@ -1311,8 +1320,6 @@ public class AccountImportService
                 cancellationToken: cancellationToken);
             if (proxy is not { IsEnabled: true })
                 throw new KeyNotFoundException("所选代理不存在或已停用");
-            if (proxy.ManagedWgcfProfile != null)
-                throw new InvalidOperationException("受管 WireGuard 只能由已入库账号单独绑定，导入首次连接不能使用");
             if (proxy.Kind == OutboundProxyKinds.Warp
                 && _temporaryWarpClaims.OwnsRequest(proxy.WarpProfile?.RequestId))
             {
@@ -1320,37 +1327,53 @@ public class AccountImportService
                     "所选 WARP 正被另一个账号首次连接流程使用，请稍后重试");
             }
 
-            var stableImportKey = BuildImportStableKey(stableKeySeed, operationNonce);
-            var resinLease = proxy.Kind == OutboundProxyKinds.Resin
-                ? new ResinLeaseControlSnapshot(
-                    proxy.Id,
-                    proxy.ResinAdminUrl,
-                    proxy.ResinAdminToken,
-                    proxy.ResinPlatform)
-                : null;
-            var connection = AccountProxyResolver.BuildConnectionOptions(
-                proxy,
-                stableImportKey);
-            if (binding.ExpectedConnection != null
-                && !SameConnection(binding.ExpectedConnection, connection))
-            {
-                throw new ProxyBindingConflictException(
-                    "批量代理检测后连接参数已变化，账号尚未发起首次连接，请重新导入");
-            }
-            var frozenConnection = binding.ExpectedConnection ?? connection;
+            ManagedWarpProxyLease? managedLease = null;
             IDisposable? warpUsageClaim = null;
-            if (proxy.Kind == OutboundProxyKinds.Warp && _warpProxyUsageGuard != null)
+            try
             {
-                warpUsageClaim = _warpProxyUsageGuard.TryAcquireUsage(proxy.Id)
-                    ?? throw new InvalidOperationException(
-                        "所选 WARP 正在维护或被另一个首次连接流程使用，请稍后重试；账号尚未发起首次连接");
+                if (proxy.ManagedWgcfProfile != null)
+                {
+                    managedLease = await _proxyManagement.AcquireSharedManagedWarpLeaseAsync(proxy.Id, cancellationToken);
+                    proxy = managedLease.Proxy;
+                }
+                var stableImportKey = BuildImportStableKey(stableKeySeed, operationNonce);
+                var resinLease = proxy.Kind == OutboundProxyKinds.Resin
+                    ? new ResinLeaseControlSnapshot(
+                        proxy.Id,
+                        proxy.ResinAdminUrl,
+                        proxy.ResinAdminToken,
+                        proxy.ResinPlatform)
+                    : null;
+                var connection = AccountProxyResolver.BuildConnectionOptions(
+                    proxy,
+                    stableImportKey);
+                if (binding.ExpectedConnection != null
+                    && !SameConnection(binding.ExpectedConnection, connection))
+                {
+                    throw new ProxyBindingConflictException(
+                        "批量代理检测后连接参数已变化，账号尚未发起首次连接，请重新导入");
+                }
+                var frozenConnection = binding.ExpectedConnection ?? connection;
+                if (proxy.Kind == OutboundProxyKinds.Warp && _warpProxyUsageGuard != null)
+                {
+                    warpUsageClaim = _warpProxyUsageGuard.TryAcquireUsage(proxy.Id)
+                        ?? throw new InvalidOperationException(
+                            "所选 WARP 正在维护或被另一个首次连接流程使用，请稍后重试；账号尚未发起首次连接");
+                }
+                return new PreparedImportProxy(
+                    frozenConnection,
+                    resinLease,
+                    resinLease != null ? stableImportKey : null,
+                    stableImportKey,
+                    warpUsageClaim,
+                    ManagedWarpLease: managedLease);
             }
-            return new PreparedImportProxy(
-                frozenConnection,
-                resinLease,
-                resinLease != null ? stableImportKey : null,
-                stableImportKey,
-                warpUsageClaim);
+            catch
+            {
+                warpUsageClaim?.Dispose();
+                managedLease?.Dispose();
+                throw;
+            }
         }
 
         throw new ArgumentException(

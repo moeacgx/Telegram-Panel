@@ -125,6 +125,9 @@ export interface WgcfProfile {
   proxyId: number | null
   accountCount: number
   poolEligible: boolean
+  shareEligible: boolean
+  usageCount: number
+  isGlobal: boolean
   testStatus: string
   egressIp: string | null
   error: string | null

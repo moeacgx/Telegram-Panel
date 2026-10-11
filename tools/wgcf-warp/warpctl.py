@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import secrets
 import signal
+import shutil
 import socket
 import stat
 import subprocess
@@ -325,6 +326,22 @@ class Store:
                 "revision": meta.get("revision"), "runtimeRevision": runtime.get("revision"),
                 "runtimeFresh": fresh, "runtimeUpdatedAt": at if valid_at else None}
 
+    def delete(self, name):
+        path = self.profile(name)
+        meta = read_json(path / "meta.json", {})
+        runtime = read_json(path / "runtime.json", {})
+        if meta.get("desired"):
+            raise Failure("请先停止出口并等待运行器确认")
+        # 曾启动或产生运行回执的档案必须匹配最新停止意图，不能依赖旧 PID 或旧回执。
+        if meta.get("everStarted") or runtime:
+            state = self.status(name)
+            if not state["runtimeFresh"] or state["runtime"] != "stopped" or runtime.get("revision") != meta.get("revision"):
+                raise Failure("运行器尚未确认停止，未删除材料")
+        if any(p.is_symlink() for p in path.rglob("*")):
+            raise Failure("档案目录内不能有符号链接")
+        shutil.rmtree(path)
+        return {"profile": name, "deleted": True}
+
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -543,7 +560,7 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("serve")
     commands.add_parser("list")
-    for verb in ("register", "generate", "start", "status", "stop", "provision"):
+    for verb in ("register", "generate", "start", "status", "stop", "provision", "delete"):
         command = commands.add_parser(verb)
         command.add_argument("profile")
         if verb in ("register", "provision"):
@@ -576,6 +593,8 @@ def main():
                 result = store.desired(args.profile, args.command == "start")
             elif args.command == "status":
                 result = store.status(args.profile)
+            elif args.command == "delete":
+                result = store.delete(args.profile)
             elif args.command == "list":
                 result = store.list_profiles()
             else:

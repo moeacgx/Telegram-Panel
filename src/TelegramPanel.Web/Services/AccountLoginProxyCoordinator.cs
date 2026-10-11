@@ -622,6 +622,14 @@ public sealed class AccountLoginProxyCoordinator
                                 "全局 WARP 正被另一个账号首次连接流程使用，请稍后重试");
                         }
 
+                        if (selectedGlobal?.ManagedWgcfProfile != null)
+                        {
+                            if (_managedWarp == null)
+                                throw new InvalidOperationException("轻量 WARP 运行器未配置");
+                            managedWarpLease = await _managedWarp.AcquireSharedAsync(selectedGlobal.Id, cancellationToken);
+                            selectedGlobal = managedWarpLease.Proxy;
+                        }
+
                         temporaryResinKey = selectedGlobal?.Kind == OutboundProxyKinds.Resin
                             ? $"tg_login_{loginId}_{Guid.NewGuid():N}"
                             : null;
@@ -662,7 +670,7 @@ public sealed class AccountLoginProxyCoordinator
                         {
                             if (_managedWarp == null)
                                 throw new InvalidOperationException("轻量 WARP 运行器未配置");
-                            managedWarpLease = await _managedWarp.AcquireAsync(proxy.Id, cancellationToken);
+                            managedWarpLease = await _managedWarp.AcquireSharedAsync(proxy.Id, cancellationToken);
                             proxy = managedWarpLease.Proxy;
                         }
                         if (proxy.Kind == OutboundProxyKinds.Warp

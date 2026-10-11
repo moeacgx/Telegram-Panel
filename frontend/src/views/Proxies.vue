@@ -98,7 +98,7 @@
                 v-model="globalProxyDialog.form.proxyId"
                 class="full"
                 filterable
-                placeholder="选择普通代理、外部 WireGuard WARP 或 Resin"
+                placeholder="选择 WARP、普通代理或 Resin"
               >
                 <el-option-group
                   v-for="group in globalProxyGroups"
@@ -137,7 +137,7 @@
               v-else-if="globalProxyGroups.every((group) => group.items.length === 0)"
               type="warning"
               :closable="false"
-              title="还没有可选代理，请添加外部 WireGuard WARP、Resin 或普通代理"
+              title="还没有可用代理，请创建 WARP 或添加其他代理，并检测出口"
             />
             <div class="global-proxy-actions">
               <el-button plain :icon="CirclePlus" @click="openProxyCreateForGlobal('resin')">
@@ -268,7 +268,7 @@
           </el-select>
           <el-button
             :icon="CollectionTag"
-            :disabled="selectedProxies.length === 0"
+            :disabled="selectedProxies.length === 0 || selectedProxies.some((proxy) => proxy.id <= 0)"
             @click="openBatchCategory"
           >
             设置分类<span v-if="selectedProxies.length">（{{ selectedProxies.length }}）</span>
@@ -390,11 +390,12 @@
             <el-tag :type="proxyIsUsed(row) ? 'success' : 'info'" size="small">
               {{ proxyIsUsed(row) ? '使用中' : '未使用' }}
             </el-tag>
-            <el-button v-if="row.managedWgcfProfile && row.id > 0" link type="primary" @click="boundAccountsDialog?.open(row)">{{ proxyUsageCount(row) }} 个账号</el-button>
+            <el-button v-if="row.managedWgcfProfile && row.id > 0" link type="primary" @click="boundAccountsDialog?.open(row)">{{ row.accountCount || 0 }} 个绑定账号</el-button>
             <div v-else class="cell-sub">{{ proxyUsageCount(row) }} 个账号</div>
+            <div v-if="row.managedWgcfProfile && row.isGlobal" class="cell-sub">共 {{ proxyUsageCount(row) }} 个账号使用</div>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="158" fixed="right">
+        <el-table-column label="操作" width="202" fixed="right">
           <template #default="{ row }">
             <div v-if="row.wgcfProfile" class="row-actions">
               <el-tooltip v-if="row.wgcfProfile.phase === 'failed'" content="继续创建此出口" placement="top">
@@ -403,8 +404,8 @@
               <el-tooltip v-else-if="!row.wgcfProfile.desired" content="启动出口" placement="top">
                 <el-button link type="success" :icon="VideoPlay" :loading="wgcfBusy(row.wgcfProfile)" :disabled="wgcfUnavailable(row.wgcfProfile) || !row.wgcfProfile.generated || row.wgcfProfile.phase === 'creating'" aria-label="启动出口" @click="wgcfWarpPanel?.operate(row.wgcfProfile, 'start')" />
               </el-tooltip>
-              <el-tooltip v-else :content="row.accountCount > 0 ? '请先点击已绑定账号解绑或换绑代理' : '停止出口'" placement="top">
-                <el-button link type="warning" :icon="SwitchButton" :loading="wgcfBusy(row.wgcfProfile)" :disabled="wgcfUnavailable(row.wgcfProfile) || row.accountCount > 0 || row.wgcfProfile.phase === 'creating'" aria-label="停止出口" @click="wgcfWarpPanel?.operate(row.wgcfProfile, 'stop')" />
+              <el-tooltip v-else :content="proxyIsUsed(row) ? '请先解绑账号，并停用或切换全局代理' : '停止出口'" placement="top">
+                <el-button link type="warning" :icon="SwitchButton" :loading="wgcfBusy(row.wgcfProfile)" :disabled="wgcfUnavailable(row.wgcfProfile) || proxyIsUsed(row) || row.wgcfProfile.phase === 'creating'" aria-label="停止出口" @click="wgcfWarpPanel?.operate(row.wgcfProfile, 'stop')" />
               </el-tooltip>
               <el-tooltip content="检测 WARP 出口" placement="top">
                 <el-button link type="primary" :icon="Connection" :disabled="wgcfUnavailable(row.wgcfProfile) || !row.wgcfProfile.desired || row.wgcfProfile.runtime !== 'listening' || row.wgcfProfile.phase !== 'ready'" aria-label="检测 WARP 出口" @click="wgcfWarpPanel?.operate(row.wgcfProfile, 'test')" />
@@ -412,11 +413,19 @@
               <el-tooltip v-if="row.accountCount > 0" content="已绑定账号" placement="top">
                 <el-button link type="primary" :icon="User" :disabled="row.id <= 0" aria-label="已绑定账号" @click="boundAccountsDialog?.open(row)" />
               </el-tooltip>
-              <el-tooltip v-else content="绑定账号" placement="top">
-                <el-button link type="primary" :icon="User" :disabled="!wgcfWarpPanel?.canBind(row.wgcfProfile)" aria-label="绑定账号" @click="wgcfWarpPanel?.openBind(row.wgcfProfile)" />
+              <el-tooltip content="添加绑定账号（可共享出口）" placement="top">
+                <el-button link type="primary" :icon="CirclePlus" :disabled="wgcfUnavailable(row.wgcfProfile) || !wgcfWarpPanel?.canBind(row.wgcfProfile)" aria-label="添加绑定账号" @click="wgcfWarpPanel?.openBind(row.wgcfProfile)" />
+              </el-tooltip>
+              <el-tooltip :content="proxyDeleteReason(row) || '删除 WARP 出口'" placement="top">
+                <span><el-button link type="danger" :icon="Delete" :loading="deletingProfiles.has(row.managedWgcfProfile)" :disabled="!!proxyDeleteReason(row)" aria-label="删除 WARP 出口" @click="removeProxy(row)" /></span>
               </el-tooltip>
             </div>
-            <el-button v-else-if="row.managedWgcfProfile" link type="primary" :icon="User" :disabled="row.id <= 0" @click="boundAccountsDialog?.open(row)">已绑定账号</el-button>
+            <div v-else-if="row.managedWgcfProfile" class="row-actions">
+              <el-button link type="primary" :icon="User" :disabled="row.id <= 0" @click="boundAccountsDialog?.open(row)">已绑定账号</el-button>
+              <el-tooltip :content="proxyDeleteReason(row)" placement="top">
+                <span><el-button link type="danger" :icon="Delete" disabled aria-label="删除 WARP 出口" /></span>
+              </el-tooltip>
+            </div>
             <span v-else-if="row.kind === 'warp'" class="cell-sub">请迁移至 WARP 新出口</span>
             <div v-else class="row-actions">
               <el-tooltip content="检测出口 IP（不重启）" placement="top">
@@ -458,6 +467,9 @@
           <el-empty :description="proxyRows.length ? '当前筛选下没有代理' : '暂无代理'" />
         </template>
       </el-table>
+      <el-alert v-if="deleteFailures.length" title="以下代理未删除，请处理原因后重试" type="warning" :closable="false">
+        <ul><li v-for="failure in deleteFailures" :key="failure">{{ failure }}</li></ul>
+      </el-alert>
     </el-card>
 
     <el-dialog
@@ -769,7 +781,8 @@ import type {
   WgcfRuntimeStatus,
   WgcfProfile,
 } from '@/api/types'
-import { mergeProxyRows, wgcfPhaseLabel, wgcfRuntimeLabel } from '@/utils/proxyRows'
+import { canShareProxy, mergeProxyRows, wgcfPhaseLabel, wgcfRuntimeLabel } from '@/utils/proxyRows'
+import type { ProxyTableRow } from '@/utils/proxyRows'
 import { formatTime } from '@/utils/format'
 import { ipVersionLabel, isWarpConnected, warpStatusLabel } from '@/utils/networkEgress'
 
@@ -779,7 +792,7 @@ const proxies = ref<OutboundProxy[]>([])
 const proxyCategories = ref<ProxyCategory[]>([])
 const usageFilter = ref<'all' | 'used' | 'unused'>('all')
 const categoryFilter = ref<number | 'all' | 'uncategorized'>('all')
-const selectedProxies = ref<OutboundProxy[]>([])
+const selectedProxies = ref<ProxyTableRow[]>([])
 const proxyTableRef = ref<{ clearSelection: () => void } | null>(null)
 const panelEgress = ref<NetworkEgress | null>(null)
 const panelEgressError = ref('')
@@ -791,6 +804,8 @@ const wgcfError = ref('')
 const proxyCategoryLoading = ref(false)
 const testingIds = reactive(new Set<number>())
 const deletingIds = reactive(new Set<number>())
+const deletingProfiles = reactive(new Set<string>())
+const deleteFailures = ref<string[]>([])
 const batchDeleting = ref(false)
 const AUTO_STATUS_REFRESH_MS = 30_000
 let autoStatusRefreshTimer: ReturnType<typeof setInterval> | null = null
@@ -903,6 +918,7 @@ const filteredProxies = computed(() => proxyRows.value.filter((proxy) => {
   return true
 }))
 const globalProxyGroups = computed(() => ([
+  { kind: 'wgcf' as const, label: '轻量 WARP（可共享）', items: proxies.value.filter((proxy) => !!proxy.managedWgcfProfile && canShareProxy(proxy, wgcfStatus.value)) },
   { kind: 'wireguard_warp' as const, label: '外部 WireGuard WARP', items: proxies.value.filter((proxy) => proxy.kind === 'wireguard_warp' && !proxy.managedWgcfProfile) },
   { kind: 'manual' as const, label: '普通代理', items: proxies.value.filter((proxy) => proxy.kind === 'manual') },
   { kind: 'resin' as const, label: 'Resin 动态代理', items: proxies.value.filter((proxy) => proxy.kind === 'resin') },
@@ -1018,7 +1034,7 @@ function proxyUsageCount(proxy: OutboundProxy) {
 }
 
 function proxyIsUsed(proxy: OutboundProxy) {
-  return proxy.isInUse ?? proxyUsageCount(proxy) > 0
+  return !!proxy.isGlobal || !!proxy.isInUse || proxyUsageCount(proxy) > 0 || (proxy.accountCount ?? 0) > 0
 }
 
 function egressIpVersion(proxy: OutboundProxy) {
@@ -1039,10 +1055,10 @@ function categoryProxyCount(category: ProxyCategory) {
 }
 
 function isSelectableProxy(proxy: OutboundProxy) {
-  return proxy.id > 0 && !proxy.managedWgcfProfile && proxy.kind !== 'warp'
+  return (proxy.id > 0 || !!proxy.managedWgcfProfile) && proxy.kind !== 'warp'
 }
 
-function onProxySelectionChange(rows: OutboundProxy[]) {
+function onProxySelectionChange(rows: ProxyTableRow[]) {
   selectedProxies.value = rows.filter(isSelectableProxy)
 }
 
@@ -1134,7 +1150,7 @@ async function refreshAll() {
 }
 
 function openBatchCategory() {
-  if (selectedProxies.value.length === 0 || batchCategoryDialog.saving || selectedProxies.value.some((proxy) => !isSelectableProxy(proxy))) return
+  if (selectedProxies.value.length === 0 || batchCategoryDialog.saving || selectedProxies.value.some((proxy) => proxy.id <= 0 || !isSelectableProxy(proxy))) return
   batchCategoryDialog.proxyIds = selectedProxies.value.map((proxy) => proxy.id)
   batchCategoryDialog.categoryId = null
   batchCategoryDialog.visible = true
@@ -1161,11 +1177,11 @@ async function saveBatchCategory() {
 async function removeSelectedProxies() {
   if (batchDeleting.value || selectedProxies.value.length === 0) return
   if (selectedProxies.value.some((proxy) => !isSelectableProxy(proxy))) return
-  const selected = [...selectedProxies.value]
+  const selected = selectedProxies.value.map((selected) => proxyRows.value.find((row) => row.rowKey === selected.rowKey) ?? selected)
   const proxyIds = selected.map((proxy) => proxy.id)
   try {
     await ElMessageBox.confirm(
-      `确定删除选中的 ${proxyIds.length} 个代理吗？已绑定账号或正在作为全局代理使用的项目会逐项失败并保留。`,
+      `确定删除选中的 ${proxyIds.length} 个代理吗？占用中的项目会保留。WARP 会停止进程并删除本地记录与注册材料，不会注销 Cloudflare 账户。`,
       '确认批量删除',
       { type: 'warning', confirmButtonText: '批量删除', cancelButtonText: '取消' },
     )
@@ -1173,25 +1189,25 @@ async function removeSelectedProxies() {
     return
   }
 
+  if (batchDeleting.value) return
   batchDeleting.value = true
-  proxyIds.forEach((id) => deletingIds.add(id))
+  deleteFailures.value = []
+  let success = 0
   try {
-    const result = await panelApi.batchDeleteProxies(proxyIds)
-    if (result.failed > 0) {
-      const failures = result.items
-        .filter((item) => !item.success)
-        .slice(0, 5)
-        .map((item) => `#${item.proxyId}：${item.error || item.summary}`)
-        .join('；')
-      ElMessage.warning(`已删除 ${result.success} 个，${result.failed} 个失败${failures ? `：${failures}` : ''}`)
-    } else {
-      ElMessage.success(`已删除 ${result.success} 个代理`)
+    for (const proxy of selected) {
+      try {
+        const current = proxyRows.value.find((row) => row.rowKey === proxy.rowKey) ?? proxy
+        await deleteProxyItem(current)
+        success++
+      }
+      catch (error) { deleteFailures.value.push(`${proxy.name}：${error instanceof Error ? error.message : '删除失败，请刷新后重试'}`) }
     }
+    if (deleteFailures.value.length) ElMessage.warning(`已删除 ${success} 个，${deleteFailures.value.length} 个未删除，详情见列表下方`)
+    else ElMessage.success(`已删除 ${success} 个代理`)
   } finally {
-    await Promise.allSettled([loadProxies(), loadProxyCategories()])
+    await Promise.allSettled([loadProxies(), loadProxyCategories(), wgcfWarpPanel.value?.loadStatus()])
     proxyTableRef.value?.clearSelection()
     selectedProxies.value = []
-    proxyIds.forEach((id) => deletingIds.delete(id))
     batchDeleting.value = false
   }
 }
@@ -1331,8 +1347,8 @@ async function saveGlobalProxy() {
         ElMessage.warning('请选择一个已有代理')
         return
       }
-      if (selected.managedWgcfProfile || selected.kind === 'warp') {
-        ElMessage.warning(selected.kind === 'warp' ? '旧 WARP 已停用，请迁移至新出口' : 'WARP 出口只支持单个账号独占使用')
+      if (!canShareProxy(selected, wgcfStatus.value)) {
+        ElMessage.warning('所选代理当前不可用，请刷新出口状态并重新选择')
         return
       }
       if (!selected.isEnabled) {
@@ -1370,7 +1386,7 @@ async function saveGlobalProxy() {
     ElMessage.success(result.message || (payload.enabled ? '全局代理已保存' : '全局代理已停用'))
     globalProxyDialog.visible = false
     resetGlobalProxyDialog()
-    await loadGlobalProxy()
+    await Promise.allSettled([loadGlobalProxy(), loadProxies(false), wgcfWarpPanel.value?.loadStatus()])
   } finally {
     globalProxyDialog.saving = false
   }
@@ -1414,7 +1430,7 @@ function closeProxyDialog() {
 }
 
 function openEdit(proxy: OutboundProxy) {
-  if (proxyDialog.saving || !isSelectableProxy(proxy)) return
+  if (proxyDialog.saving || proxy.managedWgcfProfile || !isSelectableProxy(proxy)) return
   proxySaveOperationToken += 1
   proxyDialog.id = proxy.id
   proxyDialog.hasPassword = Boolean(proxy.hasPassword)
@@ -1539,11 +1555,41 @@ async function testProxy(proxy: OutboundProxy) {
   }
 }
 
-async function removeProxy(proxy: OutboundProxy) {
-  if (deletingIds.has(proxy.id) || !isSelectableProxy(proxy)) return
+function proxyDeleteReason(proxy: ProxyTableRow) {
+  if (proxy.isGlobal) return '请先停用或切换全局代理'
+  if (proxyIsUsed(proxy)) return '请先解绑账号或换绑到其他代理'
+  if (proxy.managedWgcfProfile) {
+    if (deletingProfiles.has(proxy.managedWgcfProfile)) return '正在删除'
+    if (!proxy.wgcfProfile || wgcfUnavailable(proxy.wgcfProfile)) return '出口状态不可用，请刷新后重试'
+    if (proxy.wgcfProfile.phase === 'creating') return '出口正在创建，请稍后再删除'
+  } else if (deletingIds.has(proxy.id)) return '正在删除'
+  return ''
+}
+
+async function deleteProxyItem(proxy: ProxyTableRow) {
+  const reason = proxyDeleteReason(proxy)
+  if (reason) throw new Error(reason)
+  if (proxy.managedWgcfProfile) deletingProfiles.add(proxy.managedWgcfProfile)
+  else deletingIds.add(proxy.id)
+  try {
+    const result = proxy.managedWgcfProfile
+      ? await panelApi.deleteWgcfProfile(proxy.managedWgcfProfile)
+      : await panelApi.deleteProxy(proxy.id)
+    if (!result.success) throw new Error(result.message || '删除失败')
+    return result
+  } finally {
+    if (proxy.managedWgcfProfile) deletingProfiles.delete(proxy.managedWgcfProfile)
+    else deletingIds.delete(proxy.id)
+  }
+}
+
+async function removeProxy(proxy: ProxyTableRow) {
+  if (proxyDeleteReason(proxy) || !isSelectableProxy(proxy)) return
   try {
     await ElMessageBox.confirm(
-      `确定删除代理“${proxy.name}”吗？已绑定账号需要先切换为直连或其他代理。`,
+      proxy.managedWgcfProfile
+        ? `确定删除 WARP 出口“${proxy.name}”吗？会停止进程并删除本地记录与注册材料，不会注销 Cloudflare 账户。`
+        : `确定删除代理“${proxy.name}”吗？已绑定账号需要先切换为直连或其他代理。`,
       '确认删除',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
     )
@@ -1551,14 +1597,14 @@ async function removeProxy(proxy: OutboundProxy) {
     return
   }
 
-  if (deletingIds.has(proxy.id)) return
-  deletingIds.add(proxy.id)
   try {
-    const result = await panelApi.deleteProxy(proxy.id)
+    const current = proxyRows.value.find((row) => row.rowKey === proxy.rowKey) ?? proxy
+    const result = await deleteProxyItem(current)
     ElMessage.success(result.message || '代理已删除')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '删除失败，请刷新后重试')
   } finally {
-    await Promise.allSettled([loadProxies()])
-    deletingIds.delete(proxy.id)
+    await Promise.allSettled([loadProxies(), loadProxyCategories(), wgcfWarpPanel.value?.loadStatus()])
   }
 }
 
@@ -1590,7 +1636,7 @@ function updateWgcfState(status: WgcfRuntimeStatus | null, error: string) {
 }
 
 function wgcfUnavailable(profile: WgcfProfile) {
-  return wgcfWarpPanel.value?.operationUnavailable(profile) ?? true
+  return deletingProfiles.has(profile.profile) || (wgcfWarpPanel.value?.operationUnavailable(profile) ?? true)
 }
 
 function wgcfBusy(profile: WgcfProfile) {

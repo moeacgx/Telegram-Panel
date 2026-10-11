@@ -7,6 +7,17 @@ public static class WgcfWarpApiEndpoints
     public static RouteGroupBuilder MapWgcfWarpApi(this RouteGroupBuilder group)
     {
         group.MapGet("/proxies/wgcf", (WgcfWarpService service, CancellationToken ct) => service.ListAsync(ct));
+        group.MapDelete("/proxies/wgcf/{profile}", async (string profile, WgcfWarpService service, CancellationToken ct) =>
+        {
+            try
+            {
+                await service.DeleteAsync(profile, ct);
+                return Results.Ok(new OperationResultDto(true, "出口与本地材料已删除"));
+            }
+            catch (ArgumentException ex) { return Results.BadRequest(new OperationResultDto(false, ex.Message)); }
+            catch (InvalidOperationException ex) { return Results.Conflict(new OperationResultDto(false, ex.Message)); }
+            catch (IOException) { return Results.Conflict(new OperationResultDto(false, "本地材料清理未完成，请重试删除")); }
+        });
         group.MapPost("/proxies/wgcf", async (WgcfCreateRequest request, WgcfWarpService service, CancellationToken ct) =>
             // 请求已持久化并可由 GET 轮询恢复。返回 200 保持与 Vue/Axios 管理操作的
             // 响应合同一致，避免 202 被中间层或客户端作为未完成重试。

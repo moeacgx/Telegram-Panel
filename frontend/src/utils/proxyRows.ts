@@ -22,6 +22,8 @@ export function mergeProxyRows(proxies: OutboundProxy[], profiles: WgcfProfile[]
     const index = profileRows.get(profile.profile) ?? (profile.proxyId ? proxyRows.get(profile.proxyId) : undefined)
     const proxy = index === undefined ? undefined : rows[index]
     const accountCount = Math.max(profile.accountCount, proxy?.accountCount ?? 0)
+    const usageCount = Math.max(accountCount, profile.usageCount ?? 0, proxy?.usageCount ?? 0)
+    const isGlobal = !!profile.isGlobal || !!proxy?.isGlobal
     const row: ProxyTableRow = {
       id: profile.proxyId ?? proxy?.id ?? 0,
       name: profile.name,
@@ -34,15 +36,16 @@ export function mergeProxyRows(proxies: OutboundProxy[], profiles: WgcfProfile[]
       ...proxy,
       rowKey: `wgcf:${profile.profile}`,
       managedWgcfProfile: profile.profile,
-      wgcfProfile: { ...profile, accountCount },
+      wgcfProfile: { ...profile, accountCount, usageCount, isGlobal },
       isEnabled: profile.desired,
       testStatus: profile.testStatus,
       egressIp: profile.egressIp,
       warpStatus: profile.testStatus === 'ok' ? 'on' : null,
       lastError: profile.error,
       accountCount,
-      usageCount: accountCount,
-      isInUse: accountCount > 0 || !!proxy?.isGlobal,
+      usageCount,
+      isGlobal,
+      isInUse: usageCount > 0 || isGlobal,
     }
     if (index === undefined) {
       profileRows.set(profile.profile, rows.length)
@@ -69,8 +72,17 @@ export function countAvailableWgcfPool(proxies: OutboundProxy[], status: WgcfRun
   if (!status?.available) return 0
   const readyProfiles = new Set(status.profiles.filter((profile) => profile.poolEligible === true && profile.phase === 'ready'
     && profile.desired && profile.runtime === 'listening' && profile.testStatus === 'ok'
-    && !!profile.egressIp && profile.accountCount === 0).map((profile) => profile.profile))
+    && !!profile.egressIp && profile.accountCount === 0 && (profile.usageCount ?? 0) === 0 && !profile.isGlobal).map((profile) => profile.profile))
   return proxies.filter((proxy) => !!proxy.managedWgcfProfile && readyProfiles.has(proxy.managedWgcfProfile)
     && proxy.isEnabled && proxy.testStatus === 'ok' && !!proxy.egressIp
     && (proxy.accountCount ?? 0) === 0 && (proxy.usageCount ?? 0) === 0 && !proxy.isGlobal).length
+}
+
+/** 显式选择允许共享；自动领取池仍使用独立的空闲资格。 */
+export function canShareProxy(proxy: OutboundProxy, status: WgcfRuntimeStatus | null): boolean {
+  if (!proxy.isEnabled || proxy.kind === 'warp') return false
+  if (!proxy.managedWgcfProfile) return proxy.kind !== 'wireguard_warp' || (proxy.testStatus === 'ok' && !!proxy.egressIp)
+  const profile = status?.profiles.find((item) => item.profile === proxy.managedWgcfProfile && item.proxyId === proxy.id)
+  return !!status?.available && !!profile?.shareEligible && profile.phase === 'ready' && profile.desired
+    && profile.runtime === 'listening' && profile.testStatus === 'ok' && !!profile.egressIp
 }

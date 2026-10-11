@@ -49,8 +49,6 @@ public sealed class GlobalProxyResolver
             throw new InvalidOperationException(
                 "Telegram 全局代理引用的已有代理不存在或已停用，已阻止降级为直连");
         }
-        if (proxy.ManagedWgcfProfile != null)
-            throw new InvalidOperationException("受管 WireGuard 不能作为全局代理，已阻止降级为直连");
         if (proxy.Kind == OutboundProxyKinds.WireGuardWarp
             && (proxy.TestStatus != "ok" || string.IsNullOrWhiteSpace(proxy.EgressIp)))
         {

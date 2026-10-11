@@ -127,6 +127,8 @@ export const panelApi = {
   testProxy: (id: number) => api.post<OutboundProxy>(`/proxies/${id}/test`, {}, { timeout: 60_000 }).then((r) => r.data),
   importProxies: (payload: ProxyImportRequest) =>
     api.post<OutboundProxy[]>('/proxies/import', payload, { timeout: PROXY_IMPORT_TIMEOUT_MS }).then((r) => r.data),
+  deleteWgcfProfile: (profile: string) =>
+    api.delete<OperationResult>(`/proxies/wgcf/${encodeURIComponent(profile)}`, { timeout: PROXY_DELETE_TIMEOUT_MS }).then((r) => r.data),
   wgcfStatus: () => api.get<WgcfRuntimeStatus>('/proxies/wgcf').then((r) => r.data),
   createWgcfProfile: (payload: CreateWgcfProfileRequest) =>
     api.post<WgcfProfile>('/proxies/wgcf', payload).then((r) => r.data),

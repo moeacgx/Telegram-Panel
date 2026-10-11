@@ -7,6 +7,13 @@ namespace TelegramPanel.Web.Components.Pages;
 /// <summary>为旧 Razor 兼容页面复用轻量 WARP 的运行态领取资格。</summary>
 internal static class LegacyWarpPoolSelection
 {
+    public static bool CanSelectExisting(OutboundProxy proxy, WgcfEnvironmentDto? environment) =>
+        proxy.IsEnabled && proxy.Kind != OutboundProxyKinds.Warp
+        && (proxy.ManagedWgcfProfile == null
+            || environment is { Available: true }
+            && environment.Profiles.Any(profile => profile.ShareEligible
+                && profile.ProxyId == proxy.Id && profile.Profile == proxy.ManagedWgcfProfile));
+
     public static int Count(
         IReadOnlyCollection<OutboundProxy> proxies,
         WgcfEnvironmentDto? environment,

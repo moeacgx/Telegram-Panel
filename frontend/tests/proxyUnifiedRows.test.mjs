@@ -8,10 +8,10 @@ const utility = await readFile(new URL('../src/utils/proxyRows.ts', import.meta.
 const view = await readFile(new URL('../src/views/Proxies.vue', import.meta.url), 'utf8')
 const controller = await readFile(new URL('../src/components/WgcfWarpPanel.vue', import.meta.url), 'utf8')
 const js = ts.transpileModule(utility, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 } }).outputText
-const { mergeProxyRows, countAvailableWgcfPool } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`)
+const { mergeProxyRows, countAvailableWgcfPool, canShareProxy } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`)
 
 const profile = (extra = {}) => ({ profile: 'web-one', name: '独立出口', phase: 'ready', registered: true,
-  generated: true, desired: true, runtime: 'listening', proxyId: 12, accountCount: 0, poolEligible: true,
+  generated: true, desired: true, runtime: 'listening', proxyId: 12, accountCount: 0, poolEligible: true, shareEligible: true, usageCount: 0, isGlobal: false,
   testStatus: 'ok', egressIp: '1.2.3.4', error: null, ...extra })
 const proxy = (extra = {}) => ({ id: 12, name: '独立出口', kind: 'wireguard_warp', protocol: 'socks5',
   managedWgcfProfile: 'web-one', host: '127.0.0.1', port: 1080, isEnabled: true, testStatus: 'ok',
@@ -79,7 +79,7 @@ test('轻量池只计算可独占的健康空闲出口，拒绝旧容器与占�
   for (const extra of [{ managedWgcfProfile: null, kind: 'warp' }, { isEnabled: false }, { testStatus: 'failed' }, { egressIp: null }, { accountCount: 1 }, { usageCount: 1 }, { isGlobal: true }]) {
     assert.equal(countAvailableWgcfPool([proxy(extra)], status), 0)
   }
-  for (const extra of [{ phase: 'failed' }, { desired: false }, { runtime: 'stopped' }, { accountCount: 1 }, { poolEligible: false }, { poolEligible: undefined }]) {
+  for (const extra of [{ phase: 'failed' }, { desired: false }, { runtime: 'stopped' }, { accountCount: 1 }, { usageCount: 2 }, { isGlobal: true }, { poolEligible: false }, { poolEligible: undefined }]) {
     assert.equal(countAvailableWgcfPool([proxy()], { ...status, profiles: [profile(extra)] }), 0)
   }
   assert.equal(countAvailableWgcfPool([proxy()], { ...status, available: false }), 0)
@@ -97,7 +97,7 @@ test('临时或已占用档案由运行器标记不可领取，健康快照也�
   assert.equal(countAvailableWgcfPool(proxies, status), 0)
 })
 
-test('无独立轻量列表，统一表的动作调用档案控制器且待生成行不可批量编辑', () => {
+test('统一表允许受管档案多选，未落库档案通过档案标识保持可选', () => {
   assert.doesNotMatch(controller, /<el-table|<section|<h2/)
   assert.match(view, /row-key="rowKey"/)
   for (const action of ['resume', 'start', 'stop', 'test']) assert.ok(view.includes(`operate(row.wgcfProfile, '${action}')`))
@@ -105,7 +105,24 @@ test('无独立轻量列表，统一表的动作调用档案控制器且待生�
   const fn = view.match(/function isSelectableProxy\([^]*?\n\}/)[0]
   const code = ts.transpileModule(fn, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText
   const selectable = new Function(`${code}\nreturn isSelectableProxy`)()
-  assert.equal(selectable(mergeProxyRows([], [profile({ proxyId: null })])[0]), false)
+  assert.equal(selectable(mergeProxyRows([], [profile({ proxyId: null })])[0]), true)
+  assert.equal(selectable(proxy({ accountCount: 3 })), true)
   assert.equal(selectable(proxy({ kind: 'warp', managedWgcfProfile: null })), false)
   assert.equal(selectable(proxy({ kind: 'manual', managedWgcfProfile: null })), true)
+})
+
+test('显式共享允许已有绑定和全局出口，自动池仍拒绝占用', () => {
+  const shared = proxy({ accountCount: 2, usageCount: 8, isGlobal: true })
+  const status = { available: true, profiles: [profile({ accountCount: 2, usageCount: 8, isGlobal: true, poolEligible: false })] }
+  assert.equal(canShareProxy(shared, status), true)
+  assert.equal(countAvailableWgcfPool([shared], status), 0)
+  for (const changes of [{ shareEligible: false }, { shareEligible: undefined }, { desired: false }, { phase: 'creating' }, { runtime: 'stopped' }]) {
+    assert.equal(canShareProxy(shared, { ...status, profiles: [profile(changes)] }), false)
+  }
+  assert.equal(canShareProxy(shared, null), false)
+  const row = mergeProxyRows([shared], [profile()])[0]
+  assert.equal(row.usageCount, 8)
+  assert.equal(row.wgcfProfile.usageCount, 8)
+  assert.equal(row.isGlobal, true)
+  assert.equal(row.isInUse, true)
 })

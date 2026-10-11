@@ -421,6 +421,16 @@ public sealed partial class ProxyManagementService
         (_managedWarpProvisioner ?? throw new InvalidOperationException("轻量 WARP 创建服务不可用"))
         .StopUnboundAsync(proxyId, claimToken, cancellationToken);
 
+    public async Task<ManagedWarpProxyLease> AcquireSharedManagedWarpLeaseAsync(
+        int proxyId, CancellationToken cancellationToken = default)
+    {
+        var lease = await (_managedWarpProvisioner
+            ?? throw new InvalidOperationException("轻量 WARP 服务不可用"))
+            .AcquireSharedAsync(proxyId, cancellationToken);
+        try { EnsureManagedWarpLeaseReady(lease); return lease; }
+        catch { lease.Dispose(); throw; }
+    }
+
     public Task<ManagedWarpAvailability> GetManagedWarpAvailabilityAsync(CancellationToken cancellationToken = default) =>
         _managedWarpProvisioner?.GetAvailabilityAsync(cancellationToken)
         ?? Task.FromResult(new ManagedWarpAvailability(false, "轻量 WARP 创建服务不可用"));

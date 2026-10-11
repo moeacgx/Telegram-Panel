@@ -17,52 +17,89 @@ namespace TelegramPanel.Web.Tests;
 public sealed class ManagedWgcfProxyGuardTests
 {
     [Fact]
-    public async Task 受管出口拒绝多人绑定且不改变旧路由和激活状态()
+    public async Task 受管出口允许显式多人绑定且保留激活状态()
     {
         await using var f = await Fixture.CreateAsync();
         var proxy = await f.ManagedAsync();
         var first = await f.AccountAsync("1");
         var second = await f.AccountAsync("2");
-        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Service.BindAccountsAsync(
-            new[] { first.Id, second.Id }, new("existing", proxy.Id)));
+        await f.Service.BindAccountsAsync(
+            new[] { first.Id, second.Id }, new("existing", proxy.Id));
         Assert.All(await f.Db.Accounts.AsNoTracking().ToListAsync(), a =>
         {
-            Assert.Null(a.ProxyId);
+            Assert.Equal(proxy.Id, a.ProxyId);
             Assert.True(a.IsActive);
-            Assert.True(a.UseGlobalProxy);
+            Assert.False(a.UseGlobalProxy);
         });
     }
 
     [Fact]
-    public async Task 已有所有者的受管出口拒绝第二账号并保留第一绑定()
+    public async Task 已有所有者的受管出口允许第二账号且保留第一绑定()
     {
         await using var f = await Fixture.CreateAsync();
         var proxy = await f.ManagedAsync();
         var first = await f.AccountAsync("1", proxy);
         var second = await f.AccountAsync("2");
-        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Service.BindAccountsAsync(
-            new[] { second.Id }, new("existing", proxy.Id)));
+        await f.Service.BindAccountsAsync(new[] { second.Id }, new("existing", proxy.Id));
         Assert.Equal(proxy.Id, (await f.Db.Accounts.AsNoTracking().SingleAsync(a => a.Id == first.Id)).ProxyId);
-        Assert.Null((await f.Db.Accounts.AsNoTracking().SingleAsync(a => a.Id == second.Id)).ProxyId);
+        Assert.Equal(proxy.Id, (await f.Db.Accounts.AsNoTracking().SingleAsync(a => a.Id == second.Id)).ProxyId);
     }
 
     [Fact]
-    public async Task 受管出口拒绝全局已有代理选择且不调用保存回调()
+    public async Task 受管出口允许全局已有代理选择且保存全程持有占用()
     {
         await using var f = await Fixture.CreateAsync();
         var proxy = await f.ManagedAsync();
         var saved = false;
-        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Service.ExecuteGlobalProxyChangeAsync(
-            true, "existing", proxy.Id, _ => { saved = true; return Task.CompletedTask; }));
-        Assert.False(saved);
+        await f.Service.ExecuteGlobalProxyChangeAsync(
+            true, "existing", proxy.Id, _ =>
+            {
+                Assert.True(f.Claims.IsManagedProfileClaimed(proxy.ManagedWgcfProfile!));
+                saved = true;
+                return Task.CompletedTask;
+            });
+        Assert.True(saved);
+        Assert.False(f.Claims.IsManagedProfileClaimed(proxy.ManagedWgcfProfile!));
     }
 
     [Fact]
-    public async Task 受管出口不允许作为导入登录首次连接的已有代理()
+    public async Task 受管出口允许作为导入登录首次连接的已有代理()
     {
         await using var f = await Fixture.CreateAsync();
         var proxy = await f.ManagedAsync();
-        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Service.ValidateBindingInputAsync(new("existing", proxy.Id)));
+        await f.Service.ValidateBindingInputAsync(new("existing", proxy.Id));
+    }
+
+    [Fact]
+    public async Task 全局共享保存异常释放本次占用且活跃首连不能被改写()
+    {
+        await using var f = await Fixture.CreateAsync();
+        var proxy = await f.ManagedAsync();
+        await Assert.ThrowsAsync<IOException>(() => f.Service.ExecuteGlobalProxyChangeAsync(
+            true, "existing", proxy.Id, _ => throw new IOException("模拟保存失败")));
+        Assert.False(f.Claims.IsManagedProfileClaimed(proxy.ManagedWgcfProfile!));
+        using var owner = f.Claims.ClaimManagedProfile(proxy.ManagedWgcfProfile!);
+        var saved = false;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Service.ExecuteGlobalProxyChangeAsync(
+            true, "existing", proxy.Id, _ => { saved = true; return Task.CompletedTask; }));
+        Assert.False(saved);
+        Assert.True(f.Claims.OwnsManagedProfile(proxy.ManagedWgcfProfile!, owner.Token));
+    }
+
+    [Fact]
+    public async Task 轻量出口被设为全局后不能停用()
+    {
+        await using var f = await Fixture.CreateAsync();
+        var proxy = await f.ManagedAsync();
+        await f.Service.ExecuteGlobalProxyChangeAsync(true, "existing", proxy.Id, _ =>
+        {
+            f.Configuration["Telegram:Proxy:Enabled"] = "true";
+            f.Configuration["Telegram:Proxy:SourceMode"] = "existing";
+            f.Configuration["Telegram:Proxy:ProxyId"] = proxy.Id.ToString();
+            return Task.CompletedTask;
+        });
+        await Assert.ThrowsAsync<ProxyInUseException>(() => f.Service.SetManagedWgcfEnabledAsync(proxy.ManagedWgcfProfile!, false));
+        Assert.True((await f.Db.OutboundProxies.SingleAsync()).IsEnabled);
     }
 
     [Theory]
@@ -93,14 +130,14 @@ public sealed class ManagedWgcfProxyGuardTests
     }
 
     [Fact]
-    public async Task 手改全局配置引用受管出口时运行解析拒绝且不返回直连()
+    public async Task 全局配置可以引用受管出口但禁止手工克隆监听端点()
     {
         await using var f = await Fixture.CreateAsync();
         var proxy = await f.ManagedAsync();
         f.Configuration["Telegram:Proxy:Enabled"] = "true";
         f.Configuration["Telegram:Proxy:SourceMode"] = "existing";
         f.Configuration["Telegram:Proxy:ProxyId"] = proxy.Id.ToString();
-        await Assert.ThrowsAsync<InvalidOperationException>(() => new GlobalProxyResolver(f.Db, f.Configuration).ResolveAsync("account"));
+        Assert.Equal(proxy.Id, (await new GlobalProxyResolver(f.Db, f.Configuration).ResolveAsync("account"))!.ProxyId);
         f.Configuration["Telegram:Proxy:SourceMode"] = "manual";
         f.Configuration["Telegram:Proxy:Server"] = "localhost";
         f.Configuration["Telegram:Proxy:Port"] = proxy.Port.ToString();

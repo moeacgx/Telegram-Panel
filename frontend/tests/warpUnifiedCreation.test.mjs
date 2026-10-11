@@ -112,10 +112,33 @@ test('切换导入类型分配新 UUID，同类型失败重试保留原 UUID', (
   assert.equal(state.ensureWarpRequestId('string-session'), 'uuid-3')
 })
 
-test('创建可用性取轻量运行器，登录和导入的已有代理仍排除受管轻量出口', () => {
+test('多个账号可明确选择同一已占用轻量出口，无须新建或接受注册条款', async () => {
+  const utility = await readFile(new URL('../src/utils/proxyRows.ts', import.meta.url), 'utf8')
+  const js = ts.transpileModule(utility, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText
+  const { canShareProxy } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`)
+  const calls = []
+  const dialog = reactive({ running: false, accountIds: [11, 12], strategy: 'existing', proxyId: 7, acceptWarpTerms: false })
+  const runtime = ref({ available: true, profiles: [{ profile: 'shared', proxyId: 7, shareEligible: true,
+    phase: 'ready', desired: true, runtime: 'listening', testStatus: 'ok', egressIp: '1.2.3.4', accountCount: 3 }] })
+  const state = execute(`let accountProxyOperationToken = 0;\n${body(accounts, 'saveAccountProxy')}`, ['saveAccountProxy'], {
+    proxyDialog: dialog, canShareProxy, warpStatus: runtime,
+    proxies: ref([{ id: 7, managedWgcfProfile: 'shared', isEnabled: true, kind: 'wireguard_warp' }]),
+    panelApi: { batchSetAccountProxy: async (...args) => { calls.push(args); return { success: 2, failed: 0, items: [] } } },
+    ElMessage: { warning() {} }, showBatchResult() {}, load: async () => {}, loadProxies: async () => {},
+  })
+  await state.saveAccountProxy()
+  assert.deepEqual(calls[0][0], [11, 12])
+  assert.equal(calls[0][1].proxyId, 7)
+  assert.equal(calls[0][1].acceptWarpTerms, false)
+  runtime.value.profiles[0].shareEligible = false
+  await state.saveAccountProxy()
+  assert.equal(calls.length, 1)
+})
+
+test('创建可用性取轻量运行器，登录和导入允许显式共享出口', () => {
   for (const source of [login, imports, accounts]) {
     assert.match(source, /panelApi\.wgcfStatus\(\)/)
     assert.doesNotMatch(source, /panelApi\.warpStatus\(\)|warpStatus\.value\.dockerAvailable/)
   }
-  for (const source of [login, imports]) assert.match(source, /filter\(\(proxy\) => !proxy\.managedWgcfProfile && proxy\.kind !== 'warp'\)/)
+  for (const source of [login, imports]) assert.match(source, /filter\(\(proxy\) => canShareProxy\(proxy, warpStatus\.value\)\)/)
 })

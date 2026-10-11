@@ -25,6 +25,52 @@ namespace TelegramPanel.Web.Tests;
 public sealed class ImportProxyFirstConnectionTests
 {
     [Theory]
+    [InlineData("existing", true)]
+    [InlineData("existing", false)]
+    [InlineData("global", true)]
+    [InlineData("global", false)]
+    public async Task 共享轻量出口导入持有租约且成功失败均不停止出口(string strategy, bool succeeds)
+    {
+        var claims = new TemporaryWarpClaimStore();
+        await using var fixture = await ImportFixture.CreateAsync(OutboundProxyProtocols.Socks5,
+            temporaryWarpClaims: claims, enableManaged: true,
+            configurationValues: new Dictionary<string, string?>
+            {
+                ["Telegram:Proxy:Enabled"] = "true", ["Telegram:Proxy:SourceMode"] = "existing",
+                ["Telegram:Proxy:ProxyId"] = "2"
+            });
+        OutboundProxy proxy;
+        using (var created = await fixture.ManagedWarp!.ProvisionAsync("shared", Guid.NewGuid().ToString("D"), true))
+            proxy = created.Proxy;
+        Assert.Equal(2, proxy.Id);
+        fixture.Db.Accounts.Add(new Account
+        {
+            Phone = "8613800000999", UserId = 1999, SessionPath = "sessions/shared-owner.session",
+            ApiId = 12345, ApiHash = "hash", ProxyId = proxy.Id, UseGlobalProxy = false, IsActive = true
+        });
+        await fixture.Db.SaveChangesAsync();
+        fixture.Importer.BeforeImport = () => Assert.True(claims.IsManagedProfileClaimed(proxy.ManagedWgcfProfile!));
+        if (!succeeds)
+            fixture.Importer.ResultFactory = _ => new ImportResult(false, null, null, null, null, "模拟失效");
+
+        var result = await fixture.Service.ImportFromStringSessionAsync("session-data", 12345,
+            "0123456789abcdef0123456789abcdef", proxyBinding: new(strategy, proxy.Id));
+
+        Assert.Equal(succeeds, result.Success);
+        Assert.Equal(proxy.Id, fixture.Importer.SeenProxy!.ProxyId);
+        Assert.Equal(0, fixture.ManagedWarp.StopCalls);
+        Assert.False(claims.IsManagedProfileClaimed(proxy.ManagedWgcfProfile!));
+        Assert.True((await fixture.Db.OutboundProxies.SingleAsync(p => p.Id == proxy.Id)).IsEnabled);
+        Assert.Equal(proxy.Id, (await fixture.Db.Accounts.SingleAsync(a => a.UserId == 1999)).ProxyId);
+        if (succeeds)
+        {
+            var imported = await fixture.Db.Accounts.SingleAsync(a => a.UserId == 10001);
+            Assert.Equal(strategy == "existing" ? proxy.Id : (int?)null, imported.ProxyId);
+            Assert.Equal(strategy == "global", imported.UseGlobalProxy);
+        }
+    }
+
+    [Theory]
     [InlineData("existing")]
     [InlineData("warp_pool")]
     public async Task 旧容器记录不能用于导入首次连接或加入轻量池(string strategy)

@@ -22,6 +22,32 @@ namespace TelegramPanel.Web.Tests;
 public sealed class ManualLoginProxyRoutingTests
 {
     [Theory]
+    [InlineData("existing")]
+    [InlineData("global")]
+    public async Task 已被账号使用的轻量出口首连保留租约取消不停止共享出口(string strategy)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var proxy = await fixture.ManagedWarp.AddManagedProxyAsync();
+        var owner = await fixture.AddInactiveAccountAsync();
+        owner.ProxyId = proxy.Id;
+        owner.UseGlobalProxy = false;
+        await fixture.Db.SaveChangesAsync();
+        fixture.Configuration["Telegram:Proxy:Enabled"] = "true";
+        fixture.Configuration["Telegram:Proxy:SourceMode"] = "existing";
+        fixture.Configuration["Telegram:Proxy:ProxyId"] = proxy.Id.ToString();
+
+        var state = await fixture.Coordinator.PrepareAsync(2905, strategy, proxy.Id);
+        Assert.NotNull(state.ManagedWarpLease);
+        Assert.Null(state.OwnedWarpProxyId);
+        Assert.Equal(proxy.Id, state.Resolution.Proxy!.ProxyId);
+        Assert.True(fixture.TemporaryWarpClaims.IsManagedProfileClaimed(proxy.ManagedWgcfProfile!));
+        await fixture.Coordinator.AbandonAsync(2905);
+        Assert.False(fixture.TemporaryWarpClaims.IsManagedProfileClaimed(proxy.ManagedWgcfProfile!));
+        Assert.Empty(fixture.ManagedWarp.Stopped);
+        Assert.Equal(proxy.Id, (await fixture.Db.Accounts.SingleAsync()).ProxyId);
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData(" ")]
     [InlineData("not-a-uuid")]

@@ -63,14 +63,14 @@ function operationUnavailable(profile: WgcfProfile) {
 
 function canBind(profile: WgcfProfile) {
   return !operationUnavailable(profile) && profile.phase === 'ready' && profile.desired && profile.runtime === 'listening'
-    && profile.testStatus === 'ok' && !!profile.egressIp && !!profile.proxyId && profile.accountCount === 0
+    && profile.testStatus === 'ok' && !!profile.egressIp && !!profile.proxyId && profile.shareEligible === true
 }
 
 function canOperate(profile: WgcfProfile, action: 'start' | 'stop' | 'resume' | 'test') {
   if (operationUnavailable(profile)) return false
   if (action === 'resume') return profile.phase === 'failed'
   if (action === 'start') return !profile.desired && profile.generated && profile.phase !== 'creating'
-  if (action === 'stop') return profile.desired && profile.accountCount === 0 && profile.phase !== 'creating'
+  if (action === 'stop') return profile.desired && profile.accountCount === 0 && (profile.usageCount ?? 0) === 0 && !profile.isGlobal && profile.phase !== 'creating'
   return profile.desired && profile.runtime === 'listening' && profile.phase === 'ready'
 }
 

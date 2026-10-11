@@ -42,6 +42,28 @@ class Fixture(unittest.TestCase):
 
 
 class ToolTests(Fixture):
+    def test_delete_requires_current_stop_and_preserves_other_profiles(self):
+        path = self.prepared()
+        other = self.store.profile("account-2", True)
+        with self.assertRaises(ctl.Failure):
+            self.store.delete("account-1")
+        self.store.desired("account-1", False)
+        ctl.atomic_write(path / "runtime.json", {"state": "stopped", "at": time.time(), "revision": "stale"})
+        with self.assertRaises(ctl.Failure):
+            self.store.delete("account-1")
+        ctl.reconcile_profiles(self.store, {}, {})
+        self.assertTrue(self.store.delete("account-1")["deleted"])
+        self.assertFalse(path.exists())
+        self.assertTrue(other.exists())
+
+    def test_delete_unstarted_failure_and_reject_path_traversal(self):
+        path = self.store.profile("failed-one", True)
+        ctl.atomic_write(path / "meta.json", {"registered": False})
+        self.store.delete("failed-one")
+        self.assertFalse(path.exists())
+        with self.assertRaises(ctl.Failure):
+            self.store.delete("../data")
+
     def provision(self, name="web-1", display_name=None, accept_tos=True):
         self.assertTrue(callable(getattr(self.store, "provision", None)), "缺少网页幂等创建入口")
         return self.store.provision(name, accept_tos, display_name)

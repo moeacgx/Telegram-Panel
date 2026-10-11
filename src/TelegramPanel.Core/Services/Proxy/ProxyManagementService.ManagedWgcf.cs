@@ -88,6 +88,28 @@ public sealed partial class ProxyManagementService
             throw new InvalidOperationException("受管 WireGuard 请使用专用创建和启停入口，普通编辑或删除不会变更运行器");
     }
 
+    // 运行器停止与删除材料期间持有同一业务锁，防止账号或全局引用插入。
+    public async Task DeleteManagedWgcfAsync(string profile, string claimToken,
+        Func<CancellationToken, Task> deleteRuntimeAsync, CancellationToken cancellationToken = default)
+    {
+        await using var lease = await AcquireMutationLeaseAsync(cancellationToken);
+        var proxy = await _db.OutboundProxies.SingleOrDefaultAsync(
+            x => x.ManagedWgcfProfile == profile, cancellationToken);
+        if (proxy != null)
+        {
+            EnsureManagedProfileClaimOwner(proxy, claimToken);
+            if (IsEnabledGlobalProxy(proxy.Id)
+                || await _db.Accounts.AnyAsync(x => x.ProxyId == proxy.Id, cancellationToken))
+                throw new ProxyInUseException("出口仍被账号或全局代理使用，请先解绑或切换全局代理");
+        }
+        await deleteRuntimeAsync(cancellationToken);
+        if (proxy != null)
+        {
+            _db.OutboundProxies.Remove(proxy);
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+    }
+
     private void EnsureManagedProfileClaimOwner(OutboundProxy proxy, string? claimToken)
     {
         if (proxy.ManagedWgcfProfile is { } profile

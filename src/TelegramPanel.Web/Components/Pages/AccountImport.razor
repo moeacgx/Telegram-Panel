@@ -359,7 +359,7 @@
     private int? selectedProxyId;
     private List<OutboundProxy> proxyOptions = new();
     private IEnumerable<OutboundProxy> ExistingProxyOptions => proxyOptions.Where(x =>
-        x.IsEnabled && x.Kind != OutboundProxyKinds.Warp && x.ManagedWgcfProfile == null);
+        LegacyWarpPoolSelection.CanSelectExisting(x, warpEnvironment));
     private WgcfEnvironmentDto? warpEnvironment;
     private int WarpPoolCount => LegacyWarpPoolSelection.Count(
         proxyOptions, warpEnvironment, GlobalTelegramProxyConfiguration.GetSelectedProxyId(Configuration));

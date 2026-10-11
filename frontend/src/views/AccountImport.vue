@@ -392,7 +392,7 @@ import {
   UploadFilled,
 } from '@element-plus/icons-vue'
 import { panelApi } from '@/api/panel'
-import { countAvailableWgcfPool } from '@/utils/proxyRows'
+import { countAvailableWgcfPool, canShareProxy } from '@/utils/proxyRows'
 import type {
   AccountCategory,
   AccountListItem,
@@ -449,7 +449,7 @@ watch(proxyStrategy, () => { acceptWarpTerms.value = false }, { flush: 'sync' })
 
 const busy = computed(() => importingZip.value || importingSessions.value || importingString.value)
 const shouldBlockApiImport = computed(() => telegramApiChecked.value && !telegramApiConfigured.value)
-const selectableProxies = computed(() => proxies.value.filter((proxy) => !proxy.managedWgcfProfile && proxy.kind !== 'warp'))
+const selectableProxies = computed(() => proxies.value.filter((proxy) => canShareProxy(proxy, warpStatus.value)))
 const availableWarpPoolCount = computed(() => countAvailableWgcfPool(proxies.value, warpStatus.value))
 const warpCreateAvailable = computed(() => Boolean(
   warpStatus.value?.available,

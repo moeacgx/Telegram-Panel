@@ -32,7 +32,7 @@ function setup(overrides = {}) {
 
 function profile(values = {}) {
   return { profile: 'wgcf-one', name: '测试出口', phase: 'ready', registered: true, generated: true,
-    desired: true, runtime: 'listening', proxyId: 17, accountCount: 0, testStatus: 'ok', egressIp: '1.2.3.4', error: null, ...values }
+    desired: true, runtime: 'listening', proxyId: 17, accountCount: 0, shareEligible: true, usageCount: 0, isGlobal: false, testStatus: 'ok', egressIp: '1.2.3.4', error: null, ...values }
 }
 
 test('环境不可用时禁止打开创建并且不提交注册', async () => {
@@ -86,7 +86,8 @@ test('失败档案重试继续原档案而不重新注册', async () => {
 test('只有联网检测成功且运行中的出口允许绑定', () => {
   const state = setup()
   assert.equal(state.canBind(profile()), true)
-  for (const changes of [{ testStatus: 'failed' }, { egressIp: null }, { desired: false }, { runtime: 'unknown' }, { proxyId: null }, { phase: 'creating' }, { accountCount: 1 }]) {
+  assert.equal(state.canBind(profile({ accountCount: 2, isGlobal: true })), true)
+  for (const changes of [{ testStatus: 'failed' }, { egressIp: null }, { desired: false }, { runtime: 'unknown' }, { proxyId: null }, { phase: 'creating' }, { shareEligible: false }]) {
     assert.equal(state.canBind(profile(changes)), false)
   }
 })
@@ -116,6 +117,8 @@ test('有绑定账号的档案禁止停止', async () => {
   let calls = 0
   const state = setup({ stopWgcfProfile: async () => { calls++; return profile() } })
   await state.operate(profile({ accountCount: 1 }), 'stop')
+  await state.operate(profile({ isGlobal: true }), 'stop')
+  await state.operate(profile({ usageCount: 5 }), 'stop')
   assert.equal(calls, 0)
 })
 
@@ -188,23 +191,28 @@ test('创建或操作结果替换状态档案，而不写入只读派生列表',
   assert.doesNotMatch(component, /status\.value\.profiles\s*=/)
 })
 
-test('受管轻量出口不允许选入普通代理批量操作', () => {
+test('受管轻量出口可多选，包括尚未落库档案', () => {
   const match = proxiesSource.match(/function isSelectableProxy\([^)]*\) \{[\s\S]*?\n\}/)
   assert.ok(match, '缺少受管出口批量操作保护')
   const js = ts.transpileModule(`${match[0]}\nexport { isSelectableProxy }`, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText
   const selectable = new Function(`${js.replace(/export \{.*?\};/, '')}\nreturn isSelectableProxy`)()
-  assert.equal(selectable({ id: 1, kind: 'wireguard_warp', managedWgcfProfile: 'wgcf-one' }), false)
+  assert.equal(selectable({ id: 1, kind: 'wireguard_warp', managedWgcfProfile: 'wgcf-one' }), true)
+  assert.equal(selectable({ id: 0, kind: 'wireguard_warp', managedWgcfProfile: 'wgcf-failed' }), true)
   assert.equal(selectable({ id: 2, kind: 'manual', managedWgcfProfile: null }), true)
 })
 
 for (const view of ['AccountLogin', 'AccountImport']) {
-  test(`${view} 普通已有代理选项排除受管轻量出口与旧容器`, async () => {
+  test(`${view} 已有代理选项支持共享资格筛选，排除旧容器`, async () => {
     const source = await readFile(new URL(`../src/views/${view}.vue`, import.meta.url), 'utf8')
     const selection = source.match(/const selectableProxies = computed\([^]*?\n/)[0]
     const js = ts.transpileModule(selection, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText
-    const proxies = ref([{ id: 1, kind: 'wireguard_warp', managedWgcfProfile: 'wgcf-one' }, { id: 2, kind: 'manual' }, { id: 3, kind: 'warp' }])
-    const selectable = new Function('proxies', 'computed', `${js}\nreturn selectableProxies`)(proxies, computed)
-    assert.deepEqual(selectable.value.map((proxy) => proxy.id), [2])
+    const utility = await readFile(new URL('../src/utils/proxyRows.ts', import.meta.url), 'utf8')
+    const compiled = ts.transpileModule(utility, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText
+    const { canShareProxy } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`)
+    const proxies = ref([{ id: 17, isEnabled: true, kind: 'wireguard_warp', managedWgcfProfile: 'wgcf-one' }, { id: 2, isEnabled: true, kind: 'manual' }, { id: 3, kind: 'warp' }])
+    const warpStatus = ref({ available: true, profiles: [profile({ accountCount: 2 })] })
+    const selectable = new Function('proxies', 'computed', 'canShareProxy', 'warpStatus', `${js}\nreturn selectableProxies`)(proxies, computed, canShareProxy, warpStatus)
+    assert.deepEqual(selectable.value.map((proxy) => proxy.id), [17, 2])
     assert.match(source, /v-for="proxy in selectableProxies"/)
   })
 }

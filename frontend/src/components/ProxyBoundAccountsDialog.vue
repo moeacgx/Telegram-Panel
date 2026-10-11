@@ -2,6 +2,7 @@
   <el-dialog v-model="dialog.visible" :title="`已绑定账号 · ${dialog.proxy?.name || ''}`" width="min(720px, calc(100vw - 24px))"
     :before-close="beforeClose" :close-on-click-modal="!dialog.running" :close-on-press-escape="!dialog.running" :show-close="!dialog.running">
     <el-alert v-if="dialog.error" :title="dialog.error" type="error" :closable="false" show-icon />
+    <div class="bound-meta">此处显示直接绑定此代理的账号；通过全局设置使用该出口的账号不在此列表。</div>
     <el-button :loading="dialog.loading" :disabled="dialog.running" @click="loadAccounts(dialog.page)">刷新账号</el-button>
     <el-table v-loading="dialog.loading" :data="dialog.accounts" empty-text="暂无专属绑定账号" class="bound-table">
       <el-table-column label="账号" min-width="170">
@@ -66,9 +67,8 @@ const eligibleTargets = computed(() => dialog.targets.filter((proxy) => {
   if (proxy.id === dialog.proxy?.id || !proxy.isEnabled || proxy.kind === 'warp') return false
   if (!proxy.managedWgcfProfile) return proxy.kind !== 'wireguard_warp' || (proxy.testStatus === 'ok' && !!proxy.egressIp)
   const state = dialog.runtime?.profiles.find((item) => item.profile === proxy.managedWgcfProfile && item.proxyId === proxy.id)
-  return !!dialog.runtime?.available && !!state?.poolEligible && state.phase === 'ready' && state.desired
+  return !!dialog.runtime?.available && !!state?.shareEligible && state.phase === 'ready' && state.desired
     && state.runtime === 'listening' && state.testStatus === 'ok' && !!state.egressIp
-    && state.accountCount === 0 && (proxy.accountCount ?? 0) === 0 && !proxy.isGlobal
 }))
 const canSubmit = computed(() => !dialog.running && !dialog.loading && !dialog.error && !!dialog.selected && !!dialog.strategy
   && (dialog.strategy !== 'existing' || (!dialog.targetsLoading && !dialog.targetsError && eligibleTargets.value.some((proxy) => proxy.id === dialog.targetId))))

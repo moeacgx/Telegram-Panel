@@ -79,15 +79,20 @@ public sealed class LegacyWarpPoolSelectionTests
     [InlineData(typeof(AccountImport), "manual", true)]
     [InlineData(typeof(AccountLogin), "warp", false)]
     [InlineData(typeof(AccountImport), "warp", false)]
-    [InlineData(typeof(AccountLogin), "managed", false)]
-    [InlineData(typeof(AccountImport), "managed", false)]
-    public async Task 普通代理选项和提交校验拒绝旧版与受管出口(Type pageType, string kind, bool expected)
+    [InlineData(typeof(AccountLogin), "managed", true)]
+    [InlineData(typeof(AccountImport), "managed", true)]
+    public async Task 已有代理允许轻量出口并拒绝旧版容器(Type pageType, string kind, bool expected)
     {
         var page = Activator.CreateInstance(pageType)!;
         try
         {
             SetField(page, "proxyStrategy", "existing");
             SetField(page, "selectedProxyId", (int?)17);
+            SetField(page, "warpEnvironment", new WgcfEnvironmentDto(true, null, new[]
+            {
+                new WgcfProfileDto("web-ready", "共享出口", "ready", true, true, true,
+                    "listening", 17, 2, "ok", "1.2.3.4", null) { ShareEligible = true }
+            }));
             SetField(page, "proxyOptions", new List<OutboundProxy>
             {
                 new()

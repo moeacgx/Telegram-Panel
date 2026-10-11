@@ -17,6 +17,9 @@ public sealed record WgcfProfileDto(string Profile, string Name, string Phase, b
     string TestStatus, string? EgressIp, string? Error)
 {
     public bool PoolEligible { get; init; }
+    public bool ShareEligible { get; init; }
+    public bool IsGlobal { get; init; }
+    public int UsageCount { get; init; }
 }
 public sealed record WgcfEnvironmentDto(bool Available, string? Reason, IReadOnlyList<WgcfProfileDto> Profiles);
 
@@ -28,6 +31,7 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         public string? RequestId { get; init; }
         public bool Temporary { get; init; }
         public bool StopRequested { get; init; }
+        public bool Deleting { get; init; }
     }
     private readonly IServiceScopeFactory _scopes;
     private readonly IConfiguration _configuration;
@@ -89,6 +93,8 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
             {
                 if (_entries.TryGetValue(profile, out var old) && (!old.Temporary || old.RequestId != requestId))
                     throw new InvalidOperationException("出口操作归属不一致");
+                if (old?.Deleting == true)
+                    throw new InvalidOperationException("档案正在删除，请完成删除后发起新的创建请求");
                 if (_pendingTemporary.ContainsKey(profile))
                     throw new InvalidOperationException("原出口创建或取消仍在收尾，请稍后重试");
                 if (old == null && _entries.Count >= 100) throw new InvalidOperationException("轻量出口档案已达到 100 份上限");
@@ -143,7 +149,6 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         var claim = _claims.ClaimManagedProfile(profile);
         try
         {
-            await EnsureUnboundAsync(profile, cancellationToken);
             proxy = await scope.ServiceProvider.GetRequiredService<AppDbContext>().OutboundProxies.AsNoTracking().Include(x => x.Accounts)
                 .SingleAsync(x => x.Id == proxyId, cancellationToken);
             var entry = GetEntry(profile);
@@ -169,6 +174,25 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         await RequestStopAsync(profile, claim?.Token ?? claimToken);
     }
 
+    public async Task<ManagedWarpProxyLease> AcquireSharedAsync(int proxyId, CancellationToken cancellationToken = default)
+    {
+        EnsureAvailable();
+        await using var scope = _scopes.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var proxy = await db.OutboundProxies.AsNoTracking().SingleOrDefaultAsync(x => x.Id == proxyId, cancellationToken)
+            ?? throw new KeyNotFoundException("代理不存在");
+        var profile = proxy.ManagedWgcfProfile ?? throw new ArgumentException("该代理不是轻量 WARP");
+        var claim = _claims.ClaimManagedProfile(profile);
+        try
+        {
+            proxy = await db.OutboundProxies.AsNoTracking().Include(x => x.Accounts).SingleAsync(x => x.Id == proxyId, cancellationToken);
+            if (!ToDto(GetEntry(profile), proxy, claim.Token).ShareEligible)
+                throw new InvalidOperationException("出口尚未就绪或首次连接尚未完成，请稍后重试");
+            return new ManagedWarpProxyLease(proxy, claim.Token, claim);
+        }
+        catch { claim.Dispose(); throw; }
+    }
+
     private void RejectForeignClaim(string profile, string? token = null)
     {
         if (_claims.IsManagedProfileClaimed(profile) && !_claims.OwnsManagedProfile(profile, token))
@@ -178,9 +202,10 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
     private async Task EnsureUnboundAsync(string profile, CancellationToken ct)
     {
         await using var scope = _scopes.CreateAsyncScope();
+        var globalId = GlobalTelegramProxyConfiguration.GetSelectedProxyId(_configuration);
         if (await scope.ServiceProvider.GetRequiredService<AppDbContext>().OutboundProxies
-            .AnyAsync(x => x.ManagedWgcfProfile == profile && x.Accounts.Any(), ct))
-            throw new ProxyInUseException("轻量出口已绑定账号");
+            .AnyAsync(x => x.ManagedWgcfProfile == profile && (x.Accounts.Any() || x.Id == globalId), ct))
+            throw new ProxyInUseException("轻量出口已被账号或全局代理使用");
     }
 
     private async Task RequestStopAsync(string profile, string? token)
@@ -230,8 +255,12 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var proxies = await db.OutboundProxies.AsNoTracking().Include(x => x.Accounts)
             .Where(x => x.ManagedWgcfProfile != null).ToListAsync(ct);
+        var globalCount = await db.Accounts.CountAsync(x => x.ProxyId == null && x.UseGlobalProxy, ct);
         foreach (var entry in _entries.Values.OrderBy(x => x.Name))
-            profiles.Add(ToDto(entry, proxies.FirstOrDefault(x => x.ManagedWgcfProfile == entry.Profile)));
+        {
+            var dto = ToDto(entry, proxies.FirstOrDefault(x => x.ManagedWgcfProfile == entry.Profile));
+            profiles.Add(dto with { UsageCount = dto.AccountCount + (dto.IsGlobal ? globalCount : 0) });
+        }
         return new(HasDependencies && _supervisorReady,
             !HasDependencies ? "当前运行环境缺少轻量 WARP 依赖，请更新 Docker 镜像" : !_supervisorReady ? "运行器正在启动或恢复" : null,
             profiles);
@@ -268,11 +297,13 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         try
         {
             var entry = GetEntry(profile);
+            if (entry.Deleting) throw new InvalidOperationException("档案正在删除，请重试删除完成清理");
             if (entry.Temporary)
             {
                 await using var scope = _scopes.CreateAsyncScope();
+                var globalId = GlobalTelegramProxyConfiguration.GetSelectedProxyId(_configuration);
                 if (!await scope.ServiceProvider.GetRequiredService<AppDbContext>().OutboundProxies
-                    .AnyAsync(x => x.ManagedWgcfProfile == profile && x.Accounts.Any(), ct))
+                    .AnyAsync(x => x.ManagedWgcfProfile == profile && (x.Accounts.Any() || x.Id == globalId), ct))
                     throw new InvalidOperationException("临时出口请通过原账号创建流程重试");
             }
             RejectForeignClaim(profile);
@@ -301,6 +332,7 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         try
         {
             var entry = GetEntry(profile);
+            if (entry.Deleting) throw new InvalidOperationException("档案正在删除，请重试删除完成清理");
             RejectForeignClaim(profile);
             if (entry.Phase == "creating") throw new InvalidOperationException("档案正在创建，请等待完成");
             using var claim = _claims.ClaimManagedProfile(profile);
@@ -359,6 +391,46 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         return (await ListAsync(ct)).Profiles.Single(x => x.Profile == profile);
     }
 
+    public async Task DeleteAsync(string profile, CancellationToken ct)
+    {
+        EnsureAvailable();
+        // 请求名只能来自已加载的 UUID 档案；不能把调用参数作为任意文件路径。
+        if (!profile.StartsWith("web-", StringComparison.Ordinal) || ProfileFor(profile[4..]) != profile)
+            throw new ArgumentException("轻量出口编号无效");
+        await _stateLock.WaitAsync(ct);
+        try
+        {
+            if (!_entries.TryGetValue(profile, out var entry)) return;
+            if (entry.Phase == "creating" || _pendingTemporary.ContainsKey(profile))
+                throw new InvalidOperationException("出口仍在创建或清理首次连接，请等待完成");
+            using var claim = _claims.ClaimManagedProfile(profile);
+            await _toolLock.WaitAsync(ct);
+            try
+            {
+                await using var scope = _scopes.CreateAsyncScope();
+                await scope.ServiceProvider.GetRequiredService<ProxyManagementService>()
+                    .DeleteManagedWgcfAsync(profile, claim.Token, async token =>
+                    {
+                        Persist(entry with { Deleting = true, StopRequested = true, Phase = "failed", Error = "删除尚未完成，请重试删除" });
+                        var directory = Path.Combine(_root, profile);
+                        if (Directory.Exists(directory))
+                        {
+                            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                                throw new IOException("档案路径不能为符号链接");
+                            await CommandAsync(new[] { "stop", profile }, token);
+                            await WaitRuntimeAsync(profile, "stopped", token);
+                            await CommandAsync(new[] { "delete", profile }, token);
+                        }
+                    }, ct);
+                // 只有材料与数据库都完成删除才移除请求记录。崩溃时保留 tombstone，可重复清理。
+                File.Delete(Path.Combine(_root, "web-requests", profile + ".json"));
+                _entries.TryRemove(profile, out _);
+            }
+            finally { _toolLock.Release(); }
+        }
+        finally { _stateLock.Release(); }
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!OperatingSystem.IsLinux() || !HasDependencies) return;
@@ -411,11 +483,18 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
     private async Task RestoreEntryAsync(Entry entry, CancellationToken ct)
     {
         _entries[entry.Profile] = entry;
+        if (entry.Deleting)
+        {
+            // 崩溃可能发生在停止命令之前，重启先完成停止，不能重新创建或注册。
+            _queue.Writer.TryWrite(entry.Profile);
+            return;
+        }
         if (entry.Temporary)
         {
             await using var scope = _scopes.CreateAsyncScope();
+            var globalId = GlobalTelegramProxyConfiguration.GetSelectedProxyId(_configuration);
             var bound = await scope.ServiceProvider.GetRequiredService<AppDbContext>().OutboundProxies
-                .AnyAsync(x => x.ManagedWgcfProfile == entry.Profile && x.Accounts.Any(), ct);
+                .AnyAsync(x => x.ManagedWgcfProfile == entry.Profile && (x.Accounts.Any() || x.Id == globalId), ct);
             if (!bound)
             {
                 // 重启后的孤儿清理仍占用原创建请求，收尾前不允许重复排队。
@@ -433,9 +512,10 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         await foreach (var profile in _queue.Reader.ReadAllAsync(ct))
         {
             await _toolLock.WaitAsync(ct);
-            var entry = GetEntry(profile);
             try
             {
+                // 删除可能在已排队的恢复开始前完成，忽略该过期队列项。
+                if (!_entries.TryGetValue(profile, out var entry)) continue;
                 for (var i = 0; i < 30 && !_supervisorReady; i++) await Task.Delay(500, ct);
                 if (!_supervisorReady) throw new InvalidOperationException();
                 _queueTokens.TryGetValue(profile, out var token);
@@ -617,13 +697,17 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
             runtime = RuntimeState(meta.RootElement, state.RootElement);
         }
         catch (Exception ex) when (ex is IOException or JsonException or InvalidOperationException) { }
+        var isGlobal = proxy != null && GlobalTelegramProxyConfiguration.GetSelectedProxyId(_configuration) == proxy.Id;
+        var claimed = _claims.IsManagedProfileClaimed(entry.Profile) && !_claims.OwnsManagedProfile(entry.Profile, claimToken);
         return new(entry.Profile, entry.Name, entry.Phase, registered, generated, desired, runtime,
             proxy?.Id, proxy?.Accounts.Count ?? 0, proxy?.TestStatus ?? "unknown", proxy?.EgressIp, entry.Error)
         {
-            PoolEligible = IsPoolEligible(entry.Temporary, entry.StopRequested,
-                _claims.IsManagedProfileClaimed(entry.Profile) && !_claims.OwnsManagedProfile(entry.Profile, claimToken),
-                entry.Phase, desired, runtime, proxy,
-                proxy != null && GlobalTelegramProxyConfiguration.GetSelectedProxyId(_configuration) == proxy.Id)
+            IsGlobal = isGlobal,
+            UsageCount = proxy?.Accounts.Count ?? 0,
+            ShareEligible = !entry.Deleting && !entry.StopRequested && !claimed && entry.Phase == "ready" && desired && runtime == "listening"
+                && proxy is { IsEnabled: true, TestStatus: "ok" } && !string.IsNullOrWhiteSpace(proxy.EgressIp),
+            PoolEligible = !entry.Deleting && IsPoolEligible(entry.Temporary, entry.StopRequested, claimed,
+                entry.Phase, desired, runtime, proxy, isGlobal)
         };
     }
 

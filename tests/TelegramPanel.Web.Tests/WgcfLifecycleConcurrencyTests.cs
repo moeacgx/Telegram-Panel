@@ -26,6 +26,90 @@ namespace TelegramPanel.Web.Tests;
 public sealed class WgcfLifecycleConcurrencyTests
 {
     [Fact]
+    public async Task 删除中断的内部请求不能覆盖删除标记重新注册()
+    {
+        const string request = "telegram-panel.internal.deletion-retry";
+        await using var f = await Fixture.CreateAsync(request);
+        f.FailDelete = true;
+        await Assert.ThrowsAsync<IOException>(() => f.Service.DeleteAsync(f.Profile, default));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Service.ProvisionAsync("重试", request, true));
+        Assert.False(f.Field<Channel<string>>("_queue").Reader.TryRead(out _));
+        Assert.True(f.PersistedStopRequested());
+        Assert.DoesNotContain("provision", f.Commands);
+    }
+
+    [Fact]
+    public async Task 临时出口改作全局且无专属账号时允许恢复()
+    {
+        await using var f = await Fixture.CreateAsync("telegram-panel.internal.global-resume");
+        var proxy = await f.ProxyAsync();
+        f.SelectGlobal(proxy.Id, "true");
+        var state = await f.Service.ResumeAsync(f.Profile, default);
+        Assert.Equal("creating", state.Phase);
+        Assert.True(state.IsGlobal);
+    }
+
+    [Fact]
+    public async Task 共享出口可被显式领取但全局占用禁止自动池和停止删除()
+    {
+        await using var f = await Fixture.CreateAsync();
+        await using var scope = f.Provider.CreateAsyncScope();
+        var proxy = await f.ProxyAsync();
+        await scope.ServiceProvider.GetRequiredService<ProxyManagementService>().TestAsync(proxy.Id);
+        f.SelectGlobal(proxy.Id, "true");
+        var dto = Assert.Single((await f.Service.ListAsync(default)).Profiles);
+        Assert.True(dto.ShareEligible);
+        Assert.True(dto.IsGlobal);
+        Assert.False(dto.PoolEligible);
+        using (var lease = await f.Service.AcquireSharedAsync(proxy.Id))
+        {
+            Assert.Equal(proxy.Id, lease.Proxy.Id);
+            Assert.False(Assert.Single((await f.Service.ListAsync(default)).Profiles).ShareEligible);
+        }
+        await Assert.ThrowsAsync<ProxyInUseException>(() => f.Service.DeleteAsync(f.Profile, default));
+        await Assert.ThrowsAsync<ProxyInUseException>(() => f.Service.StopUnboundAsync(proxy.Id));
+        Assert.Empty(f.Commands);
+    }
+
+    [Fact]
+    public async Task 删除空闲出口必须停止并清理材料记录且重试幂等()
+    {
+        await using var f = await Fixture.CreateAsync();
+        await f.Service.DeleteAsync(f.Profile, default);
+        Assert.Equal(new[] { "stop", "delete" }, f.Commands);
+        Assert.Empty((await f.Service.ListAsync(default)).Profiles);
+        await using var scope = f.Provider.CreateAsyncScope();
+        Assert.Empty(await scope.ServiceProvider.GetRequiredService<AppDbContext>().OutboundProxies.ToListAsync());
+        await f.Service.DeleteAsync(f.Profile, default);
+        Assert.Equal(2, f.Commands.Count);
+    }
+
+    [Fact]
+    public async Task 材料清理失败保留删除标记不允许恢复且可重试()
+    {
+        await using var f = await Fixture.CreateAsync();
+        f.FailDelete = true;
+        await Assert.ThrowsAsync<IOException>(() => f.Service.DeleteAsync(f.Profile, default));
+        var state = Assert.Single((await f.Service.ListAsync(default)).Profiles);
+        Assert.False(state.ShareEligible);
+        Assert.False(state.PoolEligible);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Service.ResumeAsync(f.Profile, default));
+        Assert.NotNull(await f.ProxyAsync());
+        f.FailDelete = false;
+        await f.Service.DeleteAsync(f.Profile, default);
+        Assert.Empty((await f.Service.ListAsync(default)).Profiles);
+    }
+
+    [Fact]
+    public async Task 删除拒绝活跃首次连接占用且不执行停止()
+    {
+        await using var f = await Fixture.CreateAsync();
+        using var claim = f.Provider.GetRequiredService<TemporaryWarpClaimStore>().ClaimManagedProfile(f.Profile);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Service.DeleteAsync(f.Profile, default));
+        Assert.Empty(f.Commands);
+    }
+
+    [Fact]
     public async Task 一键创建允许空名称且同一请求重试保持自动名称()
     {
         await using var f = await Fixture.CreateAsync();
@@ -467,6 +551,7 @@ public sealed class WgcfLifecycleConcurrencyTests
         public WgcfWarpService Service { get; private set; } = null!;
         public IConfiguration Configuration { get; private set; } = null!;
         public List<string> Commands { get; } = new();
+        public bool FailDelete { get; set; }
         private string Root => Path.Combine(_directory, "wgcf-warp");
 
         public static async Task<Fixture> CreateAsync(string? internalRequest = null)
@@ -502,6 +587,11 @@ public sealed class WgcfLifecycleConcurrencyTests
                     f.Commands.Add(command);
                     // provision 复用既有材料，不修改启停意图；start/stop 模拟运行器确认。
                     if (command is "start" or "stop") f.WriteRuntime(command == "start");
+                    if (command == "delete")
+                    {
+                        if (f.FailDelete) throw new IOException("模拟清理失败");
+                        Directory.Delete(Path.Combine(f.Root, f.Profile), recursive: true);
+                    }
                     return Task.CompletedTask;
                 });
             typeof(WgcfWarpService).GetField("_supervisorReady", PrivateInstance)!.SetValue(f.Service, true);

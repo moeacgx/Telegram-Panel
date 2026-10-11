@@ -357,7 +357,7 @@
               :key="proxy.id"
               :value="proxy.id"
               :label="`${proxy.name} · ${proxy.protocol.toUpperCase()} · ${proxy.egressIp || `${proxy.host}:${proxy.port}`}`"
-              :disabled="!proxy.isEnabled || (!!proxy.managedWgcfProfile && proxyDialog.accountIds.length !== 1)"
+              :disabled="!canShareProxy(proxy, warpStatus)"
             />
           </el-select>
         </el-form-item>
@@ -749,6 +749,7 @@ import {
 } from '@element-plus/icons-vue'
 import type { TableInstance, UploadFile } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { canShareProxy } from '@/utils/proxyRows'
 import { panelApi } from '@/api/panel'
 import BatchChatMembershipDialog from '@/components/BatchChatMembershipDialog.vue'
 import BatchRecoveryEmailDialog from '@/components/BatchRecoveryEmailDialog.vue'
@@ -1596,8 +1597,8 @@ async function saveAccountProxy() {
     ElMessage.warning('请选择要绑定的代理')
     return
   }
-  if (strategy === 'existing' && accountIds.length !== 1 && proxies.value.find((proxy) => proxy.id === proxyId)?.managedWgcfProfile) {
-    ElMessage.warning('轻量 WARP 出口只支持绑定单个已有账号')
+  if (strategy === 'existing' && !proxies.value.some((proxy) => proxy.id === proxyId && canShareProxy(proxy, warpStatus.value))) {
+    ElMessage.warning('所选代理当前不可用，请刷新后重试')
     return
   }
   if (strategy === 'warp_per_account' && !warpAvailable.value) {

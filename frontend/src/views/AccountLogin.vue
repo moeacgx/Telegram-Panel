@@ -352,7 +352,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import QRCode from 'qrcode'
 import { panelApi } from '@/api/panel'
-import { countAvailableWgcfPool } from '@/utils/proxyRows'
+import { countAvailableWgcfPool, canShareProxy } from '@/utils/proxyRows'
 import type {
   AccountDetail,
   AccountListItem,
@@ -411,7 +411,7 @@ const modeOptions = [
 
 const activeLoginId = computed(() => (loginMode.value === 'qr' ? qrLoginId.value : loginId.value))
 const hasActiveLoginSession = computed(() => loginId.value > 0 || qrLoginId.value > 0)
-const selectableProxies = computed(() => proxies.value.filter((proxy) => !proxy.managedWgcfProfile && proxy.kind !== 'warp'))
+const selectableProxies = computed(() => proxies.value.filter((proxy) => canShareProxy(proxy, warpStatus.value)))
 const availableWarpPoolCount = computed(() => countAvailableWgcfPool(proxies.value, warpStatus.value))
 const proxySelectionInvalid = computed(() =>
   !proxyStrategy.value

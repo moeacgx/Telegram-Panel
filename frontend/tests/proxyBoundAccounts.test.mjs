@@ -56,15 +56,15 @@ for (const strategy of ['direct', 'global', 'existing']) {
   })
 }
 
-test('目标代理排除自己、旧容器、停用及未就绪或占用的轻量出口', async () => {
+test('目标代理排除自己、旧容器、停用及未就绪出口，允许共享已占用出口', async () => {
   const state = setup()
   await state.open(proxy)
   state.dialog.targets = [proxy, { id: 8, kind: 'manual', isEnabled: true },
     { id: 9, kind: 'warp', isEnabled: true }, { id: 10, kind: 'manual', isEnabled: false },
     ...[11, 12, 13].map((id) => ({ id, kind: 'wireguard_warp', managedWgcfProfile: `p${id}`, isEnabled: true }))]
-  state.dialog.runtime = { available: true, profiles: [11, 12, 13].map((id) => ({ profile: `p${id}`, proxyId: id, poolEligible: id !== 12,
+  state.dialog.runtime = { available: true, profiles: [11, 12, 13].map((id) => ({ profile: `p${id}`, proxyId: id, shareEligible: id !== 12,
     phase: 'ready', desired: true, runtime: 'listening', testStatus: 'ok', egressIp: '1.2.3.4', accountCount: id === 13 ? 1 : 0 })) }
-  assert.deepEqual(state.eligibleTargets.value.map((p) => p.id), [8, 11])
+  assert.deepEqual(state.eligibleTargets.value.map((p) => p.id), [8, 11, 13])
   state.dialog.runtime.available = false
   assert.deepEqual(state.eligibleTargets.value.map((p) => p.id), [8])
 })

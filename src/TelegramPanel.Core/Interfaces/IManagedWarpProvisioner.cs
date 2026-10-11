@@ -4,7 +4,7 @@ namespace TelegramPanel.Core.Interfaces;
 
 public sealed record ManagedWarpAvailability(bool Available, string? Reason);
 
-/// <summary>首次连接期间独占轻量出口，正式绑定完成或严格断开后才能释放。</summary>
+/// <summary>首次连接期间保留轻量出口租约，正式绑定完成或严格断开后才能释放。</summary>
 public sealed class ManagedWarpProxyLease : IDisposable
 {
     private IDisposable? _reservation;
@@ -28,6 +28,9 @@ public interface IManagedWarpProvisioner
     Task<ManagedWarpProxyLease> ProvisionAsync(string name, string requestId, bool acceptTerms,
         CancellationToken cancellationToken = default);
     Task<ManagedWarpProxyLease> AcquireAsync(int proxyId, CancellationToken cancellationToken = default);
+    /// <summary>显式共享已有出口；保留首次连接保护，但允许已有账号和全局引用。</summary>
+    Task<ManagedWarpProxyLease> AcquireSharedAsync(int proxyId, CancellationToken cancellationToken = default) =>
+        AcquireAsync(proxyId, cancellationToken);
     Task StopUnboundAsync(int proxyId, string? claimToken = null,
         CancellationToken cancellationToken = default);
 }

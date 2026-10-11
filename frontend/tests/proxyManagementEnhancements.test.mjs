@@ -6,7 +6,7 @@ const viewSource = await readFile(new URL('../src/views/Proxies.vue', import.met
 const apiSource = await readFile(new URL('../src/api/panel.ts', import.meta.url), 'utf8')
 const typesSource = await readFile(new URL('../src/api/types.ts', import.meta.url), 'utf8')
 
-test('全局代理只支持普通代理、Resin 和外部 WireGuard WARP', () => {
+test('全局代理支持轻量 WARP 共享以及普通代理、Resin 和外部 WireGuard WARP', () => {
   assert.match(typesSource, /sourceMode: GlobalProxySourceMode/)
   assert.match(typesSource, /proxyId\?: number \| null/)
   assert.match(viewSource, /value="existing">从已有代理选择/)
@@ -17,6 +17,7 @@ test('全局代理只支持普通代理、Resin 和外部 WireGuard WARP', () =>
   assert.doesNotMatch(viewSource, /kind: 'warp'.*label: '受管 WARP'/s)
   assert.doesNotMatch(viewSource, /openWarpCreateForGlobal\(\)/)
   assert.match(viewSource, /kind: 'wireguard_warp'[^\n]*!proxy\.managedWgcfProfile/)
+  assert.match(viewSource, /kind: 'wgcf'[^\n]*canShareProxy\(proxy, wgcfStatus.value\)/)
   assert.match(viewSource, /openProxyCreateForGlobal\('wireguard_warp'\)/)
   assert.match(viewSource, /openProxyCreateForGlobal\('resin'\)/)
 })
@@ -37,7 +38,7 @@ test('代理列表支持使用状态、分类筛选和多选批量设置', () =>
   assert.match(viewSource, /v-model="categoryFilter"/)
   assert.match(viewSource, /v-model="proxyDialog\.form\.categoryId"/)
   assert.match(viewSource, /categoryId: proxy\.category\?\.id \?\? null/)
-  assert.match(viewSource, /proxy\.isInUse \?\? proxyUsageCount\(proxy\) > 0/)
+  assert.match(viewSource, /!!proxy\.isGlobal \|\| !!proxy\.isInUse \|\| proxyUsageCount\(proxy\) > 0/)
   assert.match(viewSource, /panelApi\.batchSetProxyCategory\(proxyIds, categoryId\)/)
   assert.match(viewSource, /openCategoryManager/)
 })

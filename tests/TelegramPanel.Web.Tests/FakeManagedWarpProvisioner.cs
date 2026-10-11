@@ -74,4 +74,13 @@ internal sealed class FakeManagedWarpProvisioner(AppDbContext db, TemporaryWarpC
         proxy.TestStatus = "unknown";
         await db.SaveChangesAsync(cancellationToken);
     }
+
+    public async Task<ManagedWarpProxyLease> AcquireSharedAsync(int proxyId, CancellationToken cancellationToken = default)
+    {
+        if (UnavailableProxyIds.Contains(proxyId))
+            throw new InvalidOperationException("运行器档案尚未就绪");
+        var proxy = await db.OutboundProxies.SingleAsync(x => x.Id == proxyId, cancellationToken);
+        var claim = claims.ClaimManagedProfile(proxy.ManagedWgcfProfile!);
+        return new ManagedWarpProxyLease(proxy, claim.Token, claim);
+    }
 }
