@@ -13,14 +13,25 @@ function controller(rename = async () => ({ success: true })) {
     return match[0]
   }).join('\n')
   const calls = []
+  const globalState = { name: '原名称', refreshes: 0 }
   const renameDialog = reactive({ visible: false, saving: false, id: 0, name: '', error: '' })
   const bindings = { renameDialog, deletingIds: new Set(), deletingProfiles: new Set(),
     panelApi: { renameProxy: async (...args) => { calls.push(args); return rename(...args) } },
     ElMessage: { success() {} }, extractApiErrorMessage: data => data?.message || '',
+    globalState, loadGlobalProxy: async () => { globalState.refreshes++; globalState.name = renameDialog.name.trim() },
     loadProxies: async () => {}, wgcfWarpPanel: { value: { loadStatus: async () => {} } } }
   const js = ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText
   return { ...new Function(...Object.keys(bindings), `${js};return {${names.join(',')}}`)(...Object.values(bindings)), ...bindings, calls }
 }
+
+test('重命名成功同步刷新全局代理名称缓存', async () => {
+  const c = controller()
+  c.openRename({ id: 7, name: '原名称', isGlobal: true })
+  c.renameDialog.name = '新的全局出口名称'
+  await c.saveRename()
+  assert.equal(c.globalState.refreshes, 1)
+  assert.equal(c.globalState.name, '新的全局出口名称')
+})
 
 for (const kind of ['manual', 'resin', 'wireguard_warp']) {
   test(`${kind} 重命名仅提交编号和名称，使用中的出口也可修改`, async () => {

@@ -1440,7 +1440,7 @@ async function saveRename() {
     if (!result.success) throw new Error(result.message || '重命名失败')
     renameDialog.visible = false
     ElMessage.success('代理名称已更新')
-    await Promise.allSettled([loadProxies(false), wgcfWarpPanel.value?.loadStatus()])
+    await Promise.allSettled([loadProxies(false), loadGlobalProxy(false), wgcfWarpPanel.value?.loadStatus()])
   } catch (error) {
     const data = (error as { response?: { data?: unknown } })?.response?.data
     renameDialog.error = extractApiErrorMessage(data) || (error instanceof Error ? error.message : '重命名失败，请重试')
