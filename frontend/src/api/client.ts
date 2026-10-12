@@ -7,6 +7,16 @@ export const api = axios.create({
   withCredentials: true,
 })
 
+// 每次获取当前身份的令牌，避免登录或修改用户名后复用旧身份令牌。
+api.interceptors.request.use(async (config) => {
+  const protectedPaths = ['/auth/login', '/settings/password', '/settings/username']
+  if (config.method?.toLowerCase() === 'post' && protectedPaths.includes(config.url || '')) {
+    const response = await api.get<{ token: string }>('/auth/csrf')
+    config.headers.set('X-TelegramPanel-CSRF', response.data.token)
+  }
+  return config
+})
+
 /** 从 ASP.NET OperationResult/ProblemDetails/验证错误中提取可读消息。 */
 export function extractApiErrorMessage(data: unknown): string {
   if (typeof data === 'string') return data.trim()
@@ -36,6 +46,10 @@ export function extractApiErrorMessage(data: unknown): string {
 api.interceptors.response.use(
   (res) => res,
   (err) => {
+    if (err?.response?.data?.code === 'PASSWORD_CHANGE_REQUIRED') {
+      window.location.href = '/ui/admin/password'
+      return Promise.reject(err)
+    }
     if (err?.response?.status === 401 && window.location.pathname !== '/ui/login') {
       window.location.href = `/ui/login?redirect=${encodeURIComponent(window.location.pathname + window.location.search)}`
       return Promise.reject(err)

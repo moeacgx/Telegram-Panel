@@ -28,6 +28,8 @@ appsettings.local.json
 src/TelegramPanel.Web/appsettings.local.json
 
 # Admin auth credentials
+admin-bootstrap-password.txt*
+admin_auth.json.*.tmp
 src/TelegramPanel.Web/admin_auth.json
 .storage-database-migration-v1-*.complete
 .storage-credential-migration-v1.complete

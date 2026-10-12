@@ -1,4 +1,4 @@
-﻿# Telegram Panel
+# Telegram Panel
 
 [English](README.md) | [中文](README.zh-CN.md)
 
@@ -46,7 +46,7 @@ docker compose up -d
 Open <http://localhost:5000> and sign in with the initial credentials:
 
 - Username: `tgpanel`
-- Password: `tgpanel123`
+- Password: read `admin-bootstrap-password.txt` in the private persistent credentials directory (Docker: `docker-data`). From v1.31.87, a random initial password replaces the shared default. Change it after signing in; existing credentials remain valid, but old browser sessions must sign in again.
 
 Change the initial password after the first sign-in. Persistent data is stored in
 `./docker-data`; back up that directory before updates or migrations.

@@ -544,6 +544,9 @@ builder.Services.AddSingleton<BucketBackupService>();
 // 后台账号密码验证（Cookie 登录）
 builder.Services.Configure<AdminAuthOptions>(builder.Configuration.GetSection("AdminAuth"));
 builder.Services.AddSingleton<AdminCredentialStore>();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<AdminLoginLimiter>();
+builder.Services.AddAntiforgery(options => options.HeaderName = AdminAuthSecurity.CsrfHeader);
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(options =>
     {
@@ -560,6 +563,7 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         var returnUrlParam = options.ReturnUrlParameter;
         options.Events = new CookieAuthenticationEvents
         {
+            OnValidatePrincipal = AdminAuthSecurity.ValidatePrincipalAsync,
             OnRedirectToLogin = ctx =>
             {
                 var returnUrl = (ctx.Request.PathBase + ctx.Request.Path + ctx.Request.QueryString).ToString();
@@ -764,6 +768,9 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseForwardedHeaders();
+app.UseRouting();
+app.UseAuthentication();
+app.Use(AdminAuthSecurity.ProtectAsync);
 
 // 仅在存在 HTTPS 端口/端点时启用重定向；否则会产生 “Failed to determine the https port for redirect.” 噪声
 var httpsPort = app.Configuration["ASPNETCORE_HTTPS_PORT"];
@@ -894,16 +901,12 @@ static bool TryResolveExtensionModuleVueRoute(
     return true;
 }
 
-app.UseRouting();
-
-app.UseAntiforgery();
-
 // Serilog 请求日志
 if (serilogEnabled)
     app.UseSerilogRequestLogging();
 
-app.UseAuthentication();
 app.UseAuthorization();
+app.UseAntiforgery();
 
 app.MapGet("/healthz", () => Results.Json(new
 {
@@ -919,7 +922,7 @@ var adminCredentials = app.Services.GetRequiredService<AdminCredentialStore>();
 await adminCredentials.EnsureInitializedAsync();
 
 // 登录页（独立 endpoint，避免与 RequireAuthorization 的 Razor Components 冲突）
-app.MapGet("/login", async (HttpContext http, IConfiguration configuration, AdminCredentialStore credentialStore) =>
+app.MapGet("/login", async (HttpContext http, Microsoft.AspNetCore.Antiforgery.IAntiforgery antiforgery, AdminCredentialStore credentialStore) =>
 {
     var enabled = credentialStore.Enabled;
     var configured = enabled;
@@ -938,11 +941,10 @@ app.MapGet("/login", async (HttpContext http, IConfiguration configuration, Admi
     var title = "Telegram Panel 登录";
     var msg = error == "1" ? "<div class=\"mud-alert mud-alert-filled mud-alert-filled-error\" style=\"margin-bottom:12px;\">账号或密码错误</div>" : "";
     var disabledMsg = configured ? "" : "<div class=\"mud-alert mud-alert-filled mud-alert-filled-warning\" style=\"margin-bottom:12px;\">后台验证未启用</div>";
-    var initialUsername = System.Net.WebUtility.HtmlEncode((configuration["AdminAuth:InitialUsername"] ?? "tgpanel").Trim());
-    var initialPassword = System.Net.WebUtility.HtmlEncode((configuration["AdminAuth:InitialPassword"] ?? "tgpanel123").Trim());
-    var initialHint = configured && credentialStore.MustChangePassword
-        ? $"<div class=\"mud-alert mud-alert-filled mud-alert-filled-info\" style=\"margin-bottom:12px;\">初始账号：<b>{initialUsername}</b>，初始密码：<b>{initialPassword}</b>（首次登录后请立即修改）</div>"
-        : "";
+    http.Response.Headers.CacheControl = "no-store";
+    var token = antiforgery.GetAndStoreTokens(http);
+    var tokenField = System.Net.WebUtility.HtmlEncode(token.FormFieldName);
+    var tokenValue = System.Net.WebUtility.HtmlEncode(token.RequestToken);
 
     var html = $@"
 <!DOCTYPE html>
@@ -966,9 +968,9 @@ app.MapGet("/login", async (HttpContext http, IConfiguration configuration, Admi
     <h2 style=""margin:0 0 8px;"">Telegram Panel</h2>
     <div style=""opacity:0.8; margin-bottom:16px;"">后台登录</div>
     {disabledMsg}
-    {initialHint}
     {msg}
     <form method=""post"" action=""/login"">
+      <input type=""hidden"" name=""{tokenField}"" value=""{tokenValue}"" />
       <input type=""hidden"" name=""returnUrl"" value=""{System.Net.WebUtility.HtmlEncode(returnUrl)}"" />
       <div class=""label"">账号</div>
       <input class=""field"" name=""username"" autocomplete=""username"" />
@@ -995,23 +997,14 @@ app.MapPost("/login", async (HttpContext http, AdminCredentialStore credentialSt
     if (!AdminAuthHelpers.IsLocalReturnUrl(returnUrl))
         returnUrl = "/";
 
-    var ok = await credentialStore.ValidateAsync(u, p);
-    if (!ok)
+    var snapshot = await credentialStore.ValidateForAuthenticationAsync(u, p);
+    if (snapshot is null)
         return Results.Redirect($"/login?error=1&returnUrl={Uri.EscapeDataString(returnUrl)}");
 
-    var claims = new List<Claim>
-    {
-        new(ClaimTypes.Name, u),
-        new(ClaimTypes.Role, "Admin")
-    };
-    var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
-    await http.SignInAsync(
-        CookieAuthenticationDefaults.AuthenticationScheme,
-        new ClaimsPrincipal(identity),
-        new AuthenticationProperties { IsPersistent = true, ExpiresUtc = DateTimeOffset.UtcNow.AddDays(30) });
+    await AdminAuthSecurity.SignInAsync(http, snapshot);
 
     if (credentialStore.MustChangePassword)
-        return Results.Redirect($"/admin/password?returnUrl={Uri.EscapeDataString(returnUrl)}");
+        return Results.Redirect("/ui/admin/password");
 
     return Results.Redirect(returnUrl);
 }).DisableAntiforgery().AllowAnonymous();

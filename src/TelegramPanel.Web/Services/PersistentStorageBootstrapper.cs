@@ -533,7 +533,10 @@ public static class PersistentStorageBootstrapper
         Action<string>? report)
     {
         var initialUsername = (configuration["AdminAuth:InitialUsername"] ?? "tgpanel").Trim();
-        var initialPassword = (configuration["AdminAuth:InitialPassword"] ?? "tgpanel123").Trim();
+        // 保留旧版固定默认口令识别合同；空配置表示新版本随机初始化。
+        var initialPassword = (configuration["AdminAuth:InitialPassword"] ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(initialPassword))
+            initialPassword = "tgpanel123";
         var targetFingerprintBefore = CaptureFileFingerprint(targetPath, includeContentHash: true);
         var target = InspectCredentials(targetPath, initialUsername, initialPassword);
         var targetFingerprint = CaptureFileFingerprint(targetPath, includeContentHash: true);

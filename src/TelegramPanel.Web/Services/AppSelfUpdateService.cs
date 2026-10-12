@@ -478,6 +478,11 @@ public sealed class AppSelfUpdateService
                 configuration["AdminAuth:CredentialsPath"],
                 "admin_auth.json"));
         AddPath(
+            "初始化密码",
+            () => Path.Combine(Path.GetDirectoryName(StoragePathResolver.ResolveWritablePath(
+                configuration, environment, configuration["AdminAuth:CredentialsPath"], "admin_auth.json"))!,
+                "admin-bootstrap-password.txt"));
+        AddPath(
             "Session",
             () => StoragePathResolver.ResolveWritablePath(
                 configuration,

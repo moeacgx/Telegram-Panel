@@ -65,6 +65,7 @@
     <Content Remove="*.db-shm" />
     <Content Remove="*.db-wal" />
     <Content Remove="admin_auth.json" />
+    <Content Remove="**/admin-bootstrap-password.txt*;**/admin_auth.json.*.tmp" />
     <Content Remove="appsettings.local.json" />
     <None Remove="Modules\state.json" />
     <None Remove="Modules\active\**" />
@@ -82,6 +83,7 @@
     <None Remove="*.db-shm" />
     <None Remove="*.db-wal" />
     <None Remove="admin_auth.json" />
+    <None Remove="**/admin-bootstrap-password.txt*;**/admin_auth.json.*.tmp" />
     <None Remove="appsettings.local.json" />
   </ItemGroup>
 

@@ -21,6 +21,7 @@
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { extractApiErrorMessage } from '@/api/client'
 
 const route = useRoute()
 const router = useRouter()
@@ -41,8 +42,10 @@ async function submit() {
     }
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/dashboard'
     await router.replace(redirect)
-  } catch {
-    error.value = '账号或密码错误'
+  } catch (cause: any) {
+    error.value = cause?.response?.status === 401
+      ? '账号或密码错误'
+      : extractApiErrorMessage(cause?.response?.data) || '登录失败，请稍后重试'
   } finally {
     loading.value = false
   }

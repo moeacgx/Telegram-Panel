@@ -121,6 +121,8 @@ jobs:
               -name 'telegram-panel.db' -o \
               -name 'telegram_panel.db' -o \
               -name 'admin_auth.json' -o \
+              -name 'admin-bootstrap-password.txt*' -o \
+              -name 'admin_auth.json.*.tmp' -o \
               -name 'appsettings.local.json' -o \
               -name '*.session' \
             \) -print -quit)"

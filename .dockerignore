@@ -20,6 +20,9 @@ docker-data
 appsettings.local.json
 **/appsettings.local.json
 admin_auth.json
+**/admin-bootstrap-password.txt*
+admin-bootstrap-password.txt*
+**/admin_auth.json.*.tmp
 **/admin_auth.json
 data-protection-keys
 **/data-protection-keys

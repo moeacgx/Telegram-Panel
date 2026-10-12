@@ -53,7 +53,7 @@ docker compose up -d
 访问 <http://localhost:5000>，使用初始账号登录：
 
 - 用户名：`tgpanel`
-- 密码：`tgpanel123`
+- 密码：v1.31.87 起在私有数据目录生成 `admin-bootstrap-password.txt`，Docker 默认在 `docker-data`。首次登录必须改密；已有凭据保留，升级后旧浏览器会话需重新登录。
 
 首次登录后请修改初始密码。持久化数据位于 `./docker-data`，升级或迁移前请备份该目录。
 

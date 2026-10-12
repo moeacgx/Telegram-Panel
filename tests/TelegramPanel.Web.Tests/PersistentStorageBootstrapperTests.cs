@@ -742,8 +742,10 @@ public sealed class PersistentStorageBootstrapperTests
         }
     }
 
-    [Fact]
-    public void Initialize_ReplacesGeneratedDefaultCredentialsAndPreservesSource()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void Initialize_ReplacesGeneratedDefaultCredentialsAndPreservesSource(string? initialPassword)
     {
         var root = CreateTempDirectory();
         try
@@ -764,9 +766,9 @@ public sealed class PersistentStorageBootstrapperTests
                 sourcePath,
                 CreateCredentialJson("restored-user", "restored-password", mustChangePassword: false));
 
-            var paths = PersistentStorageBootstrapper.Initialize(
-                CreateConfiguration(persistentRoot),
-                new TestEnvironment(currentRoot));
+            var configuration = CreateConfiguration(persistentRoot);
+            configuration["AdminAuth:InitialPassword"] = initialPassword;
+            var paths = PersistentStorageBootstrapper.Initialize(configuration, new TestEnvironment(currentRoot));
 
             Assert.Equal("restored-user", ReadCredentialUsername(paths.CredentialsPath));
             Assert.Equal("restored-user", ReadCredentialUsername(sourcePath));

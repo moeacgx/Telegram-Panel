@@ -6,6 +6,7 @@ namespace TelegramPanel.Web.Services;
 
 public sealed class AdminCredentialStore
 {
+    public sealed record AuthenticationSnapshot(string Username, string SecurityStamp);
     private readonly IConfiguration _configuration;
     private readonly IWebHostEnvironment _environment;
     private readonly IOptionsMonitor<AdminAuthOptions> _options;
@@ -32,12 +33,25 @@ public sealed class AdminCredentialStore
 
     public bool MustChangePassword => _cached?.MustChangePassword == true;
 
-    public string CredentialsFilePath =>
-        StoragePathResolver.ResolveWritablePath(
-            _configuration,
-            _environment,
-            _options.CurrentValue.CredentialsPath,
-            "admin_auth.json");
+    public string SecurityStamp => _cached?.SecurityStamp ?? string.Empty;
+
+    public string CredentialsFilePath
+    {
+        get
+        {
+            var path = StoragePathResolver.ResolveWritablePath(
+                _configuration, _environment, _options.CurrentValue.CredentialsPath, "admin_auth.json");
+            var webRoot = string.IsNullOrWhiteSpace(_environment.WebRootPath)
+                ? Path.Combine(_environment.ContentRootPath, "wwwroot")
+                : _environment.WebRootPath;
+            var physicalPath = StoragePathResolver.ResolvePhysicalPath(path);
+            var physicalWebRoot = StoragePathResolver.ResolvePhysicalPath(webRoot);
+            if (StoragePathResolver.IsPathWithin(path, webRoot)
+                || StoragePathResolver.IsPathWithin(physicalPath, physicalWebRoot))
+                throw new InvalidOperationException("后台凭据必须放在静态资源目录之外");
+            return path;
+        }
+    }
 
     public async Task EnsureInitializedAsync(CancellationToken cancellationToken = default)
     {
@@ -54,15 +68,37 @@ public sealed class AdminCredentialStore
             if (File.Exists(path))
             {
                 var json = await File.ReadAllTextAsync(path, cancellationToken);
-                _cached = JsonSerializer.Deserialize<AdminCredentialFile>(json) ?? throw new InvalidOperationException("admin_auth.json 解析失败");
+                var existing = JsonSerializer.Deserialize<AdminCredentialFile>(json) ?? throw new InvalidOperationException("admin_auth.json 解析失败");
+                var changed = false;
+                if (string.IsNullOrWhiteSpace(existing.SecurityStamp))
+                {
+                    existing.SecurityStamp = NewSecurityStamp();
+                    changed = true;
+                }
+                if (existing.MustChangePassword && VerifyPassword(existing, "tgpanel123"))
+                {
+                    var bootstrap = await EnsureBootstrapSecretAsync(cancellationToken);
+                    ApplyPassword(existing, bootstrap);
+                    existing.SecurityStamp = NewSecurityStamp();
+                    existing.UpdatedAtUtc = DateTime.UtcNow;
+                    changed = true;
+                }
+                if (changed)
+                    await SaveAsync(existing, cancellationToken);
+                _cached = existing;
+                if (!existing.MustChangePassword)
+                    TryDeleteBootstrapSecret();
                 return;
             }
 
             var opt = _options.CurrentValue;
             var initialUsername = (opt.InitialUsername ?? "tgpanel").Trim();
-            var initialPassword = (opt.InitialPassword ?? "tgpanel123").Trim();
-            if (string.IsNullOrWhiteSpace(initialUsername) || string.IsNullOrWhiteSpace(initialPassword))
-                throw new InvalidOperationException("AdminAuth 初始账号/密码未配置");
+            if (string.IsNullOrWhiteSpace(initialUsername))
+                throw new InvalidOperationException("AdminAuth 初始账号未配置");
+            var configuredPassword = (opt.InitialPassword ?? string.Empty).Trim();
+            var initialPassword = string.IsNullOrWhiteSpace(configuredPassword) || configuredPassword == "tgpanel123"
+                ? await EnsureBootstrapSecretAsync(cancellationToken)
+                : configuredPassword;
 
             var now = DateTime.UtcNow;
             var file = CreateCredentialFile(initialUsername, initialPassword, mustChangePassword: true, now);
@@ -70,7 +106,7 @@ public sealed class AdminCredentialStore
             await SaveAsync(file, cancellationToken);
             _cached = file;
 
-            _logger.LogWarning("后台登录已初始化：账号 {Username}，初始密码已设置（请首次登录后立即修改）", initialUsername);
+            _logger.LogWarning("后台登录已初始化：账号 {Username}，请使用配置的初始密码或持久化目录内的初始化密码文件登录并立即改密", initialUsername);
         }
         finally
         {
@@ -80,24 +116,31 @@ public sealed class AdminCredentialStore
 
     public async Task<bool> ValidateAsync(string? username, string? password, CancellationToken cancellationToken = default)
     {
+        return await ValidateForAuthenticationAsync(username, password, cancellationToken) != null;
+    }
+
+    public async Task<AuthenticationSnapshot?> ValidateForAuthenticationAsync(
+        string? username, string? password, CancellationToken cancellationToken = default)
+    {
         if (!Enabled)
-            return true;
+            return new AuthenticationSnapshot((username ?? string.Empty).Trim(), string.Empty);
 
         await EnsureInitializedAsync(cancellationToken);
 
         username = (username ?? string.Empty).Trim();
         password = (password ?? string.Empty).Trim();
-        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
-            return false;
-
         await _lock.WaitAsync(cancellationToken);
         try
         {
             var file = _cached ?? throw new InvalidOperationException("凭据未初始化");
-            if (!string.Equals(username, file.Username, StringComparison.Ordinal))
-                return false;
-
-            return VerifyPassword(file, password);
+            // 不提前拒绝未知账号：全部请求执行同一 PBKDF2 校验，减少账号枚举时序差异。
+            var matchesUser = CryptographicOperations.FixedTimeEquals(
+                SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(username)),
+                SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(file.Username)));
+            var validPassword = VerifyPassword(file, password);
+            return matchesUser && validPassword
+                ? new AuthenticationSnapshot(file.Username, file.SecurityStamp)
+                : null;
         }
         finally
         {
@@ -105,7 +148,7 @@ public sealed class AdminCredentialStore
         }
     }
 
-    public async Task ChangePasswordAsync(string currentPassword, string newPassword, CancellationToken cancellationToken = default)
+    public async Task<AuthenticationSnapshot> ChangePasswordAsync(string currentPassword, string newPassword, CancellationToken cancellationToken = default)
     {
         if (!Enabled)
             throw new InvalidOperationException("后台验证未启用");
@@ -115,8 +158,8 @@ public sealed class AdminCredentialStore
         currentPassword = (currentPassword ?? string.Empty).Trim();
         newPassword = (newPassword ?? string.Empty).Trim();
 
-        if (newPassword.Length < 6)
-            throw new InvalidOperationException("新密码长度至少 6 位");
+        if (newPassword.Length < 12)
+            throw new InvalidOperationException("新密码长度至少 12 位");
 
         await _lock.WaitAsync(cancellationToken);
         try
@@ -124,14 +167,20 @@ public sealed class AdminCredentialStore
             var file = _cached ?? throw new InvalidOperationException("凭据未初始化");
             if (!VerifyPassword(file, currentPassword))
                 throw new InvalidOperationException("当前密码错误");
+            if (string.Equals(currentPassword, newPassword, StringComparison.Ordinal))
+                throw new InvalidOperationException("新密码不能与当前密码相同");
 
+            file = Clone(file);
             var now = DateTime.UtcNow;
             ApplyPassword(file, newPassword);
             file.MustChangePassword = false;
+            file.SecurityStamp = NewSecurityStamp();
             file.UpdatedAtUtc = now;
 
             await SaveAsync(file, cancellationToken);
             _cached = file;
+            TryDeleteBootstrapSecret();
+            return new AuthenticationSnapshot(file.Username, file.SecurityStamp);
         }
         finally
         {
@@ -139,7 +188,7 @@ public sealed class AdminCredentialStore
         }
     }
 
-    public async Task ChangeUsernameAsync(string currentPassword, string newUsername, CancellationToken cancellationToken = default)
+    public async Task<AuthenticationSnapshot> ChangeUsernameAsync(string currentPassword, string newUsername, CancellationToken cancellationToken = default)
     {
         if (!Enabled)
             throw new InvalidOperationException("后台验证未启用");
@@ -156,12 +205,14 @@ public sealed class AdminCredentialStore
             if (!VerifyPassword(file, currentPassword))
                 throw new InvalidOperationException("当前密码错误");
 
+            file = Clone(file);
             file.Username = newUsername;
-            file.MustChangePassword = false;
             file.UpdatedAtUtc = DateTime.UtcNow;
+            file.SecurityStamp = NewSecurityStamp();
 
             await SaveAsync(file, cancellationToken);
             _cached = file;
+            return new AuthenticationSnapshot(file.Username, file.SecurityStamp);
         }
         finally
         {
@@ -177,8 +228,71 @@ public sealed class AdminCredentialStore
             Directory.CreateDirectory(dir);
 
         var json = JsonSerializer.Serialize(file, new JsonSerializerOptions { WriteIndented = true });
-        await File.WriteAllTextAsync(path, json, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
+        await WriteSecretAtomicallyAsync(path, json, cancellationToken);
     }
+
+    private async Task<string> EnsureBootstrapSecretAsync(CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(Path.GetDirectoryName(CredentialsFilePath)!, "admin-bootstrap-password.txt");
+        var dir = Path.GetDirectoryName(path)!;
+        Directory.CreateDirectory(dir);
+        if (File.Exists(path))
+        {
+            var existing = (await File.ReadAllTextAsync(path, cancellationToken)).Trim();
+            if (existing.Length >= 12)
+            {
+                if (!OperatingSystem.IsWindows())
+                    File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                return existing;
+            }
+        }
+        var generated = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+        await WriteSecretAtomicallyAsync(path, generated, cancellationToken);
+        return generated;
+    }
+
+    private static async Task WriteSecretAtomicallyAsync(string path, string content, CancellationToken cancellationToken)
+    {
+        // 先持久化临时秘密，再替换目标；失败时保留原凭据和可恢复的初始化密码。
+        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            var options = new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None,
+                Options = FileOptions.Asynchronous | FileOptions.WriteThrough
+            };
+            if (!OperatingSystem.IsWindows())
+                options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            await using (var stream = new FileStream(temporary, options))
+            {
+                await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes(content), cancellationToken);
+                await stream.FlushAsync(cancellationToken);
+                stream.Flush(flushToDisk: true);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary)) File.Delete(temporary);
+        }
+    }
+
+    private void TryDeleteBootstrapSecret()
+    {
+        try
+        {
+            var path = Path.Combine(Path.GetDirectoryName(CredentialsFilePath)!, "admin-bootstrap-password.txt");
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch (Exception ex) { _logger.LogWarning(ex, "清理后台初始化密码文件失败"); }
+    }
+
+    private static string NewSecurityStamp() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+
+    private static AdminCredentialFile Clone(AdminCredentialFile file) =>
+        JsonSerializer.Deserialize<AdminCredentialFile>(JsonSerializer.Serialize(file))!;
 
     private static AdminCredentialFile CreateCredentialFile(string username, string password, bool mustChangePassword, DateTime nowUtc)
     {
@@ -189,7 +303,8 @@ public sealed class AdminCredentialStore
             Username = username,
             MustChangePassword = mustChangePassword,
             CreatedAtUtc = nowUtc,
-            UpdatedAtUtc = nowUtc
+            UpdatedAtUtc = nowUtc,
+            SecurityStamp = NewSecurityStamp()
         };
         ApplyPassword(file, password);
         return file;
@@ -266,6 +381,7 @@ public sealed class AdminCredentialStore
         public bool MustChangePassword { get; set; } = true;
         public DateTime CreatedAtUtc { get; set; }
         public DateTime UpdatedAtUtc { get; set; }
+        public string SecurityStamp { get; set; } = "";
     }
 }
 

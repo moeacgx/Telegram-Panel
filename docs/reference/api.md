@@ -1,5 +1,21 @@
 # 管理接口速查
 
+## 后台认证加固（v1.31.87 起）
+
+`GET /api/panel/auth/csrf` 返回 `{ "token": "..." }` 并设置防伪 Cookie，响应禁止缓存。
+客户端必须保留 Cookie，在 `POST /api/panel/auth/login`、`POST /api/panel/settings/password`、
+`POST /api/panel/settings/username` 携带 `X-TelegramPanel-CSRF` 请求头。
+登录成功或用户名变化后必须重新获取当前身份令牌，不要自动重放失败的写请求。
+服务端 `/login` 表单内置隐藏防伪字段，不接受缺失或错误令牌的提交。
+
+- `400 INVALID_CSRF_TOKEN`：刷新页面或重新读取令牌后，由用户重新提交。
+- `429 LOGIN_RATE_LIMITED`：按 `Retry-After` 秒数等待，表单与 JSON 两入口共享额度。
+- `403 PASSWORD_CHANGE_REQUIRED`：先访问 `/ui/admin/password` 修改初始密码。
+
+首次设置期间后台业务 API、后台模块和旧 Blazor 通道被拦截；健康检查和独立鉴权的外部 API/Webhook 保留各自合同。
+仅改用户名仍保持必须改密，改密码会撤销其他会话。新密码至少 12 位且与旧密码不同。
+此合同面向后台 Cookie 登录，外部 API Key 不通过上述后台登录入口。
+
 Vue 后台使用 `/api/panel` 下的管理接口。开启后台登录时，除登录等少数端点外都需要
 管理员 Cookie；这些接口不是面向公网的稳定开放 API。完整行为以
 `PanelAdminApiEndpoints.cs` 和各功能 Endpoint 文件为准。

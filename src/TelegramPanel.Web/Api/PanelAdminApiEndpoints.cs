@@ -35,6 +35,8 @@ public static class PanelAdminApiEndpoints
     {
         var api = app.MapGroup("/api/panel");
 
+        api.MapGet("/auth/csrf", AdminAuthSecurity.GetCsrfToken).AllowAnonymous();
+
         api.MapPost("/auth/login", LoginAsync)
             .DisableAntiforgery()
             .AllowAnonymous();
@@ -359,20 +361,11 @@ public static class PanelAdminApiEndpoints
 
         var username = (request.Username ?? string.Empty).Trim();
         var password = (request.Password ?? string.Empty).Trim();
-        var ok = await credentialStore.ValidateAsync(username, password, http.RequestAborted);
-        if (!ok)
+        var snapshot = await credentialStore.ValidateForAuthenticationAsync(username, password, http.RequestAborted);
+        if (snapshot is null)
             return Results.Unauthorized();
 
-        var claims = new List<Claim>
-        {
-            new(ClaimTypes.Name, username),
-            new(ClaimTypes.Role, "Admin")
-        };
-        var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
-        await http.SignInAsync(
-            CookieAuthenticationDefaults.AuthenticationScheme,
-            new ClaimsPrincipal(identity),
-            new AuthenticationProperties { IsPersistent = true, ExpiresUtc = DateTimeOffset.UtcNow.AddDays(30) });
+        await AdminAuthSecurity.SignInAsync(http, snapshot);
 
         return Results.Ok(new AuthMeDto(true, username, credentialStore.MustChangePassword, credentialStore.Enabled, VersionService.Version));
     }
@@ -3212,9 +3205,10 @@ public static class PanelAdminApiEndpoints
         return Results.Ok(new OperationResultDto(true, "缓存已清除"));
     }
 
-    private static async Task<IResult> ChangeAdminPasswordAsync(ChangeAdminPasswordRequestDto request, AdminCredentialStore credentialStore, CancellationToken cancellationToken)
+    private static async Task<IResult> ChangeAdminPasswordAsync(ChangeAdminPasswordRequestDto request, HttpContext http, AdminCredentialStore credentialStore, CancellationToken cancellationToken)
     {
-        await credentialStore.ChangePasswordAsync(request.CurrentPassword ?? "", request.NewPassword ?? "", cancellationToken);
+        var snapshot = await credentialStore.ChangePasswordAsync(request.CurrentPassword ?? "", request.NewPassword ?? "", cancellationToken);
+        await AdminAuthSecurity.SignInAsync(http, snapshot);
         return Results.Ok(new OperationResultDto(true, "密码已修改"));
     }
 
@@ -3232,21 +3226,12 @@ public static class PanelAdminApiEndpoints
             return Results.BadRequest(new OperationResultDto(false, validationError));
         }
 
-        await credentialStore.ChangeUsernameAsync(
+        var snapshot = await credentialStore.ChangeUsernameAsync(
             request.CurrentPassword ?? "",
             normalizedUsername,
             cancellationToken);
 
-        var claims = new List<Claim>
-        {
-            new(ClaimTypes.Name, credentialStore.Username),
-            new(ClaimTypes.Role, "Admin")
-        };
-        var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
-        await http.SignInAsync(
-            CookieAuthenticationDefaults.AuthenticationScheme,
-            new ClaimsPrincipal(identity),
-            new AuthenticationProperties { IsPersistent = true, ExpiresUtc = DateTimeOffset.UtcNow.AddDays(30) });
+        await AdminAuthSecurity.SignInAsync(http, snapshot);
 
         return Results.Ok(new OperationResultDto(true, "后台用户名已修改"));
     }

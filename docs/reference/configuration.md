@@ -26,7 +26,7 @@
 - `/data/telegram-panel.db`：SQLite 数据库
 - `/data/sessions/`：账号 session 文件
 - `/data/appsettings.local.json`：UI 保存后的本地覆盖配置
-- `/data/admin_auth.json`：后台登录账号/密码（首次会用初始默认值生成）
+- `/data/admin_auth.json`：后台凭据哈希与会话安全版本（不保存明文密码）
 - `/data/uploads/`：图片资产（数据字典图片、头像素材等）
 
 ## 后台任务（刷新页面不影响）
@@ -73,6 +73,19 @@ Docker 下常用环境变量（见 `docker-compose.yml`）：
 - `Proxy__Egress__Maintenance__InitialDelaySeconds`：服务启动后首次巡检延迟，默认 30 秒
 - `Proxy__Egress__Maintenance__IntervalMinutes`：普通代理、外部 WireGuard WARP 和 Resin 巡检周期，默认 5 分钟
 - `AdminAuth__CredentialsPath`：后台密码文件（默认 `/data/admin_auth.json`）
+
+### 后台认证安全（v1.31.87 起）
+
+- `AdminAuth__InitialUsername`：首次用户名，默认 `tgpanel`。
+- `AdminAuth__InitialPassword`：首次口令，默认空。空或历史 `tgpanel123` 会生成随机口令；已保存凭据优先。
+- 初始化密码文件与后台凭据同目录，名称 `admin-bootstrap-password.txt`。不得放入 WebRoot、uploads 或公开下载目录。
+- Linux 秘密文件创建权限为 `0600`；Windows 继承私有数据目录 ACL，应限制该目录为运行用户可访问。
+- 表单和 JSON 登录共享每来源地址每分钟 5 次、每进程全局每分钟 30 次的窗口；拒绝返回 `429` 与 `Retry-After`。
+- 这是单进程防护，多副本需入口共享限流；转发 IP 只有在可信反代配置下可靠，全局上限作为兜底。
+- 新密码至少 12 位且不得等于旧密码，不影响已有短密码的登录；改用户名不能解除首次改密限制。
+- 改密或改用户名轮换会话安全版本，其他浏览器会话失效，当前设置请求续发有效会话。旧版本 Cookie 升级后需重新登录。
+
+升级验收、失败排查、回滚见[后台认证安全](../developer/admin-auth-security.md)。
 - `Sync__AutoSyncEnabled`：账号创建的频道/群组自动同步（默认关闭）
 - `Telegram__BotAutoSyncEnabled`：Bot 频道自动同步（默认关闭）
 - `Telegram__WebhookEnabled`：Bot Webhook 模式开关（默认关闭，使用长轮询）

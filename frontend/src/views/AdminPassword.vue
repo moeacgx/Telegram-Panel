@@ -130,8 +130,8 @@ async function savePassword() {
     ElMessage.warning('请输入当前密码')
     return
   }
-  if (passwordForm.newPassword.trim().length < 6) {
-    ElMessage.warning('新密码至少 6 位')
+  if (passwordForm.newPassword.trim().length < 12) {
+    ElMessage.warning('新密码至少 12 位，且不能与当前密码相同')
     return
   }
   if (passwordForm.newPassword !== passwordForm.confirmPassword) {

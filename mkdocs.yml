@@ -45,6 +45,7 @@ nav:
       - 数据库: reference/database.md
       - API: reference/api.md
   - 开发:
+      - 后台认证安全: developer/admin-auth-security.md
       - wgcf 共享运行器合同: developer/wgcf-wireproxy.md
       - 模块开发: developer/modules.md
       - 在线模块仓库维护: developer/module-repositories.md

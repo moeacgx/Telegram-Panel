@@ -57,9 +57,14 @@ docker compose up -d
 ### 默认后台账号（首次登录）
 
 - 用户名：`tgpanel`
-- 密码：`tgpanel123`
+- 密码：首次启动在持久化凭据目录生成 `admin-bootstrap-password.txt`，仅在服务器本地读取。
 
-登录后到「修改密码」页面改掉即可。
+v1.31.87 起不再使用通用默认口令。Docker 默认文件为宿主机 `docker-data/admin-bootstrap-password.txt`；
+桌面版位于用户持久化数据目录，与 `admin_auth.json` 同目录。勿把该文件发给他人或放进网站目录。
+首次登录必须修改为至少 12 位且不同于旧密码的新密码，完成后文件自动清理。
+可通过 `AdminAuth__InitialPassword` 显式设置安全初始口令；已有管理员凭据不被配置覆盖。
+历史尚未改密且仍使用 `tgpanel123` 的实例升级后会旋转为随机口令，读取上述文件登录。
+升级后旧浏览器会话失效，需要重新登录；详情见[认证安全](../developer/admin-auth-security.md)。
 
 ### 可选配置：自定义 Telegram API 凭据
 
