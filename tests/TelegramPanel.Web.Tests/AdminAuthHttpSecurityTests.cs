@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.FileProviders;
 using TelegramPanel.Web.Services;
 using Xunit;
 
@@ -20,6 +21,107 @@ public sealed class AdminAuthHttpSecurityTests
 {
     private const string InitialPassword = "Initial-password-2026!";
     private const string NewPassword = "Changed-password-2026!";
+
+    private const string SpaIndex = "<!doctype html><html><body><div id=app></div></body></html>";
+    private const string SpaScript = "window.panelReady = true;";
+    private const string SpaStyle = "body { color: black; }";
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Spa_ExistingAssets_AreServedBeforeFallback(bool authenticated, bool head)
+    {
+        await using var host = await SecurityHost.StartAsync();
+        using var client = host.CreateClient();
+        if (authenticated)
+        {
+            using var login = await LoginAsync(client, form: false, await GetTokenAsync(client));
+            Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+            Assert.True(host.Store.MustChangePassword);
+        }
+
+        foreach (var (path, expectedBody, mediaType) in new[]
+        {
+            ("/ui/assets/index-test.js", SpaScript, "text/javascript"),
+            ("/ui/assets/index-test.css", SpaStyle, "text/css")
+        })
+        {
+            using var request = new HttpRequestMessage(head ? HttpMethod.Head : HttpMethod.Get, path);
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(mediaType, response.Content.Headers.ContentType?.MediaType);
+            Assert.Equal(head ? "" : expectedBody, await response.Content.ReadAsStringAsync());
+            Assert.True(response.Headers.CacheControl?.Public);
+            Assert.Equal(TimeSpan.FromDays(365), response.Headers.CacheControl?.MaxAge);
+            Assert.Contains("immutable", response.Headers.CacheControl!.ToString());
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Spa_MissingAssets_NeverReturnEntryHtml(bool authenticated, bool head)
+    {
+        await using var host = await SecurityHost.StartAsync();
+        using var client = host.CreateClient();
+        if (authenticated)
+        {
+            using var login = await LoginAsync(client, form: false, await GetTokenAsync(client));
+            Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+        }
+
+        using var request = new HttpRequestMessage(head ? HttpMethod.Head : HttpMethod.Get, "/ui/assets/missing.js");
+        using var response = await client.SendAsync(request);
+        // 初始密码会话的 HEAD 保持安全中间件原有拒绝合同。
+        Assert.Equal(authenticated && head ? HttpStatusCode.Forbidden : HttpStatusCode.NotFound, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        Assert.NotEqual("text/html", response.Content.Headers.ContentType?.MediaType);
+        Assert.DoesNotContain("<html>", await response.Content.ReadAsStringAsync());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Spa_EntryHtml_IsAvailableAndNeverCached(bool authenticated)
+    {
+        await using var host = await SecurityHost.StartAsync();
+        using var client = host.CreateClient();
+        if (authenticated)
+        {
+            using var login = await LoginAsync(client, form: false, await GetTokenAsync(client));
+            Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+        }
+
+        foreach (var path in new[] { "/ui/dashboard", "/ui/admin/password", "/ui/index.html" })
+        {
+            using var response = await client.GetAsync(path);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
+            Assert.Equal(SpaIndex, await response.Content.ReadAsStringAsync());
+            Assert.True(response.Headers.CacheControl?.NoCache);
+            Assert.True(response.Headers.CacheControl?.NoStore);
+            Assert.True(response.Headers.CacheControl?.MustRevalidate);
+            Assert.Contains(response.Headers.Pragma, value => value.Name == "no-cache");
+        }
+    }
+
+    [Fact]
+    public async Task InitialSession_UploadsStillPassThroughPasswordGuard()
+    {
+        await using var host = await SecurityHost.StartAsync();
+        using var client = host.CreateClient();
+        using var anonymous = await client.GetAsync("/uploads/test.txt");
+        Assert.Equal(HttpStatusCode.OK, anonymous.StatusCode);
+        using var login = await LoginAsync(client, form: false, await GetTokenAsync(client));
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+        using var blocked = await client.GetAsync("/uploads/test.txt");
+        Assert.Equal(HttpStatusCode.Redirect, blocked.StatusCode);
+        Assert.Equal("/ui/admin/password", blocked.Headers.Location?.OriginalString);
+    }
 
     [Theory]
     [InlineData(false)]
@@ -202,6 +304,14 @@ public sealed class AdminAuthHttpSecurityTests
         {
             var directory = Path.Combine(Path.GetTempPath(), "telegram-panel-auth-http-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(directory);
+            var spaDirectory = Path.Combine(directory, "wwwroot", "panel-spa");
+            Directory.CreateDirectory(Path.Combine(spaDirectory, "assets"));
+            await File.WriteAllTextAsync(Path.Combine(spaDirectory, "index.html"), SpaIndex);
+            await File.WriteAllTextAsync(Path.Combine(spaDirectory, "assets", "index-test.js"), SpaScript);
+            await File.WriteAllTextAsync(Path.Combine(spaDirectory, "assets", "index-test.css"), SpaStyle);
+            var uploadsDirectory = Path.Combine(directory, "uploads");
+            Directory.CreateDirectory(uploadsDirectory);
+            await File.WriteAllTextAsync(Path.Combine(uploadsDirectory, "test.txt"), "existing upload");
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions
             {
                 EnvironmentName = "Testing", ContentRootPath = directory
@@ -235,11 +345,15 @@ public sealed class AdminAuthHttpSecurityTests
             var app = builder.Build();
             var snapshotCaptured = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var releaseLateLogin = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            app.UseRouting();
-            app.UseAuthentication();
+            var spaRoot = app.UsePanelSpaAndSecurity();
+            app.UseStaticFiles(new StaticFileOptions
+            {
+                FileProvider = new PhysicalFileProvider(uploadsDirectory),
+                RequestPath = "/uploads"
+            });
             app.UseAuthorization();
             app.UseAntiforgery();
-            app.Use((context, next) => AdminAuthSecurity.ProtectAsync(context, next));
+            app.MapPanelSpa(spaRoot);
             app.MapGet("/api/panel/auth/csrf", (HttpContext context, IAntiforgery antiforgery) =>
                 AdminAuthSecurity.GetCsrfToken(context, antiforgery)).AllowAnonymous();
             app.MapGet("/api/panel/auth/me", (HttpContext context, AdminCredentialStore store) => Results.Ok(new

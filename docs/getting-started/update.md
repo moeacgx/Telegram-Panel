@@ -288,6 +288,25 @@ docker compose up -d
 
 如果 `git stash pop` 出现冲突，按提示手动合并 `docker-compose.yml` 后再继续。
 
+## 页面空白但入口返回 200
+
+适用于 v1.31.87 故障排查及 v1.31.88 修复验收：先在浏览器开发者工具的网络面板检查入口实际引用的
+`/ui/assets/` JS/CSS。若全部 404，而 `/api/panel/auth/me` 正常，不能判为数据丢失，
+也不要删除数据库或管理员凭据。v1.31.87 存在 SPA 静态服务与路由顺序冲突，
+需要包含修复的应用版本；清浏览器缓存不能修复服务端持续返回的 404。
+
+包含修复的源码提供以下只读检查，要求容器运行且仓库工作目录内存在对应脚本：
+
+```bash
+timeout 60s docker exec -i telegram-panel python3 - http://127.0.0.1:5000 < tools/check-spa-assets.py
+```
+
+成功判据：入口正常、所有引用 JS/CSS 的 GET/HEAD 为 200、MIME 正确、缺失资源为 404；
+随后浏览器应显示登录页，正常登录后能看到仪表盘。检查失败时保留版本、镜像和资源路径，
+核对发布目录及中间件顺序。回滚只切换已验收应用镜像，保留 `docker-data` 与凭据；
+不要回滚到同样存在此故障的版本。认证回滚风险见
+[后台认证安全](../developer/admin-auth-security.md)。
+
 ## Release 更新内容
 
 GitHub Release 会自动生成完整变更记录，并在 Release 正文保留“本次版本主要更新”“部署与更新”“应用内更新资产”等固定段落。面板左上角版本弹窗会读取最新 Release Notes 并展示；如果页面没有显示更新内容，先点击“立即检查”，再打开对应 GitHub Release 页面确认正文是否为空。

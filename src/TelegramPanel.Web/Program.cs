@@ -768,9 +768,6 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseForwardedHeaders();
-app.UseRouting();
-app.UseAuthentication();
-app.Use(AdminAuthSecurity.ProtectAsync);
 
 // 仅在存在 HTTPS 端口/端点时启用重定向；否则会产生 “Failed to determine the https port for redirect.” 噪声
 var httpsPort = app.Configuration["ASPNETCORE_HTTPS_PORT"];
@@ -781,34 +778,11 @@ var hasHttpsEndpoint = !string.IsNullOrWhiteSpace(httpsPort)
 if (hasHttpsEndpoint)
     app.UseHttpsRedirection();
 
+// SPA 静态资源与安全管线共享注册，避免路由提前拦截已有文件。
+var spaRoot = app.UsePanelSpaAndSecurity();
+
 // 静态文件（包括 MudBlazor 等 NuGet 包的静态 Web 资源）
 app.UseStaticFiles();
-var spaRoot = Path.Combine(app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot"), "panel-spa");
-if (Directory.Exists(spaRoot))
-{
-    app.UseStaticFiles(new StaticFileOptions
-    {
-        FileProvider = new PhysicalFileProvider(spaRoot),
-        RequestPath = "/ui",
-        OnPrepareResponse = context =>
-        {
-            var fileName = context.File.Name;
-            var requestPath = context.Context.Request.Path.Value ?? string.Empty;
-            var headers = context.Context.Response.Headers;
-
-            if (string.Equals(fileName, "index.html", StringComparison.OrdinalIgnoreCase))
-            {
-                headers.CacheControl = "no-cache, no-store, must-revalidate";
-                headers.Pragma = "no-cache";
-                headers.Expires = "0";
-                return;
-            }
-
-            if (requestPath.StartsWith("/ui/assets/", StringComparison.OrdinalIgnoreCase))
-                headers.CacheControl = "public, max-age=31536000, immutable";
-        }
-    });
-}
 var persistentUploadsRoot = StoragePathResolver.ResolvePersistentRoot(app.Configuration);
 if (!string.IsNullOrWhiteSpace(persistentUploadsRoot))
 {
@@ -1019,29 +993,7 @@ var adminAuthEnabled = adminCredentials.Enabled;
 
 app.MapPanelAdminApi(adminAuthEnabled);
 
-if (Directory.Exists(spaRoot))
-{
-    app.MapMethods("/ui/assets/{**path}", new[] { HttpMethods.Get, HttpMethods.Head }, (HttpContext http) =>
-    {
-        http.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
-        http.Response.Headers.Pragma = "no-cache";
-        http.Response.Headers.Expires = "0";
-        return Results.NotFound();
-    }).AllowAnonymous();
-
-    app.MapMethods("/ui/{**path}", new[] { HttpMethods.Get, HttpMethods.Head }, async (HttpContext http) =>
-    {
-        var indexPath = Path.Combine(spaRoot, "index.html");
-        if (!File.Exists(indexPath))
-            return Results.NotFound();
-
-        http.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
-        http.Response.Headers.Pragma = "no-cache";
-        http.Response.Headers.Expires = "0";
-        var html = await File.ReadAllTextAsync(indexPath, http.RequestAborted);
-        return Results.Content(html, "text/html; charset=utf-8");
-    }).AllowAnonymous();
-}
+app.MapPanelSpa(spaRoot);
 
 var razor = app.MapRazorComponents<TelegramPanel.Web.Components.App>()
     .AddInteractiveServerRenderMode();

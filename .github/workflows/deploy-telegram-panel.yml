@@ -84,6 +84,8 @@ jobs:
             docker ps --filter name=telegram-panel --format 'container={{.Names}} image={{.Image}} status={{.Status}}'
             docker logs --tail 120 telegram-panel
             curl -fsS -I http://127.0.0.1:5000/ui/dashboard
+            # HTML 200 不代表页面可用；在容器内验证入口实际引用的 JS/CSS。
+            timeout 60s docker exec -i telegram-panel python3 - http://127.0.0.1:5000 < tools/check-spa-assets.py
             VERSION_RESPONSE="$(curl -fsS http://127.0.0.1:5000/api/panel/auth/me)"
             printf '%s\n' "$VERSION_RESPONSE"
             EXPECTED_VERSION="$(docker run --rm --entrypoint sh "$IMAGE" -c 'cat /app/version.txt')"

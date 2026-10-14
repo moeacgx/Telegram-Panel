@@ -1,5 +1,15 @@
 # 管理接口速查
 
+## SPA 页面和资源（v1.31.88 起）
+
+部署必须同时包含 SPA 入口和对应资源。匿名及首次改密会话均可读取已有
+`/ui/assets/*` JS/CSS：GET/HEAD 返回 200、正确资源 MIME，缓存为
+`public, max-age=31536000, immutable`。`/ui/dashboard`、`/ui/admin/password`
+等页面入口返回 HTML 并禁止缓存。匿名请求缺失资源返回禁止缓存的 404，不能用 HTML
+兜底冒充资源成功。首次改密会话的缺失资源 HEAD 仍遵循原安全限制。
+业务接口继续要求认证及完成首次改密。验收、失败排查及回滚见
+[后台认证安全](../developer/admin-auth-security.md)。
+
 ## 后台认证加固（v1.31.87 起）
 
 `GET /api/panel/auth/csrf` 返回 `{ "token": "..." }` 并设置防伪 Cookie，响应禁止缓存。
