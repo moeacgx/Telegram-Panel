@@ -427,7 +427,9 @@
                   <el-dropdown-item :icon="User" :disabled="row.id <= 0" @click="boundAccountsDialog?.open(row)">已绑定账号</el-dropdown-item>
                   <el-dropdown-item divided :icon="Delete" disabled aria-label="删除出口"><div>删除出口<small v-if="proxyDeleteReason(row)" class="proxy-menu-reason">{{ proxyDeleteReason(row) }}</small></div></el-dropdown-item>
                 </template>
-                <el-dropdown-item v-else-if="row.kind === 'warp'" disabled>请迁移至 WARP 新出口</el-dropdown-item>
+                <el-dropdown-item v-else-if="row.kind === 'warp'" :icon="Delete" :disabled="!!proxyDeleteReason(row)" aria-label="删除旧出口" @click="removeProxy(row)">
+                  <div>删除旧出口<small v-if="proxyDeleteReason(row)" class="proxy-menu-reason">{{ proxyDeleteReason(row) }}</small></div>
+                </el-dropdown-item>
                 <template v-else>
                   <el-dropdown-item :icon="VideoPlay"
                       :disabled="testingIds.has(row.id) || deletingIds.has(row.id) || !row.isEnabled"
@@ -1041,7 +1043,7 @@ function categoryProxyCount(category: ProxyCategory) {
 }
 
 function isSelectableProxy(proxy: OutboundProxy) {
-  return (proxy.id > 0 || !!proxy.managedWgcfProfile) && proxy.kind !== 'warp'
+  return proxy.id > 0 || !!proxy.managedWgcfProfile
 }
 
 function onProxySelectionChange(rows: ProxyTableRow[]) {
