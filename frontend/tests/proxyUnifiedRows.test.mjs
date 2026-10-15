@@ -97,7 +97,7 @@ test('临时或已占用档案由运行器标记不可领取，健康快照也�
   assert.equal(countAvailableWgcfPool(proxies, status), 0)
 })
 
-test('统一表允许受管档案多选，未落库档案通过档案标识保持可选', () => {
+test('统一表允许旧 WARP 记录多选以便清理，未落库档案通过档案标识保持可选', () => {
   assert.doesNotMatch(controller, /<el-table|<section|<h2/)
   assert.match(view, /row-key="rowKey"/)
   for (const action of ['resume', 'start', 'stop', 'test']) assert.ok(view.includes(`operate(row.wgcfProfile, '${action}')`))
@@ -107,7 +107,7 @@ test('统一表允许受管档案多选，未落库档案通过档案标识保�
   const selectable = new Function(`${code}\nreturn isSelectableProxy`)()
   assert.equal(selectable(mergeProxyRows([], [profile({ proxyId: null })])[0]), true)
   assert.equal(selectable(proxy({ accountCount: 3 })), true)
-  assert.equal(selectable(proxy({ kind: 'warp', managedWgcfProfile: null })), false)
+  assert.equal(selectable(proxy({ kind: 'warp', managedWgcfProfile: null })), true)
   assert.equal(selectable(proxy({ kind: 'manual', managedWgcfProfile: null })), true)
 })
 

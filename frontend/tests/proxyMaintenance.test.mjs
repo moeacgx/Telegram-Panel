@@ -16,6 +16,11 @@ test('代理列表支持对勾选项执行批量删除', () => {
   assert.match(panelApiSource, /\/proxies\/batch\/delete/)
 })
 
+test('旧 WARP 行保留删除入口，但继续隐藏旧运行维护操作', () => {
+  assert.match(proxiesSource, /v-else-if="row\.kind === 'warp'"[\s\S]*删除旧出口/)
+  assert.match(proxiesSource, /旧出口待迁移/)
+})
+
 test('批量删除展示逐项失败且保留被占用代理', () => {
   assert.match(typesSource, /interface ProxyBatchResult/)
   assert.match(proxiesSource, /deleteFailures\.value\.push/)
