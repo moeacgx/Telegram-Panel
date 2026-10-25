@@ -86,11 +86,12 @@ public class AccountImportService
 
         var importedPhones = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var file in files)
+        for (var index = 0; index < files.Count; index++)
         {
+            var file = files[index];
             await using var upload = file.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
             results.Add(await ExecuteImportWithProxyAsync(
-                file.Name,
+                BuildImportItemKey(file.Name, index),
                 proxyBinding,
                 importedPhones,
                     proxy => ImportFromSessionFileStreamAsync(
@@ -139,10 +140,11 @@ public class AccountImportService
 
         var importedPhones = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var file in files)
+        for (var index = 0; index < files.Count; index++)
         {
+            var file = files[index];
             results.Add(await ExecuteImportWithProxyAsync(
-                file.FileName,
+                BuildImportItemKey(file.FileName, index),
                 proxyBinding,
                 importedPhones,
                 proxy => ImportFromSessionFileStreamAsync(
@@ -186,11 +188,12 @@ public class AccountImportService
 
         var importedPhones = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var file in files)
+        for (var index = 0; index < files.Count; index++)
         {
+            var file = files[index];
             var api = await _apiProfilePool.SelectForNewAccountAsync(_accountManagement);
             results.Add(await ExecuteImportWithProxyAsync(
-                file.FileName,
+                BuildImportItemKey(file.FileName, index),
                 proxyBinding,
                 importedPhones,
                 proxy => ImportFromSessionFileStreamAsync(
@@ -462,7 +465,7 @@ public class AccountImportService
                 var assignment = proxyAssignments?[index];
                 var effectiveBinding = BuildZipProxyBinding(proxyBinding, assignment);
                 var result = await ExecuteImportWithProxyAsync(
-                    Path.GetFileNameWithoutExtension(jsonPath),
+                    BuildImportSourceKey(extractDir, jsonPath),
                     effectiveBinding,
                     importedPhones: null,
                     proxy => ImportFromPackageEntryAsync(
@@ -814,7 +817,7 @@ public class AccountImportService
             var effectiveBinding = BuildZipProxyBinding(proxyBinding, assignment);
             var api = await _apiProfilePool.SelectForNewAccountAsync(_accountManagement);
             var result = await ExecuteImportWithProxyAsync(
-                Path.GetFileName(tdataDir),
+                BuildImportSourceKey(importRoot, tdataDir),
                 effectiveBinding,
                 importedPhones,
                 proxy => ImportFromTdataDirectoryAsync(
@@ -1902,6 +1905,9 @@ public class AccountImportService
         }
         return string.IsNullOrWhiteSpace(key) ? "account" : key;
     }
+
+    private static string BuildImportItemKey(string fileName, int index) =>
+        $"{index.ToString("D4", System.Globalization.CultureInfo.InvariantCulture)}/{fileName}";
 
     private static AccountProxyBindingInput? BuildZipProxyBinding(
         AccountProxyBindingInput? fallback,

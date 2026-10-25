@@ -164,6 +164,32 @@ public sealed class BatchProxyAccountImportTests
     }
 
     [Fact]
+    public async Task Zip导入相同JSON文件名的账号分别创建独立WARP()
+    {
+        await using var fixture = await BatchImportFixture.CreateAsync(enableManagedWarp: true);
+        await using var zip = CreateAccountZip(
+            ValidAccount("first/account.json", "8613800001261", 1261),
+            ValidAccount("second/account.json", "8613800001262", 1262));
+
+        var results = await fixture.ImportService.ImportFromZipStreamAsync(
+            "same-account-name.zip",
+            zip,
+            proxyBinding: new AccountProxyBindingInput(
+                "warp_per_account",
+                AcceptWarpTerms: true,
+                WarpRequestId: "batch-warp-request"));
+
+        Assert.Equal(2, results.Count);
+        Assert.True(results[0].Success, results[0].Error);
+        Assert.True(results[1].Success, results[1].Error);
+        var accounts = await fixture.Db.Accounts.AsNoTracking().OrderBy(x => x.Phone).ToListAsync();
+        Assert.Equal(2, accounts.Count);
+        Assert.All(accounts, account => Assert.NotNull(account.ProxyId));
+        Assert.Equal(2, accounts.Select(account => account.ProxyId).Distinct().Count());
+        Assert.Equal(2, fixture.ManagedWarp!.ProvisionCalls);
+    }
+
+    [Fact]
     public async Task 中间账号失败时后续账号仍使用原代理槽位()
     {
         await using var fixture = await BatchImportFixture.CreateAsync();
@@ -679,7 +705,9 @@ public sealed class BatchProxyAccountImportTests
         public ProxyManagementService ProxyManagement { get; }
         public AccountImportService ImportService { get; }
 
-        public static async Task<BatchImportFixture> CreateAsync()
+        public FakeManagedWarpProvisioner? ManagedWarp { get; private set; }
+
+        public static async Task<BatchImportFixture> CreateAsync(bool enableManagedWarp = false)
         {
             var connection = new SqliteConnection("Data Source=:memory:");
             await connection.OpenAsync();
@@ -702,13 +730,17 @@ public sealed class BatchProxyAccountImportTests
             var probe = new RecordingProbeService(events);
             var clientPool = new RecordingClientPool();
             var temporaryWarpClaims = new TemporaryWarpClaimStore();
+            var managedWarp = enableManagedWarp
+                ? new FakeManagedWarpProvisioner(db, temporaryWarpClaims)
+                : null;
             var proxyManagement = new ProxyManagementService(
                 db,
                 clientPool,
                 probe,
                 NullLogger<ProxyManagementService>.Instance,
                 configuration,
-                temporaryWarpClaims);
+                temporaryWarpClaims,
+                managedWarpProvisioner: managedWarp);
             var accountManagement = new AccountManagementService(
                 new AccountRepository(db),
                 new ChannelRepository(db),
@@ -737,7 +769,10 @@ public sealed class BatchProxyAccountImportTests
                 clientPool,
                 events,
                 proxyManagement,
-                importService);
+                importService)
+            {
+                ManagedWarp = managedWarp
+            };
         }
 
         public async Task<OutboundProxy> AddProxyAsync(
