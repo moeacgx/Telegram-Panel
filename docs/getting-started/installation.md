@@ -77,6 +77,8 @@ v1.31.87 起不再使用通用默认口令。Docker 默认文件为宿主机 `do
 导入账号、手机号登录和二维码登录会在第一条 Telegram 请求前要求选择代理出口、自动分配
 空闲轻量 WARP、创建一对一轻量 WARP、有效的全局代理或明确直连。登录、导入和账号绑定创建
 一对一轻量 WARP 时必须显式接受条款并通过出口检测。系统不会先用面板公网 IP 登录，再补绑代理。
+批量 Zip 导入会按压缩包内的相对路径区分账号，多选 Session 导入会按文件顺序区分；即使不同目录中
+都使用 `account.json` 或 `account.session`，每个账号也会创建并绑定自己的轻量 WARP 出口。
 
 普通 HTTP、SOCKS5、MTProxy 和 Resin 可直接在 **代理管理** 中添加。“一键创建 WARP”
 使用 Linux 镜像内置 wgcf＋wireproxy，无需额外 Compose 文件、Docker Socket 或每出口容器；出口名称

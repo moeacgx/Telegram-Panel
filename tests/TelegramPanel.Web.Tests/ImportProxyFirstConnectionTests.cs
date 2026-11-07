@@ -508,6 +508,48 @@ public sealed class ImportProxyFirstConnectionTests
     }
 
     [Fact]
+    public async Task 批量Session导入同名文件仍分别创建独立WARP()
+    {
+        await using var fixture = await ImportFixture.CreateAsync(
+            OutboundProxyProtocols.Http,
+            enableManaged: true,
+            warpProbe: new SuccessfulWarpProbeService());
+        fixture.Importer.ResultFactory = count => new ImportResult(
+            true,
+            $"861380000031{count}",
+            10310 + count,
+            $"warp-created-{count}",
+            $"sessions/861380000031{count}.session");
+        var files = new[]
+        {
+            new AccountImportFile("account.session", new MemoryStream(new byte[] { 1 })),
+            new AccountImportFile("account.session", new MemoryStream(new byte[] { 2 }))
+        };
+
+        try
+        {
+            var results = await fixture.Service.ImportFromSessionFileStreamsBalancedAsync(
+                files,
+                proxyBinding: new AccountProxyBindingInput(
+                    "warp_per_account",
+                    AcceptWarpTerms: true,
+                    WarpRequestId: "batch-warp-request"));
+
+            Assert.Equal(2, results.Count);
+            Assert.All(results, result => Assert.True(result.Success, result.Error));
+            Assert.Equal(2, fixture.ManagedWarp!.ProvisionCalls);
+            var accounts = await fixture.Db.Accounts.AsNoTracking().ToListAsync();
+            Assert.Equal(2, accounts.Count);
+            Assert.Equal(2, accounts.Select(account => account.ProxyId).Distinct().Count());
+        }
+        finally
+        {
+            foreach (var file in files)
+                await file.Content.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task 创建一对一WARP导入失败会停止出口且保留注册档案()
     {
         await using var fixture = await ImportFixture.CreateAsync(
