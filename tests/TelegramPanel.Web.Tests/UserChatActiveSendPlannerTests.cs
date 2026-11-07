@@ -327,31 +327,31 @@ public sealed class UserChatActiveSendPlannerTests
                 return (true, (string?)null);
             });
 
-        await startEntered.Task;
-        using var cancellation = new CancellationTokenSource();
-        var waiting = waitingTracker.EnsureReadyAsync(
-            true, accountId, botUserId,
-            () =>
-            {
-                Interlocked.Increment(ref historyCalls);
-                return Task.FromResult((true, (string?)null, false));
-            },
-            () => Task.FromResult((true, (string?)null)),
-            cancellation.Token);
-
         try
         {
+            await startEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            using var cancellation = new CancellationTokenSource();
+            var waiting = waitingTracker.EnsureReadyAsync(
+                true, accountId, botUserId,
+                () =>
+                {
+                    Interlocked.Increment(ref historyCalls);
+                    return Task.FromResult((true, (string?)null, false));
+                },
+                () => Task.FromResult((true, (string?)null)),
+                cancellation.Token);
+
             cancellation.Cancel();
+            // 一秒窗口在全量运行中重复超时；此上限只防止死锁，不作为取消延迟指标。
             await Assert.ThrowsAnyAsync<OperationCanceledException>(
-                () => waiting.WaitAsync(TimeSpan.FromSeconds(1)));
+                () => waiting.WaitAsync(TimeSpan.FromSeconds(10)));
             Assert.Equal(0, historyCalls);
         }
         finally
         {
             releaseStart.TrySetResult();
+            Assert.True((await first.WaitAsync(TimeSpan.FromSeconds(10))).Success);
         }
-
-        Assert.True((await first).Success);
     }
 
     [Fact]
