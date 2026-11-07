@@ -101,6 +101,89 @@ internal static class UserChatActiveSendPlanner
     }
 }
 
+internal sealed class UserChatActiveBotStartTracker
+{
+    // 固定数量的分片避免按 Bot 无限累积门闩；哈希碰撞只会额外串行，不会共享启动状态。
+    private static readonly SemaphoreSlim[] SharedStartGates =
+        Enumerable.Range(0, 1024).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
+
+    private readonly ConcurrentDictionary<(int AccountId, long BotUserId), byte> _ready = new();
+    private readonly ConcurrentDictionary<(int AccountId, long BotUserId), string> _failed = new();
+
+    public void PauseAfterBlockedError(int accountId, long botUserId, string? error)
+    {
+        if (accountId > 0 && botUserId > 0)
+            _failed[(accountId, botUserId)] = error ?? "Telegram 拒绝向该 Bot 发送消息";
+    }
+
+    internal static bool IsTelegramBlockedError(string? error)
+    {
+        var text = (error ?? string.Empty).ToUpperInvariant();
+        return text.Contains("USER_IS_BLOCKED", StringComparison.Ordinal)
+               || text.Contains("YOU_BLOCKED_USER", StringComparison.Ordinal);
+    }
+
+    public async Task<(bool Success, string? Error)> EnsureReadyAsync(
+        bool isBotTarget,
+        int accountId,
+        long botUserId,
+        Func<Task<(bool Success, string? Error, bool HasConversation)>> readConversationHistory,
+        Func<Task<(bool Success, string? Error)>> startBot,
+        CancellationToken cancellationToken = default)
+    {
+        if (!isBotTarget)
+            return (true, null);
+
+        if (accountId <= 0 || botUserId <= 0)
+            return (false, "Bot 目标缺少有效账号或用户编号");
+
+        var key = (accountId, botUserId);
+        var gateIndex = (int)((uint)HashCode.Combine(accountId, botUserId) % (uint)SharedStartGates.Length);
+        var gate = SharedStartGates[gateIndex];
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_failed.TryGetValue(key, out var previousError))
+                return (false, previousError);
+
+            if (_ready.ContainsKey(key))
+                return (true, null);
+
+            // 不同任务执行器会共享此把锁，并在前一个启动请求结束后重新读历史。
+            var history = await readConversationHistory();
+            if (!history.Success)
+            {
+                var error = history.Error ?? "无法确认账号是否已启动该 Bot";
+                if (!UserChatActiveSendRetryPolicy.ShouldRetry(error))
+                    _failed[key] = error;
+
+                return (false, error);
+            }
+
+            if (history.HasConversation)
+            {
+                _ready.TryAdd(key, 0);
+                return (true, null);
+            }
+
+            var started = await startBot();
+            if (!started.Success)
+            {
+                var error = started.Error ?? "Bot 启动失败";
+                _failed[key] = error;
+                return (false, error);
+            }
+
+            _ready.TryAdd(key, 0);
+            return (true, null);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+}
+
 public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
 {
     private const int MaxFailureLines = 100;
@@ -190,6 +273,7 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
         var verificationFailures = new ConcurrentQueue<VerificationFailure>();
         var verificationTasks = new ConcurrentDictionary<Guid, Task>();
         using var verificationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var botStartTracker = new UserChatActiveBotStartTracker();
         var accountQueueIndex = UserChatActiveSendPlanner.NormalizeQueueCursor(
             config.AccountQueueCursor,
             accountSlots.Count);
@@ -428,6 +512,32 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
                         }
                     }
 
+                    if (targetSlot.Resolved.BotUserId is long botUserId && botUserId > 0)
+                    {
+                        var startup = await botStartTracker.EnsureReadyAsync(
+                            isBotTarget: true,
+                            accountId: accountSlot.Account.Id,
+                            botUserId: botUserId,
+                            readConversationHistory: () => accountTools.HasExternalBotConversationAsync(
+                                accountSlot.Account.Id,
+                                targetSlot.Resolved,
+                                cancellationToken),
+                            startBot: async () =>
+                            {
+                                var started = await accountTools.StartExternalBotAsync(
+                                    accountSlot.Account.Id,
+                                    targetSlot.RawTarget,
+                                    targetSlot.Resolved.BotStartParameter,
+                                    cancellationToken,
+                                    assumeBotUsername: true);
+                                return (started.Success, started.Error);
+                            },
+                            cancellationToken: cancellationToken);
+
+                        if (!startup.Success)
+                            return (false, $"Bot 首次启动失败，消息未发送：{startup.Error}", null, false);
+                    }
+
                     if (useForwardSource)
                     {
                         var result = await accountTools.ForwardMessageToResolvedChatAsync(
@@ -546,6 +656,16 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
                 {
                     Interlocked.Increment(ref progress.Failed);
                     hadFailureThisRound = true;
+                    if (targetSlot.Resolved.BotUserId is long botUserId
+                        && botUserId > 0
+                        && UserChatActiveBotStartTracker.IsTelegramBlockedError(send.Error))
+                    {
+                        botStartTracker.PauseAfterBlockedError(
+                            accountSlot.Account.Id,
+                            botUserId,
+                            send.Error);
+                    }
+
                     await AddFailureAndPersistAsync(
                         taskManagement,
                         host.TaskId,
