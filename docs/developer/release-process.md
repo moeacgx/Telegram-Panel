@@ -48,7 +48,7 @@ ghcr.io/moeacgx/telegram-panel:dev-latest
 只有获得针对实际生产操作的授权后，才可将该工作流用于相应部署。
 该工作流的 `update_mode` 支持 `auto`、`image` 或 `binary`，执行时会：
 
-1. 在云端 `/home/docker/Telegram-Panel` 拉取 `dev`；
+1. 在云端 `/home/docker/Telegram-Panel` 拉取手动运行时选择的分支/引用（`github.ref_name`）；
 2. 备份 `docker-data` 中的 SQLite 数据文件；
 3. 拉取镜像并使用主 Compose 配置；v1.31.82 不再加载旧 WARP override 或 Docker Socket 挂载；
 4. 重建 `telegram-panel` 容器；

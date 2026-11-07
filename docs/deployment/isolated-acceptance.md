@@ -56,7 +56,8 @@ docker compose --env-file /dev/null -f issue190.compose.yml ps
 不能执行的场景保留未验证状态；所有适用门禁通过后才将总状态记为 `passed`。
 
 1. 记录容器状态与启动日志，检查 `/healthz`、`/ui/dashboard` 以及页面引用的 JS/CSS。
-   可使用仓库 `tools/check-spa-assets.py`；不能只看页面 HTTP 200。
+   在隔离主机的仓库目录执行 `python3 tools/check-spa-assets.py http://127.0.0.1:18091`，
+   显式使用本实例的宿主端口，避免脚本默认端口指向其他实例；不能只看页面 HTTP 200。
 2. 未登录的 `/api/panel/auth/me` 应为 `authenticated=false`、`authEnabled=true`；
    独立管理员登录后应为 `authenticated=true`，并核对实际版本与镜像一致。
 3. 对无私聊历史的 Bot 执行 `user_chat_active`，确认先成功启动一次，再发送正文。
