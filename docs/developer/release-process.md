@@ -37,7 +37,16 @@ ghcr.io/moeacgx/telegram-panel:dev-latest
 
 ### 3. 部署云端测试环境
 
-在 GitHub Actions 手动运行 `Deploy Telegram Panel`，选择 `dev` 分支，镜像使用对应 `dev-latest` 或带 SHA 的不可变标签，并在 `update_mode` 中选择 `auto`、`image` 或 `binary`。工作流会：
+适用版本：v1.31.91 起的维护交付流程。部署前必须确认目标主机和数据目录已被明确授权用于隔离测试。
+按[隔离验收部署](../deployment/isolated-acceptance.md)使用独立 Compose、独立数据和管理员，
+固定待验收 dev SHA 对应的镜像摘要；测试账号与 Telegram 目标也必须有独立授权。
+缺少环境或账号时记录具体阻塞，继续可做的实现、审查和 dev 集成，不能把镜像构建当作验收。
+
+现有 GitHub Actions `Deploy Telegram Panel` 使用 `TELEGRAM_PANEL_PROD_*` secrets，
+步骤名为 `Deploy on production host`，会写入生产主机；选择 `dev` 或默认 `dev-latest`
+不会改变目标环境。它不是隔离测试入口，不能为完成 dev 验收而自动触发。
+只有获得针对实际生产操作的授权后，才可将该工作流用于相应部署。
+该工作流的 `update_mode` 支持 `auto`、`image` 或 `binary`，执行时会：
 
 1. 在云端 `/home/docker/Telegram-Panel` 拉取 `dev`；
 2. 备份 `docker-data` 中的 SQLite 数据文件；

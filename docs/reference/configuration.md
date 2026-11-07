@@ -21,6 +21,11 @@
 
 ## Docker 数据目录（强相关）
 
+v1.31.91 起提供独立验收示例 `docker/acceptance/issue190.compose.yml`，不与生产配置叠加。
+它仅使用 `TP_ACCEPTANCE_IMAGE` 指定不可变镜像摘要，固定回环端口 `18091`、专属数据目录、
+`image` 更新模式并关闭 Webhook 与出口巡检。此变量只供 Compose 插值，不是新的应用配置项。
+环境授权、数据目录前置条件、成功判据和回滚方式见[隔离验收部署](../deployment/isolated-acceptance.md)。
+
 `docker-compose.yml` 会把宿主机 `./docker-data` 挂载到容器 `/data`，核心文件包括：
 
 - `/data/telegram-panel.db`：SQLite 数据库

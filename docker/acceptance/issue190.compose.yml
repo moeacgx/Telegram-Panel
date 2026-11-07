@@ -1,0 +1,40 @@
+# 独立验收文件：不叠加生产 Compose，不读取生产 .env 或数据目录。
+name: telegram-panel-acceptance-issue190-1-31-91
+services:
+  telegram-panel:
+    image: ${TP_ACCEPTANCE_IMAGE:?必须提供已核对 dev SHA 的镜像摘要引用}
+    pull_policy: always
+    container_name: telegram-panel-acceptance-issue190-1-31-91
+    restart: "no"
+    init: true
+    cpus: 2.0
+    mem_limit: 2g
+    ports:
+      - "127.0.0.1:18091:5000"
+    volumes:
+      - type: bind
+        source: /srv/telegram-panel-acceptance/issue190-v1.31.91/docker-data
+        target: /data
+        bind:
+          create_host_path: false
+    environment:
+      ASPNETCORE_URLS: "http://+:5000"
+      DOTNET_ENVIRONMENT: "Production"
+      SelfUpdate__Mode: "image"
+      TELEGRAM_PANEL_UPDATE_MODE: "image"
+      ConnectionStrings__DefaultConnection: "Data Source=/data/telegram-panel.db"
+      Telegram__SessionsPath: "/data/sessions"
+      AdminAuth__CredentialsPath: "/data/admin_auth.json"
+      Telegram__WebhookEnabled: "false"
+      Proxy__Egress__Maintenance__Enabled: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS --max-time 5 http://127.0.0.1:5000/healthz >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
