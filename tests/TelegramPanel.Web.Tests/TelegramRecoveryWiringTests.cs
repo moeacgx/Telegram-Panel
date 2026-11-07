@@ -53,17 +53,49 @@ public sealed class TelegramRecoveryWiringTests
         var startup = UserChatActiveHandlerSource.IndexOf(
             "botStartTracker.EnsureReadyAsync",
             StringComparison.Ordinal);
+        var startupFailure = UserChatActiveHandlerSource.IndexOf(
+            "if (!startup.Success)",
+            startup,
+            StringComparison.Ordinal);
         var forward = UserChatActiveHandlerSource.IndexOf(
             "accountTools.ForwardMessageToResolvedChatAsync",
+            StringComparison.Ordinal);
+        var image = UserChatActiveHandlerSource.IndexOf(
+            "accountTools.SendPhotoToResolvedChatAsync",
             StringComparison.Ordinal);
         var text = UserChatActiveHandlerSource.IndexOf(
             "accountTools.SendMessageToResolvedChatAsync",
             StringComparison.Ordinal);
 
         Assert.True(startup >= 0);
-        Assert.True(forward > startup);
-        Assert.True(text > startup);
+        Assert.True(startupFailure > startup);
+        Assert.True(forward > startupFailure);
+        Assert.True(image > startupFailure);
+        Assert.True(text > startupFailure);
         Assert.Contains("accountTools.StartExternalBotAsync", UserChatActiveHandlerSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Bot启动的普通与深链请求在重试中复用同一随机标识()
+    {
+        var start = ServiceSource.IndexOf(
+            "public async Task<(bool Success, string? Error, string? BotUsername)> StartExternalBotAsync",
+            StringComparison.Ordinal);
+        var nextMethod = ServiceSource.IndexOf(
+            "public async Task<(bool Success, string? Error, string? BotUsername)> StopExternalBotAsync",
+            start,
+            StringComparison.Ordinal);
+        var method = ServiceSource[start..nextMethod];
+        var requestId = method.IndexOf("var randomId = Random.Shared.NextInt64()", StringComparison.Ordinal);
+        var retry = method.IndexOf("TelegramTransientConnectionRetry.ExecuteAsync", StringComparison.Ordinal);
+
+        Assert.True(start >= 0);
+        Assert.True(nextMethod > start);
+        Assert.True(requestId >= 0);
+        Assert.True(retry > requestId);
+        Assert.Contains("client.Messages_SendMessage(", method, StringComparison.Ordinal);
+        Assert.Contains("client.Messages_StartBot(", method, StringComparison.Ordinal);
+        Assert.Equal(2, Regex.Matches(method, "random_id: randomId").Count);
     }
 
     [Fact]

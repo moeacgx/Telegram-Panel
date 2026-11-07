@@ -103,6 +103,9 @@ internal static class UserChatActiveSendPlanner
 
 internal sealed class UserChatActiveBotStartTracker
 {
+    private static readonly SemaphoreSlim[] SharedStartGates =
+        Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
+
     private readonly HashSet<(int AccountId, long BotUserId)> _ready = new();
     private readonly Dictionary<(int AccountId, long BotUserId), string> _failed = new();
 
@@ -133,36 +136,49 @@ internal sealed class UserChatActiveBotStartTracker
             return (false, "Bot 目标缺少有效账号或用户编号");
 
         var key = (accountId, botUserId);
-        if (_failed.TryGetValue(key, out var previousError))
-            return (false, previousError);
-
-        if (_ready.Contains(key))
-            return (true, null);
-
-        var history = await readConversationHistory();
-        if (!history.Success)
+        var gateIndex = (int)((uint)HashCode.Combine(accountId, botUserId) % (uint)SharedStartGates.Length);
+        var gate = SharedStartGates[gateIndex];
+        await gate.WaitAsync();
+        try
         {
-            var error = history.Error ?? "无法确认账号是否已启动该 Bot";
-            _failed[key] = error;
-            return (false, error);
-        }
+            if (_failed.TryGetValue(key, out var previousError))
+                return (false, previousError);
 
-        if (history.HasConversation)
-        {
+            if (_ready.Contains(key))
+                return (true, null);
+
+            // 不同任务执行器会共享此把锁，并在前一个启动请求结束后重新读历史。
+            var history = await readConversationHistory();
+            if (!history.Success)
+            {
+                var error = history.Error ?? "无法确认账号是否已启动该 Bot";
+                if (!UserChatActiveSendRetryPolicy.ShouldRetry(error))
+                    _failed[key] = error;
+
+                return (false, error);
+            }
+
+            if (history.HasConversation)
+            {
+                _ready.Add(key);
+                return (true, null);
+            }
+
+            var started = await startBot();
+            if (!started.Success)
+            {
+                var error = started.Error ?? "Bot 启动失败";
+                _failed[key] = error;
+                return (false, error);
+            }
+
             _ready.Add(key);
             return (true, null);
         }
-
-        var started = await startBot();
-        if (!started.Success)
+        finally
         {
-            var error = started.Error ?? "Bot 启动失败";
-            _failed[key] = error;
-            return (false, error);
+            gate.Release();
         }
-
-        _ready.Add(key);
-        return (true, null);
     }
 }
 

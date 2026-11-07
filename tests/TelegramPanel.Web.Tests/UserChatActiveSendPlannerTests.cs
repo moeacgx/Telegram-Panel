@@ -241,6 +241,72 @@ public sealed class UserChatActiveSendPlannerTests
     }
 
     [Fact]
+    public async Task 瞬时历史读取失败不缓存并允许有限发送重试恢复()
+    {
+        var tracker = new UserChatActiveBotStartTracker();
+        var historyCalls = 0;
+        var startCalls = 0;
+
+        var first = await tracker.EnsureReadyAsync(
+            true, 17, 199,
+            () =>
+            {
+                historyCalls++;
+                return Task.FromResult((false, (string?)"请求超时", false));
+            },
+            () =>
+            {
+                startCalls++;
+                return Task.FromResult((true, (string?)null));
+            });
+        var retry = await tracker.EnsureReadyAsync(
+            true, 17, 199,
+            () =>
+            {
+                historyCalls++;
+                return Task.FromResult((true, (string?)null, false));
+            },
+            () =>
+            {
+                startCalls++;
+                return Task.FromResult((true, (string?)null));
+            });
+
+        Assert.False(first.Success);
+        Assert.True(retry.Success);
+        Assert.Equal(2, historyCalls);
+        Assert.Equal(1, startCalls);
+    }
+
+    [Fact]
+    public async Task 并发任务启动同一Bot时在共享锁内重新检查历史()
+    {
+        var firstTracker = new UserChatActiveBotStartTracker();
+        var secondTracker = new UserChatActiveBotStartTracker();
+        var accountId = 1000 + Environment.TickCount % 1000000;
+        var botUserId = DateTime.UtcNow.Ticks;
+        var conversationExists = 0;
+        var startCalls = 0;
+
+        Func<Task<(bool Success, string? Error, bool HasConversation)>> readHistory = () =>
+            Task.FromResult((true, (string?)null, Volatile.Read(ref conversationExists) != 0));
+        Func<Task<(bool Success, string? Error)>> startBot = async () =>
+        {
+            Interlocked.Increment(ref startCalls);
+            await Task.Delay(20);
+            Volatile.Write(ref conversationExists, 1);
+            return (true, null);
+        };
+
+        var results = await Task.WhenAll(
+            firstTracker.EnsureReadyAsync(true, accountId, botUserId, readHistory, startBot),
+            secondTracker.EnsureReadyAsync(true, accountId, botUserId, readHistory, startBot));
+
+        Assert.All(results, result => Assert.True(result.Success));
+        Assert.Equal(1, startCalls);
+    }
+
+    [Fact]
     public async Task 新一轮执行在无历史时允许重新启动()
     {
         var previousRun = new UserChatActiveBotStartTracker();

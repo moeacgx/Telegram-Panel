@@ -1155,6 +1155,8 @@ public class AccountTelegramToolsService
     {
         try
         {
+            // 两次连接尝试必须使用同一 random_id，避免服务端已接受但响应超时时重复启动。
+            var randomId = Random.Shared.NextInt64();
             return await TelegramTransientConnectionRetry.ExecuteAsync<(
                 bool Success,
                 string? Error,
@@ -1182,14 +1184,16 @@ public class AccountTelegramToolsService
                         return (false, "无法获取 Bot access_hash", null);
 
                     var inputUser = new InputUser(user.id, user.access_hash);
-                    var randomId = Random.Shared.NextInt64();
                     if (string.IsNullOrWhiteSpace(finalStart))
                     {
                         var inputPeer = new InputPeerUser(user.id, user.access_hash);
                         await ExecuteTelegramRequestAsync(
                             accountId,
                             "启用 Bot",
-                            () => client.SendMessageAsync(inputPeer, "/start"),
+                            () => client.Messages_SendMessage(
+                                peer: inputPeer,
+                                message: "/start",
+                                random_id: randomId),
                             cancellationToken,
                             resetClientOnTimeout: false);
                     }
