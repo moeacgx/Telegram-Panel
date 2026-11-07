@@ -103,11 +103,12 @@ internal static class UserChatActiveSendPlanner
 
 internal sealed class UserChatActiveBotStartTracker
 {
+    // 固定数量的分片避免按 Bot 无限累积门闩；哈希碰撞只会额外串行，不会共享启动状态。
     private static readonly SemaphoreSlim[] SharedStartGates =
-        Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
+        Enumerable.Range(0, 1024).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
 
-    private readonly HashSet<(int AccountId, long BotUserId)> _ready = new();
-    private readonly Dictionary<(int AccountId, long BotUserId), string> _failed = new();
+    private readonly ConcurrentDictionary<(int AccountId, long BotUserId), byte> _ready = new();
+    private readonly ConcurrentDictionary<(int AccountId, long BotUserId), string> _failed = new();
 
     public void PauseAfterBlockedError(int accountId, long botUserId, string? error)
     {
@@ -127,7 +128,8 @@ internal sealed class UserChatActiveBotStartTracker
         int accountId,
         long botUserId,
         Func<Task<(bool Success, string? Error, bool HasConversation)>> readConversationHistory,
-        Func<Task<(bool Success, string? Error)>> startBot)
+        Func<Task<(bool Success, string? Error)>> startBot,
+        CancellationToken cancellationToken = default)
     {
         if (!isBotTarget)
             return (true, null);
@@ -138,13 +140,13 @@ internal sealed class UserChatActiveBotStartTracker
         var key = (accountId, botUserId);
         var gateIndex = (int)((uint)HashCode.Combine(accountId, botUserId) % (uint)SharedStartGates.Length);
         var gate = SharedStartGates[gateIndex];
-        await gate.WaitAsync();
+        await gate.WaitAsync(cancellationToken);
         try
         {
             if (_failed.TryGetValue(key, out var previousError))
                 return (false, previousError);
 
-            if (_ready.Contains(key))
+            if (_ready.ContainsKey(key))
                 return (true, null);
 
             // 不同任务执行器会共享此把锁，并在前一个启动请求结束后重新读历史。
@@ -160,7 +162,7 @@ internal sealed class UserChatActiveBotStartTracker
 
             if (history.HasConversation)
             {
-                _ready.Add(key);
+                _ready.TryAdd(key, 0);
                 return (true, null);
             }
 
@@ -172,7 +174,7 @@ internal sealed class UserChatActiveBotStartTracker
                 return (false, error);
             }
 
-            _ready.Add(key);
+            _ready.TryAdd(key, 0);
             return (true, null);
         }
         finally
@@ -529,7 +531,8 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
                                     cancellationToken,
                                     assumeBotUsername: true);
                                 return (started.Success, started.Error);
-                            });
+                            },
+                            cancellationToken: cancellationToken);
 
                         if (!startup.Success)
                             return (false, $"Bot 首次启动失败，消息未发送：{startup.Error}", null, false);

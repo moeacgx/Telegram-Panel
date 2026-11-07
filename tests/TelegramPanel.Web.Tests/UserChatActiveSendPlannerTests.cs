@@ -283,8 +283,8 @@ public sealed class UserChatActiveSendPlannerTests
     {
         var firstTracker = new UserChatActiveBotStartTracker();
         var secondTracker = new UserChatActiveBotStartTracker();
-        var accountId = 1000 + Environment.TickCount % 1000000;
-        var botUserId = DateTime.UtcNow.Ticks;
+        const int accountId = 987654;
+        const long botUserId = 123456789;
         var conversationExists = 0;
         var startCalls = 0;
 
@@ -304,6 +304,47 @@ public sealed class UserChatActiveSendPlannerTests
 
         Assert.All(results, result => Assert.True(result.Success));
         Assert.Equal(1, startCalls);
+    }
+
+    [Fact]
+    public async Task 等待同一Bot启动门闩时响应取消且不读取历史()
+    {
+        var firstTracker = new UserChatActiveBotStartTracker();
+        var waitingTracker = new UserChatActiveBotStartTracker();
+        var startEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseStart = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var historyCalls = 0;
+        const int accountId = 987655;
+        const long botUserId = 123456790;
+
+        var first = firstTracker.EnsureReadyAsync(
+            true, accountId, botUserId,
+            () => Task.FromResult((true, (string?)null, false)),
+            async () =>
+            {
+                startEntered.SetResult();
+                await releaseStart.Task;
+                return (true, (string?)null);
+            });
+
+        await startEntered.Task;
+        using var cancellation = new CancellationTokenSource();
+        var waiting = waitingTracker.EnsureReadyAsync(
+            true, accountId, botUserId,
+            () =>
+            {
+                Interlocked.Increment(ref historyCalls);
+                return Task.FromResult((true, (string?)null, false));
+            },
+            () => Task.FromResult((true, (string?)null)),
+            cancellation.Token);
+
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
+        Assert.Equal(0, historyCalls);
+
+        releaseStart.SetResult();
+        Assert.True((await first).Success);
     }
 
     [Fact]
