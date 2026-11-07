@@ -339,11 +339,18 @@ public sealed class UserChatActiveSendPlannerTests
             () => Task.FromResult((true, (string?)null)),
             cancellation.Token);
 
-        cancellation.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
-        Assert.Equal(0, historyCalls);
+        try
+        {
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => waiting.WaitAsync(TimeSpan.FromSeconds(1)));
+            Assert.Equal(0, historyCalls);
+        }
+        finally
+        {
+            releaseStart.TrySetResult();
+        }
 
-        releaseStart.SetResult();
         Assert.True((await first).Success);
     }
 
