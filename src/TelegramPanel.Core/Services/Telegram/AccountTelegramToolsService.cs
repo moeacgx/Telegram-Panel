@@ -1155,6 +1155,8 @@ public class AccountTelegramToolsService
     {
         try
         {
+            // 两次连接尝试必须使用同一 random_id，避免服务端已接受但响应超时时重复启动。
+            var randomId = Random.Shared.NextInt64();
             return await TelegramTransientConnectionRetry.ExecuteAsync<(
                 bool Success,
                 string? Error,
@@ -1182,14 +1184,16 @@ public class AccountTelegramToolsService
                         return (false, "无法获取 Bot access_hash", null);
 
                     var inputUser = new InputUser(user.id, user.access_hash);
-                    var randomId = Random.Shared.NextInt64();
                     if (string.IsNullOrWhiteSpace(finalStart))
                     {
                         var inputPeer = new InputPeerUser(user.id, user.access_hash);
                         await ExecuteTelegramRequestAsync(
                             accountId,
                             "启用 Bot",
-                            () => client.SendMessageAsync(inputPeer, "/start"),
+                            () => client.Messages_SendMessage(
+                                peer: inputPeer,
+                                message: "/start",
+                                random_id: randomId),
                             cancellationToken,
                             resetClientOnTimeout: false);
                     }
@@ -1301,7 +1305,12 @@ public class AccountTelegramToolsService
         }
     }
 
-    public sealed record ResolvedChatTarget(InputPeer Peer, string Title, string CanonicalId);
+    public sealed record ResolvedChatTarget(
+        InputPeer Peer,
+        string Title,
+        string CanonicalId,
+        long? BotUserId = null,
+        string? BotStartParameter = null);
     public sealed record TelegramMessageReference(string RawUrl, string SourceTarget, int MessageId);
 
     internal static bool TryParseTelegramMessageReference(string? input, out TelegramMessageReference? reference, out string? error)
@@ -1435,12 +1444,13 @@ public class AccountTelegramToolsService
                         return (false, $"未找到 chatId={raw} 对应的群组/频道（请确认该账号已加入目标）", null);
                     }
 
-                    if (TryNormalizeTelegramBotUsername(raw, out var botUsername))
+                    if (TryNormalizeTelegramBotTarget(raw, out var botUsername, out var botStartParameter))
                     {
                         var botTarget = await TryResolveBotChatTargetAsync(
                             client,
                             accountId,
                             botUsername,
+                            botStartParameter,
                             cancellationToken);
                         if (botTarget != null)
                             return (true, null, botTarget);
@@ -1518,6 +1528,43 @@ public class AccountTelegramToolsService
             var (summary, details) = MapTelegramException(ex);
             var msg = string.IsNullOrWhiteSpace(details) ? summary : $"{summary}：{details}";
             return (false, msg, null);
+        }
+    }
+
+    /// <summary>
+    /// 只读检查当前账号与 Bot 是否已有 Telegram 私聊历史。
+    /// </summary>
+    public async Task<(bool Success, string? Error, bool HasConversation)> HasExternalBotConversationAsync(
+        int accountId,
+        ResolvedChatTarget target,
+        CancellationToken cancellationToken = default)
+    {
+        if (target.BotUserId is not > 0)
+            return (false, "目标不是已解析的 Bot 私聊", false);
+
+        try
+        {
+            var client = await GetOrCreateConnectedClientAsync(accountId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var history = await ExecuteTelegramRequestAsync(
+                accountId,
+                "检查 Bot 私聊历史",
+                () => client.Messages_GetHistory(target.Peer, limit: 1),
+                cancellationToken,
+                resetClientOnTimeout: false);
+
+            return (true, null, history.Messages?.OfType<Message>().Any() == true);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            var (summary, details) = MapTelegramException(ex);
+            var msg = string.IsNullOrWhiteSpace(details) ? summary : $"{summary}：{details}";
+            return (false, msg, false);
         }
     }
 
@@ -1772,6 +1819,7 @@ public class AccountTelegramToolsService
         Client client,
         int accountId,
         string username,
+        string startParameter,
         CancellationToken cancellationToken)
     {
         var resolved = await ExecuteTelegramRequestAsync(
@@ -1790,7 +1838,9 @@ public class AccountTelegramToolsService
         return new ResolvedChatTarget(
             new InputPeerUser(user.id, user.access_hash),
             title,
-            $"user:{user.id.ToString(CultureInfo.InvariantCulture)}");
+            $"user:{user.id.ToString(CultureInfo.InvariantCulture)}",
+            user.id,
+            startParameter);
     }
 
     private async Task<ResolvedChatTarget?> TryResolveChatByIdFromDialogsAsync(
@@ -2368,11 +2418,21 @@ public class AccountTelegramToolsService
 
     internal static bool TryNormalizeTelegramBotUsername(string? input, out string username)
     {
+        return TryNormalizeTelegramBotTarget(input, out username, out _);
+    }
+
+    internal static bool TryNormalizeTelegramBotTarget(
+        string? input,
+        out string username,
+        out string startParameter)
+    {
         username = string.Empty;
+        startParameter = string.Empty;
         try
         {
             var normalized = NormalizeTelegramBotUsername(input ?? string.Empty);
             username = normalized.Username;
+            startParameter = normalized.StartFromLink;
             return true;
         }
         catch (ArgumentException)

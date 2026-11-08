@@ -37,6 +37,7 @@ nav:
       - 代理管理与账号出口: guides/proxy-management.md
       - 同步说明: guides/sync.md
   - 部署与运维:
+      - 隔离验收部署: deployment/isolated-acceptance.md
       - 反向代理: deployment/reverse-proxy.md
       - Bot Webhook: deployment/bot-webhook.md
       - 共享 WireGuard 运维工具: deployment/wgcf-wireproxy.md

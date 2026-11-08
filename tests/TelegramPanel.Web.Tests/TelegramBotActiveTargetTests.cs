@@ -19,6 +19,18 @@ public sealed class TelegramBotActiveTargetTests
         Assert.Equal(expected, username);
     }
 
+    [Fact]
+    public void Bot目标解析保留深链启动参数()
+    {
+        Assert.True(AccountTelegramToolsService.TryNormalizeTelegramBotTarget(
+            "https://t.me/examplebot?start=invite_42",
+            out var username,
+            out var startParameter));
+
+        Assert.Equal("examplebot", username);
+        Assert.Equal("invite_42", startParameter);
+    }
+
     [Theory]
     [InlineData("@regularuser")]
     [InlineData("https://t.me/+inviteHash")]
