@@ -37,9 +37,18 @@ ghcr.io/moeacgx/telegram-panel:dev-latest
 
 ### 3. 部署云端测试环境
 
-在 GitHub Actions 手动运行 `Deploy Telegram Panel`，选择 `dev` 分支，镜像使用对应 `dev-latest` 或带 SHA 的不可变标签，并在 `update_mode` 中选择 `auto`、`image` 或 `binary`。工作流会：
+适用版本：v1.31.91 起的维护交付流程。部署前必须确认目标主机和数据目录已被明确授权用于隔离测试。
+按[隔离验收部署](../deployment/isolated-acceptance.md)使用独立 Compose、独立数据和管理员，
+固定待验收 dev SHA 对应的镜像摘要；测试账号与 Telegram 目标也必须有独立授权。
+缺少环境或账号时记录具体阻塞，继续可做的实现、审查和 dev 集成，不能把镜像构建当作验收。
 
-1. 在云端 `/home/docker/Telegram-Panel` 拉取 `dev`；
+现有 GitHub Actions `Deploy Telegram Panel` 使用 `TELEGRAM_PANEL_PROD_*` secrets，
+步骤名为 `Deploy on production host`，会写入生产主机；选择 `dev` 或默认 `dev-latest`
+不会改变目标环境。它不是隔离测试入口，不能为完成 dev 验收而自动触发。
+只有获得针对实际生产操作的授权后，才可将该工作流用于相应部署。
+该工作流的 `update_mode` 支持 `auto`、`image` 或 `binary`，执行时会：
+
+1. 在云端 `/home/docker/Telegram-Panel` 拉取手动运行时选择的分支/引用（`github.ref_name`）；
 2. 备份 `docker-data` 中的 SQLite 数据文件；
 3. 拉取镜像并使用主 Compose 配置；v1.31.82 不再加载旧 WARP override 或 Docker Socket 挂载；
 4. 重建 `telegram-panel` 容器；
@@ -99,14 +108,23 @@ Docker PR 工作流必须覆盖会改变镜像内容或运行版本的路径；�
 `/api/panel/auth/me` 和 tag 三者一致。回滚时删除尚未发布的错误 tag；已经公开的错误版本
 不得覆盖重发，应递增补丁版本重新发布。
 
-Release 正文由 `.github/workflows/release.yml` 的 `Generate Chinese release notes` 步骤生成，不再直接使用 GitHub 默认的英文 `What's Changed`。生成规则：
+统一生成流程合入后的正式发布及历史正文修订均使用 `tools/release_notes.py`；模板沿用 v1.31.90，既有 v1.31.90 正文无需改写。`.github/workflows/release.yml` 调用该脚本，不使用 GitHub 默认的英文 `What's Changed`；`.github/release.yml` 仅供 GitHub 页面上的默认生成器使用。前置条件为 Python 3.12 或更新版本、Git 和包含目标 tag 的完整仓库历史。生成规则：
 
 - 正文顶部固定为 `## 本次版本主要更新`；变更列表在部署说明之前；
-- 如果 release/squash 提交正文中包含 `## 本次版本主要更新` 小节，工作流会优先提取该小节内容，直到下一个二级标题为止，并为 `### 新增功能`、`### 修复问题`、`### 文档更新` 等已知分类标题补齐 emoji；
-- 如果提交正文没有该小节，工作流才回退到 commit 标题分类生成；
+- Release 名称显式设置为 tag，例如 `v1.31.90`，不附加中文摘要；
+- 手工修订时可显式提供摘要文件；自动生成优先读取目标 tag 所指提交的 `## 本次版本主要更新`，包括合并提交，截止于下一个二级标题；
+- 目标提交没有有效摘要时，聚合本版范围内的摘要，包括合并提交；合并同名分类、去重完整条目，全部缺失时才回退到非合并提交标题分类生成；
+- 分类统一补 emoji，包括“版本与文档”“验证”“验证范围”，保留已有 emoji，未知分类使用 `🧩`，空分类不展示；无实质更新内容时生成失败；
+- 上一版本从目标提交的可达标签中选取，必须低于目标版本；稳定版不使用预发布标签作为上一版，重跑旧版本不会选中未来版本；
 - conventional commit 类型会映射到带 emoji 的中文分类，如 `feat` → `✨ 新增功能`、`fix` → `🐛 修复问题`、`release` → `🚀 版本发布`；
 - 回退生成的列表项会去掉 `fix:`、`feat:` 等英文前缀，只保留中文或可读标题与短 SHA；
 - 底部保留 GitHub compare 链接，标题为 `🔗 完整变更记录`。
+
+工作流将正文保存为 `release-notes` 构建产物，并在发布后读取 GitHub 的标题和正文核对一致性。PR 的 `Release Notes Check` 和正式发布步骤都执行生成器回归测试，单次限制 60 秒。发布成功判据包括：分类内容真实、emoji 和固定段落完整、资产名称匹配 tag、线上正文与构建产物一致。摘要优先模式由维护者负责确认覆盖了本版全部业务变更；脚本不会自动翻译英文或推断遗漏的功能。
+
+发布之后需要补写时，先通过 `gh release view TAG --json name,body` 保存原始标题及正文，再使用同一个脚本生成完整正文。命令参数、摘要和附加升级说明示例见[发布说明生成器](../reference/release-notes.md)。确认预览后使用 `gh release edit TAG --title TAG --notes-file release-notes.md`，并重新读取线上内容核对；不要直接写一份缺少固定模板的正文。
+
+若格式再次变化，先比较构建产物、线上正文及 Release 最后更新时间，再检查工作流之外的编辑。该流程不限制维护者的 GitHub 编辑权限，无法阻止外部客户端绕过生成器。若修订失败，使用保存的原始标题和正文恢复；只改发布说明，不移动 tag、不替换资产、不重跑历史构建。生成器本身回归时，暂停正式发布，通过普通 PR 回滚脚本与工作流后重新验证。
 
 发布 PR 的 squash 正文必须包含面向用户的 `## 本次版本主要更新` 小节，示例：
 
