@@ -91,19 +91,27 @@ def _validate_previous(tag, previous_tag, repo_dir):
         raise ValueError("上一版本必须是目标版本的祖先")
 
 
+def _next_fence(line, fence):
+    """标题提取与列表去重共用围栏规则，状态保留字符及起始长度。"""
+    marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+    if fence:
+        if (marker and marker.group(1)[0] == fence[0]
+                and len(marker.group(1)) >= fence[1]
+                and re.fullmatch(r"[ \t]*", marker.group(2))):
+            return None
+        return fence
+    if marker and not (marker.group(1)[0] == "`" and "`" in marker.group(2)):
+        return (marker.group(1)[0], len(marker.group(1)))
+    return None
+
+
 def _markdown_lines(text):
     """识别围栏之外的 ATX 标题，遵循 Markdown 的缩进与结尾井号规则。"""
     fence = None
     for line in text.splitlines():
-        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
-        if fence:
-            if (marker and marker.group(1)[0] == fence[0]
-                    and len(marker.group(1)) >= fence[1] and not marker.group(2).strip()):
-                fence = None
-            yield line, None
-            continue
-        if marker and not (marker.group(1)[0] == "`" and "`" in marker.group(2)):
-            fence = (marker.group(1)[0], len(marker.group(1)))
+        next_fence = _next_fence(line, fence)
+        if fence or next_fence:
+            fence = next_fence
             yield line, None
             continue
         match = re.match(r"^ {0,3}(#{1,6})(?:[ \t]+(.*)|[ \t]*)$", line)
@@ -161,20 +169,19 @@ def _deduplicate_items(lines):
     is_item = False
     fence = None
     for line in lines:
-        stripped = line.strip()
-        if stripped.startswith(("```", "~~~")):
-            marker = stripped[:3]
-            fence = None if fence == marker else marker if fence is None else fence
-        starts_item = fence is None and re.match(r"^(?:[-*+] |[0-9]+[.)] )", line)
+        next_fence = _next_fence(line, fence)
+        starts_item = fence is None and next_fence is None and re.match(r"^(?:[-*+] |[0-9]+[.)] )", line)
         if starts_item:
             if current:
                 blocks.append((is_item, "\n".join(current).strip("\n")))
             current, is_item = [line], True
         elif is_item and line and not line[0].isspace() and fence is None:
+            # 顶层起始围栏属于独立正文；闭合行仍属于代码，不能在其前插入分段。
             blocks.append((True, "\n".join(current).strip("\n")))
             current, is_item = [line], False
         else:
             current.append(line)
+        fence = next_fence
     if current:
         blocks.append((is_item, "\n".join(current).strip("\n")))
     seen = set()

@@ -97,6 +97,77 @@ class SummaryTests(unittest.TestCase):
         self.assertNotIn("🧩 示例三级标题", summary)
         self.assertNotIn("内部记录", summary)
 
+    def test_four_backtick_fence_preserves_repeated_code_and_spacing(self):
+        block = (
+            "````markdown\n```\n"
+            + "- 示例重复行\n" * 4
+            + "\n  保留缩进与尾部空格。  \n\n```\n````"
+        )
+        summary = release_notes.normalize_summary(
+            "### 修复问题\n- 支持 Markdown 示例。\n\n" + block
+            + "\n\n- 保留后续说明。\n- 保留后续说明。"
+        )
+        self.assertEqual(
+            "### 🐛 修复问题\n\n- 支持 Markdown 示例。\n\n" + block
+            + "\n\n- 保留后续说明。", summary,
+        )
+
+    def test_invalid_closers_keep_code_and_headings_inside_fence(self):
+        for marker in ("`", "~"):
+            for invalid in (
+                marker * 3, marker * 4 + "markdown", marker * 5 + " info",
+                ("~" if marker == "`" else "`") * 4,
+                "    " + marker * 4, "\t" + marker * 4,
+                marker * 4 + "\u00a0",
+            ):
+                with self.subTest(marker=marker, invalid=invalid):
+                    block = (
+                        marker * 4 + "markdown\n" + invalid + "\n"
+                        + "- 重复代码行\n" * 4
+                        + "## 示例二级标题\n### 示例三级标题\n" + marker * 4
+                    )
+                    message = (
+                        "## 本次版本主要更新\n\n### 修复问题\n" + block
+                        + "\n\n- 保留后续说明。\n- 保留后续说明。"
+                        + "\n\n## 内部验证\n不得公开。"
+                    )
+                    summary = release_notes.normalize_summary(release_notes.extract_summary(message))
+                    self.assertEqual(
+                        "### 🐛 修复问题\n\n" + block + "\n\n- 保留后续说明。", summary,
+                    )
+
+    def test_legal_closers_allow_longer_fences_indentation_and_spaces(self):
+        for marker in ("`", "~"):
+            for indent in range(4):
+                for closing_length in (4, 6):
+                    with self.subTest(marker=marker, indent=indent, length=closing_length):
+                        block = (
+                            " " * indent + marker * 4 + "markdown\n"
+                            + "- 重复代码行\n" * 4
+                            + " " * indent + marker * closing_length + " \t"
+                        )
+                        message = (
+                            "## 本次版本主要更新\n### 修复问题\n" + block
+                            + "\n\n- 普通条目。\n- 普通条目。\n\n## 内部验证\n不得公开。"
+                        )
+                        summary = release_notes.normalize_summary(release_notes.extract_summary(message))
+                        self.assertEqual("### 🐛 修复问题\n\n" + block + "\n\n- 普通条目。", summary)
+
+    def test_invalid_openers_do_not_disable_normal_list_deduplication(self):
+        for opener in ("```bad`info", "    ```", "\t~~~"):
+            with self.subTest(opener=opener):
+                summary = release_notes.normalize_summary(
+                    "### 修复问题\n" + opener + "\n\n- 普通条目。\n- 普通条目。"
+                )
+                self.assertEqual(1, summary.count("- 普通条目。"))
+
+    def test_repeated_top_level_fences_are_not_deduplicated_with_list_items(self):
+        block = "```text\n- 重复代码行\n- 重复代码行\n```"
+        summary = release_notes.normalize_summary(
+            "### 修复问题\n" + ("- 普通条目。\n\n" + block + "\n\n") * 2
+        )
+        self.assertEqual("### 🐛 修复问题\n\n- 普通条目。\n\n" + block + "\n\n" + block, summary)
+
 
 class RepositoryTests(unittest.TestCase):
     def setUp(self):
@@ -288,6 +359,28 @@ class RepositoryTests(unittest.TestCase):
         self.assertIn("修复旧记录无法删除", notes)
         self.assertIn("升级后先切换账号引用", notes)
         self.assertIn("compare/v1.0.0...v1.0.1", notes)
+
+    def test_cli_preserves_four_backtick_example_verbatim(self):
+        block = "````markdown\n```\n" + "- 示例重复行\n" * 4 + "```\n````"
+        summary_file = self.repo / "围栏摘要.md"
+        summary_file.write_text(
+            "### 修复问题\n- 支持 Markdown 示例。\n\n" + block + "\n\n- 保留后续说明。\n",
+            encoding="utf-8",
+        )
+        output = self.repo / "发布正文.md"
+        result = subprocess.run(
+            [sys.executable, str(TOOLS / "release_notes.py"), "--tag", "v1.0.0",
+             "--repository", "moeacgx/Telegram-Panel", "--summary-file", str(summary_file),
+             "--output", str(output)],
+            cwd=self.repo, capture_output=True, encoding="utf-8", timeout=15,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        notes = output.read_text(encoding="utf-8")
+        actual = notes.split("## 本次版本主要更新\n\n", 1)[1].split("\n\n> [!WARNING]", 1)[0]
+        self.assertEqual(
+            "### 🐛 修复问题\n\n- 支持 Markdown 示例。\n\n" + block + "\n\n- 保留后续说明。",
+            actual,
+        )
 
     def test_cli_invalid_tag_does_not_overwrite_existing_output(self):
         output = self.repo / "发布正文.md"
