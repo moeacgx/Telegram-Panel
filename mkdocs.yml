@@ -54,4 +54,5 @@ nav:
       - 群组管理员移除: developer/group-admin-removal.md
       - WTelegram Layer 兼容性: developer/telegram-layer-compatibility.md
       - 文档维护: developer/documentation.md
+      - 工程证据完整性: developer/evidence-integrity.md
       - 开发发布流程: developer/release-process.md

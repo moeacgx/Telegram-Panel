@@ -5,6 +5,7 @@
 ## 1. 开始工作前
 
 - 先查看 `git status`、当前分支、关联远端和近期提交。
+- 开始前读取根目录 `LESSONS.md`，按经验索引路由读取本次任务适用的规范。
 - 保留用户已有的未提交改动；不要使用 `git reset --hard`、`git checkout --` 或覆盖式清理来处理脏工作区。
 - 修改前确认影响范围、测试入口和需要同步的文档。
 - 涉及部署、主机或凭据时，先阅读私有知识库的 `index.md` 和 `SCHEMA.md`；若文件不存在，说明缺失并仅读取完成任务所需的页面，不输出密钥、密码或 Token。
@@ -34,6 +35,7 @@
 - 前端改动：运行 `pnpm --dir frontend run build` 和 `pnpm --dir frontend test`。
 - .NET 改动：至少运行 `dotnet build TelegramPanel.sln -c Release --no-restore`；涉及测试时运行 `dotnet test TelegramPanel.sln -c Release --no-build` 或对应测试项目。
 - 文档改动：运行 `mkdocs build --strict`，确保链接、导航和 Markdown 结构有效。
+- 生成或修改报告、账本、PR/Release 正文或机器字段时，按 `docs/developer/evidence-integrity.md` 核验编码、原文、机器字段与留证。
 - 部署相关改动：必须完成容器启动、健康接口、登录态接口和本次功能的云端验收，并记录版本、镜像和结果。
 - 测试命令设置最大超时 60 秒；超时或环境缺失必须如实记录，不得将未执行写成通过。
 
