@@ -1,0 +1,33 @@
+name: Release Notes Check
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - "tools/release_notes.py"
+      - "tools/tests/test_release_notes.py"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/release-notes-check.yml"
+  push:
+    branches: [dev, main]
+    paths:
+      - "tools/release_notes.py"
+      - "tools/tests/test_release_notes.py"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/release-notes-check.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test release notes generator
+        run: timeout 60s python3 -m unittest discover -s tools/tests -p 'test_release_notes.py' -v

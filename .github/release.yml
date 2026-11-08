@@ -1,3 +1,5 @@
+# 仅供 GitHub 的 Generate release notes 功能使用。
+# 正式发布和正文修订使用 tools/release_notes.py，此配置不控制自定义正文。
 changelog:
   exclude:
     labels:
