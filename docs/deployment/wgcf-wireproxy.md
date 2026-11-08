@@ -155,8 +155,37 @@ docker compose -f tools/wgcf-warp/compose.yml ps
 
 容器名和网络别名均为 `tg-wgcf-warp`。镜像以 UID/GID 10001 运行，删除全部 capability、
 启用只读根文件系统；不挂载 Docker Socket、TUN，不授予 NET_ADMIN，不改宿主路由。
-持久卷只保存本工具档案，默认共享上限 512 MiB 内存、1 CPU、256 PIDs，可按实测调整
-Compose。100 份配置是防误操作的硬上限，不是支持容量；一个进程仍消耗 CPU、内存和 UDP 状态。
+持久卷只保存本工具档案。此可选独立工具容器的 Compose 声明 512 MiB 内存、1 CPU、256 PIDs
+的共享总额度，覆盖监督器和所有出口，**不是每个出口的额度**，也不会自动应用于面板内置运行器。
+运营者可按受控环境中的实际观测调整此 Compose。100 份配置是防误操作保护，不是并发容量或性能保证；
+每个 wireproxy 进程仍会消耗 CPU、内存和 UDP 状态。
+
+这一区分适用于 v1.31.83 起按以下基线核对的实现：`dev`
+`b753ccb4398e94e5bd5a200ccad89fbb64f7b509`、`main`
+`5ecaa745a819384980ffbd5c5e88b26c85b96f7e`。主 `docker-compose.yml` 没有声明面板容器的
+CPU、内存或 PIDs 上限；这只描述仓库默认文件，不代表实际部署没有限制。额外 Compose 覆盖或父 cgroup
+仍可能限制面板容器。改变运行器或 Compose 定义后，需按新版本重新核对本说明。
+
+部署前先确认要使用独立工具容器还是面板内置运行器，并核对目标环境实际采用的 Compose 文件和覆盖。
+成功判据是生效配置及运行状态与所选路径一致：独立工具的额度由其工具容器共享；面板容器的覆盖额度
+则共同约束面板、Telegram 客户端及全部内置出口。配置核查和容器状态只能说明实际资源设置，
+不能证明逐出口硬隔离或由此推导档案/账号容量；HTTP 200 也不是资源隔离验收。
+
+在仓库根目录、使用与部署时相同的 Compose 文件和环境参数核对：
+
+```bash
+docker compose -f tools/wgcf-warp/compose.yml config wgcf-warp
+docker inspect tg-wgcf-warp --format 'memory={{.HostConfig.Memory}} nanoCpus={{.HostConfig.NanoCpus}} pids={{.HostConfig.PidsLimit}}'
+docker stats --no-stream tg-wgcf-warp
+
+docker compose config telegram-panel
+docker inspect telegram-panel --format 'memory={{.HostConfig.Memory}} nanoCpus={{.HostConfig.NanoCpus}} pids={{.HostConfig.PidsLimit}}'
+docker stats --no-stream telegram-panel
+```
+
+若部署采用覆盖文件，`config` 命令须追加相同的 `-f` 参数；`inspect` 查看已创建容器的限制，
+`stats` 只显示采样时的使用量。父 cgroup 或云平台另设的配额须在对应运行环境单独核对，
+不能仅用容器当前使用量判断限制是否存在。
 
 ## 注册、生成、启停
 
@@ -223,6 +252,18 @@ wireproxy 配置解析、不建隧道。真实注册、上游限流、外部 WAR
 验证需运营者接受条款后另行完成。只有这些通过后才能判定相应环境可用。
 
 ## 故障排查与回滚
+
+### 面板容器总额度的影响
+
+若运营者为主面板容器另设 CPU、内存或 PIDs 总额度，该额度同时约束面板、Telegram 客户端和所有内置出口，
+不是逐 wireproxy 配额。过低的额度可能造成整体 CPU 节流、进程创建失败或 OOM。需要核实时，
+检查实际使用的 Compose 覆盖及 `docker compose config`，再结合容器资源状态、重启和 OOM 记录；
+不要仅凭主 Compose 未声明上限推断运行时无限制，也不要用 HTTP 200 推断配额已生效。
+首次调整应在获授权环境从少量出口开始验收，再根据观测逐步调整。
+
+若调整后面板整体变慢、子进程无法启动或容器被 OOM 终止，先检查面板容器级总额度及其父级限制，
+再定位单个出口。恢复时还原此前的 Compose 覆盖并重建相应容器，保留数据卷和代理材料；
+回退本页的纯文档说明则只需还原文档提交，不改变运行时行为或数据。
 
 - 注册失败但材料完整：原命令重试会复用材料，再执行 `generate`，不会再次注册。
 - 注册超时/失败且材料不完整：工具标记结果不明确并拒绝重复注册；保留整个档案，人工核对
