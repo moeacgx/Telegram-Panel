@@ -42,6 +42,7 @@ nav:
       - Bot Webhook: deployment/bot-webhook.md
       - 共享 WireGuard 运维工具: deployment/wgcf-wireproxy.md
   - 参考:
+      - 发布说明生成器: reference/release-notes.md
       - 配置与数据目录: reference/configuration.md
       - 数据库: reference/database.md
       - API: reference/api.md
