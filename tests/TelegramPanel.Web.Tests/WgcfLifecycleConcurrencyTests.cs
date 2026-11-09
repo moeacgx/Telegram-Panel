@@ -26,6 +26,70 @@ namespace TelegramPanel.Web.Tests;
 public sealed class WgcfLifecycleConcurrencyTests
 {
     [Fact]
+    public async Task 所有工具命令使用同一模板且参数先于子命令()
+    {
+        await using var f = await Fixture.CreateAsync(resources: new Dictionary<string, string?>
+        {
+            ["WgcfWarp:Wireproxy:GoMaxProcs"] = "2",
+            ["WgcfWarp:Wireproxy:GoMemLimitMiB"] = "64",
+            ["WgcfWarp:Wireproxy:NoFile"] = "256"
+        });
+        foreach (var verb in new[] { "serve", "check-resources", "register", "provision", "generate", "start", "stop", "list", "delete" })
+        {
+            using var process = (System.Diagnostics.Process)typeof(WgcfWarpService)
+                .GetMethod("NewProcess", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(f.Service, new object[] { new[] { verb } })!;
+            var args = process.StartInfo.ArgumentList.ToArray();
+            Assert.Equal(new[] { "--wireproxy-gomaxprocs=2", "--wireproxy-gomemlimit-mib=64", "--wireproxy-nofile=256", verb },
+                args.Skip(3));
+            Assert.False(process.StartInfo.UseShellExecute);
+        }
+        Assert.Empty(f.Commands);
+    }
+
+    [Fact]
+    public async Task 资源错误时可用性与列表返回原因且首次连接创建被拒绝()
+    {
+        await using var f = await Fixture.CreateAsync();
+        typeof(WgcfWarpService).GetField("_resourceError", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(f.Service, "WgcfWarp:Wireproxy:NoFile 超过父 hard limit");
+        var availability = await f.Service.GetAvailabilityAsync();
+        Assert.False(availability.Available);
+        Assert.Contains("hard limit", availability.Reason);
+        var list = await f.Service.ListAsync(default);
+        Assert.False(list.Available);
+        Assert.Single(list.Profiles);
+        Assert.Equal(availability.Reason, list.Reason);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Service.CreateAsync(Guid.NewGuid().ToString(), "新出口", true, default));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Service.ProvisionAsync("新出口", "telegram-panel.internal.resource-error", true));
+        Assert.Empty(f.Commands);
+    }
+
+    [Fact]
+    public async Task 百份边界并发新建只允许一个且原请求可重试()
+    {
+        await using var f = await Fixture.CreateAsync();
+        for (var i = 1; i < 99; i++)
+            await f.Service.CreateAsync(Guid.NewGuid().ToString(), "存量出口", true, default);
+        var requestIds = new[] { Guid.NewGuid().ToString(), Guid.NewGuid().ToString() };
+        async Task<WgcfProfileDto?> TryCreate(string request)
+        {
+            try { return await f.Service.CreateAsync(request, "并发出口", true, default); }
+            catch (InvalidOperationException error) when (error.Message.Contains("100")) { return null; }
+        }
+        var results = await Task.WhenAll(requestIds.Select(id => Task.Run(() => TryCreate(id))));
+        var accepted = Assert.Single(results.Where(x => x != null))!;
+        var acceptedId = requestIds[Array.FindIndex(results, x => x != null)];
+        Assert.Equal(100, (await f.Service.ListAsync(default)).Profiles.Count);
+        Assert.Equal(accepted.Profile, (await f.Service.CreateAsync(acceptedId, "并发出口", true, default)).Profile);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Service.ProvisionAsync("首次出口", "telegram-panel.internal.at-capacity", true));
+        // 上限不阻止已有档案停止/删除，释放后可新增。
+        await f.Service.DeleteAsync(f.Profile, default);
+        await f.Service.CreateAsync(Guid.NewGuid().ToString(), "释放后新增", true, default);
+        Assert.Equal(100, (await f.Service.ListAsync(default)).Profiles.Count);
+    }
+
+    [Fact]
     public async Task 受管出口重命名后列表与档案恢复始终使用数据库名称()
     {
         await using var f = await Fixture.CreateAsync();
@@ -571,14 +635,14 @@ public sealed class WgcfLifecycleConcurrencyTests
         public bool FailDelete { get; set; }
         private string Root => Path.Combine(_directory, "wgcf-warp");
 
-        public static async Task<Fixture> CreateAsync(string? internalRequest = null)
+        public static async Task<Fixture> CreateAsync(string? internalRequest = null, Dictionary<string, string?>? resources = null)
         {
             var f = new Fixture();
             Directory.CreateDirectory(Path.Combine(f.Root, "web-requests"));
             var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Storage:RootPath"] = f._directory
-            }).Build();
+            }).AddInMemoryCollection(resources ?? new Dictionary<string, string?>()).Build();
             f.Configuration = config;
             var services = new ServiceCollection();
             services.AddSingleton<TemporaryWarpClaimStore>();

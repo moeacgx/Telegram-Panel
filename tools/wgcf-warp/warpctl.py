@@ -74,15 +74,57 @@ def lock(path):
                 msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def run_private(command, timeout, cwd=None):
+class WireproxyResources:
+    """统一子进程模板；None 保留继承行为，不改变监督器自身限制。"""
+    def __init__(self, gomaxprocs=None, gomemlimit_mib=None, nofile=None):
+        self.gomaxprocs = gomaxprocs
+        self.gomemlimit_mib = gomemlimit_mib
+        self.nofile = nofile
+
+    def validate(self):
+        for key, value in (("gomaxprocs", self.gomaxprocs), ("gomemlimit-mib", self.gomemlimit_mib),
+                           ("nofile", self.nofile)):
+            if value is not None and (not isinstance(value, str) or not re.fullmatch(r"[0-9]{1,10}", value)
+                                      or not 1 <= int(value) <= 2147483647):
+                raise Failure(f"wireproxy-{key} 必须为 1～2147483647 的十进制整数")
+        if self.nofile is not None:
+            if sys.platform != "linux":
+                raise Failure("wireproxy-nofile 仅支持 Linux RLIMIT_NOFILE")
+            import resource
+            _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+            if hard != resource.RLIM_INFINITY and int(self.nofile) > hard:
+                raise Failure("wireproxy-nofile 不能超过父进程的 NOFILE hard limit")
+
+    def launch(self, command):
+        self.validate()
+        options = {}
+        if self.gomaxprocs is not None or self.gomemlimit_mib is not None:
+            environment = os.environ.copy()
+            if self.gomaxprocs is not None:
+                environment["GOMAXPROCS"] = str(int(self.gomaxprocs))
+            if self.gomemlimit_mib is not None:
+                environment["GOMEMLIMIT"] = str(int(self.gomemlimit_mib)) + "MiB"
+            options["env"] = environment
+        if self.nofile is not None:
+            # 独立解释器中设置再 exec，避免多线程宿主的 preexec_fn 死锁。
+            # 同时降低 hard：Go 启动时可能把 soft 提升至 hard。父进程不受影响。
+            wrapper = ("import os,resource,sys; n=int(sys.argv[1]); "
+                       "resource.setrlimit(resource.RLIMIT_NOFILE,(n,n)); "
+                       "os.execvpe(sys.argv[2],sys.argv[2:],os.environ)")
+            command = [sys.executable, "-I", "-S", "-c", wrapper, self.nofile] + command
+        return command, options
+
+
+def run_private(command, timeout, cwd=None, resources=None):
     # 上游错误可能包含账户材料，因此 stdout/stderr 不进入日志、异常或面板。
     try:
+        command, options = resources.launch(command) if resources else (command, {})
         result = subprocess.run(command, cwd=cwd, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                timeout=timeout, check=False)
+                                timeout=timeout, check=False, **options)
     except subprocess.TimeoutExpired:
         raise Failure("上游命令超时；已停止进程，保留账户材料供恢复") from None
-    except OSError:
+    except (OSError, subprocess.SubprocessError):
         raise Failure("上游程序无法启动，请检查镜像和可执行文件") from None
     if result.returncode:
         raise Failure("上游命令失败；保留账户材料，先核对网络与上游状态后重试")
@@ -100,7 +142,7 @@ def valid_host(value):
 
 
 class Store:
-    def __init__(self, root, wgcf=None, wireproxy=None, timeout=45):
+    def __init__(self, root, wgcf=None, wireproxy=None, timeout=45, resources=None):
         self.root = Path(root).absolute()
         if self.root.is_symlink():
             raise Failure("数据目录不能为符号链接")
@@ -109,6 +151,7 @@ class Store:
         self.wgcf = wgcf or ["wgcf"]
         self.wireproxy = wireproxy or ["wireproxy"]
         self.timeout = timeout
+        self.resources = resources or WireproxyResources()
 
     def profile(self, name, create=False):
         if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,47}", name):
@@ -140,6 +183,7 @@ class Store:
         return None
 
     def register(self, name, accept_tos):
+        self.resources.validate()
         if not accept_tos:
             raise Failure("注册要求管理员阅读 Cloudflare 条款后显式传入 --accept-tos")
         path = self.profile(name, True)
@@ -165,6 +209,7 @@ class Store:
         return {"profile": name, "registered": True}
 
     def generate(self, name, port, bind_address="0.0.0.0"):
+        self.resources.validate()
         if bind_address not in ("0.0.0.0", "127.0.0.1"):
             raise Failure("监听地址只允许 0.0.0.0 或 127.0.0.1")
         path = self.profile(name)
@@ -215,12 +260,14 @@ class Store:
         body += f"\n[Socks5]\nBindAddress = {bind_address}:{port}\nUsername = {auth['username']}\nPassword = {auth['password']}\n"
         atomic_write(path / "wireproxy.conf", body)
         atomic_write(path / "proxy-auth.json", auth)
-        run_private(self.wireproxy + ["-n", "-c", str(path / "wireproxy.conf")], self.timeout, path)
+        run_private(self.wireproxy + ["-n", "-c", str(path / "wireproxy.conf")], self.timeout, path,
+                    resources=self.resources)
         meta.update(port=port, bindAddress=bind_address, generated=True, desired=False)
         atomic_write(path / "meta.json", meta)
         return {"profile": name, "generated": True, "port": port}
 
     def provision(self, name, accept_tos, display_name=None):
+        self.resources.validate()
         if not accept_tos:
             raise Failure("注册要求管理员阅读 Cloudflare 条款后显式传入 --accept-tos")
         if display_name is not None:
@@ -289,6 +336,8 @@ class Store:
         return result
 
     def desired(self, name, enabled):
+        if enabled:
+            self.resources.validate()
         path = self.profile(name)
         meta = read_json(path / "meta.json", {})
         if enabled and not meta.get("generated"):
@@ -500,8 +549,9 @@ def reconcile_profiles(store, children, retries):
                 if not isinstance(port, int) or not 1024 <= port <= 65535:
                     raise Failure("档案端口无效")
                 if not process and time.monotonic() >= retries.get(name, 0):
-                    process = subprocess.Popen(store.wireproxy + ["-s", "-c", str(path / "wireproxy.conf")],
-                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    command, options = store.resources.launch(store.wireproxy + ["-s", "-c", str(path / "wireproxy.conf")])
+                    process = subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **options)
                     children[name] = process
                 state = "backoff" if not process else "starting"
                 if process and process.poll() is None:
@@ -511,11 +561,11 @@ def reconcile_profiles(store, children, retries):
                     except OSError:
                         pass
             atomic_write(path / "runtime.json", {"state": state, "at": time.time(), "revision": meta.get("revision")})
-        except (Failure, OSError, ValueError, KeyError, TypeError, AttributeError):
+        except (Failure, OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError):
             # 一份档案损坏或无法启动不能终止其它出口；原始异常可能包含凭据，不记录。
             process = children.pop(name, None)
             if process:
-                with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+                with contextlib.suppress(OSError, subprocess.SubprocessError):
                     stop_process(process)
             retries[name] = time.monotonic() + 30
             if path:
@@ -525,6 +575,7 @@ def reconcile_profiles(store, children, retries):
 
 
 def supervise(store):
+    store.resources.validate()
     children, retries = {}, {}
     stopping = False
 
@@ -541,10 +592,14 @@ def supervise(store):
                 time.sleep(0.5)
         finally:
             for process in children.values():
-                stop_process(process)
+                with contextlib.suppress(OSError, subprocess.SubprocessError):
+                    stop_process(process)
 
 
 def stop_process(process):
+    if process.poll() is not None:
+        process.wait()
+        return
     process.terminate()
     try:
         process.wait(timeout=5)
@@ -557,9 +612,13 @@ def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", default="/data")
+    parser.add_argument("--wireproxy-gomaxprocs", help="每个 wireproxy 的 Go 并行度；默认继承")
+    parser.add_argument("--wireproxy-gomemlimit-mib", help="每个 wireproxy 的 Go 内存软目标（MiB）；默认继承")
+    parser.add_argument("--wireproxy-nofile", help="每个 wireproxy 的 Linux fd soft/hard 限制；默认继承")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("serve")
     commands.add_parser("list")
+    commands.add_parser("check-resources", help="仅校验资源模板和父 hard limit，不创建材料或进程")
     for verb in ("register", "generate", "start", "status", "stop", "provision", "delete"):
         command = commands.add_parser(verb)
         command.add_argument("profile")
@@ -578,7 +637,15 @@ def main():
     command.add_argument("--allow-http", action="store_true")
     args = parser.parse_args()
     try:
-        store = Store(args.data)
+        resources = WireproxyResources(args.wireproxy_gomaxprocs, args.wireproxy_gomemlimit_mib,
+                                       args.wireproxy_nofile)
+        # 即使模板填错，也允许只读和停止/删除，保留恢复通道。
+        if args.command not in ("list", "status", "stop", "delete"):
+            resources.validate()
+        if args.command == "check-resources":
+            print('{"success":true}')
+            return 0
+        store = Store(args.data, resources=resources)
         if args.command == "serve":
             supervise(store)
             return 0

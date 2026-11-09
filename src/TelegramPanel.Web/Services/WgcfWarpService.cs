@@ -46,6 +46,8 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
     private readonly SemaphoreSlim _toolLock = new(1, 1);
     private readonly object _persistLock = new();
     private volatile bool _supervisorReady;
+    private readonly WgcfWireproxyResources _resources;
+    private string? _resourceError;
     private readonly TemporaryWarpClaimStore _claims;
     private readonly ConcurrentDictionary<string, string> _queueTokens = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _pendingTemporary = new(StringComparer.Ordinal);
@@ -61,6 +63,8 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
     {
         _scopes = scopes;
         _configuration = configuration;
+        _resources = new WgcfWireproxyResources(configuration);
+        _resourceError = _resources.Error;
         _logger = logger;
         _root = Path.Combine(StoragePathResolver.ResolveWritableRoot(configuration, environment), "wgcf-warp");
         _hasDependencies = hasDependencies ?? (() => OperatingSystem.IsLinux() && File.Exists(_script)
@@ -71,8 +75,7 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
     }
 
     public Task<ManagedWarpAvailability> GetAvailabilityAsync(CancellationToken cancellationToken = default)
-        => Task.FromResult(new ManagedWarpAvailability(HasDependencies && _supervisorReady,
-            !HasDependencies ? "当前运行环境缺少轻量 WARP 依赖，请更新 Docker 镜像" : !_supervisorReady ? "运行器正在启动或恢复" : null));
+        => Task.FromResult(new ManagedWarpAvailability(UnavailableReason == null, UnavailableReason));
 
     public async Task<ManagedWarpProxyLease> ProvisionAsync(string name, string requestId, bool acceptTerms,
         CancellationToken cancellationToken = default)
@@ -247,6 +250,9 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
     }
 
     private bool HasDependencies => _hasDependencies();
+    private string? UnavailableReason => _resourceError ?? (!HasDependencies
+        ? "当前运行环境缺少轻量 WARP 依赖，请更新 Docker 镜像"
+        : !_supervisorReady ? "运行器正在启动或恢复" : null);
 
     public async Task<WgcfEnvironmentDto> ListAsync(CancellationToken ct)
     {
@@ -261,9 +267,7 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
             var dto = ToDto(entry, proxies.FirstOrDefault(x => x.ManagedWgcfProfile == entry.Profile));
             profiles.Add(dto with { UsageCount = dto.AccountCount + (dto.IsGlobal ? globalCount : 0) });
         }
-        return new(HasDependencies && _supervisorReady,
-            !HasDependencies ? "当前运行环境缺少轻量 WARP 依赖，请更新 Docker 镜像" : !_supervisorReady ? "运行器正在启动或恢复" : null,
-            profiles);
+        return new(UnavailableReason == null, UnavailableReason, profiles);
     }
 
     public async Task<WgcfProfileDto> CreateAsync(string requestId, string name, bool acceptTerms, CancellationToken ct)
@@ -455,6 +459,8 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
                 catch (Exception ex) when (ex is IOException or JsonException or ArgumentException or InvalidOperationException)
                 { _logger.LogWarning("轻量 WARP 请求档案无法恢复，已跳过"); }
             }
+            // 配置错误仍保留磁盘请求的列表和诊断，但绝不启动无约束出口。
+            if (_resources.Error != null) return;
             await Task.WhenAll(SuperviseAsync(stoppingToken), ProcessQueueAsync(stoppingToken));
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
@@ -570,9 +576,13 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
     {
         while (!ct.IsCancellationRequested)
         {
-            using var process = NewProcess(new[] { "serve" });
+            Process? process = null;
             try
             {
+                // 同一参数构造用于预检及全部 CLI，拒绝超出父 hard limit 后静默无约束启动。
+                await CommandAsync(new[] { "check-resources" }, ct);
+                _resourceError = null;
+                process = NewProcess(new[] { "serve" });
                 process.Start();
                 var drain = Task.WhenAll(DiscardAsync(process.StandardOutput), DiscardAsync(process.StandardError));
                 await Task.Delay(750, ct);
@@ -581,11 +591,19 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
                 await drain;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
-            catch (Exception) { _logger.LogWarning("轻量 WARP 监督进程退出，稍后重启"); }
+            catch (Exception)
+            {
+                _resourceError = "轻量 WARP 资源预检或运行器启动失败，请检查 WgcfWarp:Wireproxy 配置、父 NOFILE hard limit 和依赖";
+                _logger.LogWarning("轻量 WARP 资源预检或监督进程失败，稍后重试；原始输出已隐藏");
+            }
             finally
             {
                 _supervisorReady = false;
-                await StopProcessAsync(process);
+                if (process != null)
+                {
+                    await StopProcessAsync(process);
+                    process.Dispose();
+                }
             }
             if (!ct.IsCancellationRequested) await Task.Delay(TimeSpan.FromSeconds(5), ct);
         }
@@ -598,6 +616,7 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
         start.ArgumentList.Add(_script);
         start.ArgumentList.Add("--data");
         start.ArgumentList.Add(_root);
+        _resources.Apply(start);
         foreach (var arg in args) start.ArgumentList.Add(arg);
         return new Process { StartInfo = start };
     }
@@ -724,7 +743,7 @@ public sealed class WgcfWarpService : BackgroundService, IManagedWarpProvisioner
 
     private void EnsureAvailable()
     {
-        if (!HasDependencies || !_supervisorReady) throw new InvalidOperationException("轻量运行器未就绪，请更新镜像或稍后重试");
+        if (UnavailableReason is { } reason) throw new InvalidOperationException(reason);
     }
 
     private static JsonDocument ReadPrivateJson(string file)

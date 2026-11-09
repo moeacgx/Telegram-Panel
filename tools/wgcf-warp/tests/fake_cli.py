@@ -1,12 +1,22 @@
 """测试替身：只写临时材料和本地监听，不调用 Cloudflare 或 WireGuard。"""
 import base64
 import json
+import os
 from pathlib import Path
 import socket
 import sys
 import time
 
 args = sys.argv[1:]
+if args[0] == "wireproxy":
+    output = Path(args[args.index("-c") + 1]).parent
+    observed = {"pid": os.getpid(), "gomaxprocs": os.environ.get("GOMAXPROCS"),
+                "gomemlimit": os.environ.get("GOMEMLIMIT"),
+                "inherited": os.environ.get("RESOURCE_TEST_INHERITED")}
+    if sys.platform == "linux":
+        import resource
+        observed["nofile"] = resource.getrlimit(resource.RLIMIT_NOFILE)
+    (output / ("resources-check.json" if "-n" in args else "resources-run.json")).write_text(json.dumps(observed))
 if args[0] == "wgcf":
     path = Path(args[args.index("--config") + 1])
     mode_file = path.parent / "fake-mode.json"

@@ -8,6 +8,45 @@ SOCKS5 监听。面板通过已有 `wireguard_warp` 代理 API 检测出口并�
 应先完成下文迁移，再升级；已经升级的安装可按“已升级后的补迁移”恢复账号路由。
 内置页面和独立工具都不能将模拟测试解释为可承载 100 个账号的证明。
 
+<a id="wireproxy-soft-resources"></a>
+
+## 可选 wireproxy 资源调节（ALHE-23，dev 待发布）
+
+前置条件：使用包含 ALHE-23 的 Linux 镜像或 Python 3.11+ 工具，已备份持久卷，
+先在获授权的隔离环境选择数值；未设置时保持既有环境和 rlimit 继承。
+三项均为统一模板，现有共享容器总额度继续生效。它们不能保证 CPU／RSS 硬配额、
+精确连接数或可承载账号数，不改变 100 份档案的保护上限。
+
+面板按[配置参考](../reference/configuration.md#wireproxy-resource-template)在部署者的 Compose
+覆盖中设置所需 `WgcfWarp__Wireproxy__*` 环境变量，重建面板容器并保留数据卷。
+这些配置只作用于 wireproxy，不应通过直接设置面板全局 `GOMAXPROCS/GOMEMLIMIT` 替代。
+独立工具在每次创建、生成、启动和监督命令上使用相同的全局参数，例如：
+
+```bash
+# 以下只是测试示例，不是推荐默认值；按隔离负载结果选择模板。
+python warpctl.py --wireproxy-gomaxprocs 2 --wireproxy-gomemlimit-mib 64 --wireproxy-nofile 256 check-resources
+python warpctl.py --data /data --wireproxy-gomaxprocs 2 --wireproxy-gomemlimit-mib 64 --wireproxy-nofile 256 serve
+```
+
+独立容器需通过自有 Compose override 的 `command` 传入相同参数及 `serve`；其它 CLI 操作
+同样携带模板。不要创建新的平行 supervisor，仍沿用现有进程锁。
+所有值必须是正整数；`NoFile` 不得高于父进程 hard limit。模板不会热更新已有进程，
+须安排重启维护窗口，不自动停止使用中的出口或删除材料。
+
+成功判据：面板可用性无资源配置错误；每个 wireproxy 的指定环境变量与模板一致，
+Linux `/proc/<pid>/limits` 的 Max open files soft/hard 等于指定值；重启后再次核验。
+只检查所配置变量，禁止转储完整环境。未覆盖的值仍继承；Go 变量的存在本身不证明
+实际二进制的行为，须绑定资产校验值、镜像摘要及 `go version -m` 结果核对构建工具链。
+真实负载另记录 1、3、N 个出口空闲及流量下的 CPU/RSS、fd、延迟、GC 和面板指标，
+并验证 fd 耗尽时该出口失败、其它出口继续且没有直连回退。离线替身通过不能替代此项。
+
+失败排查：先看可用性 `reason`、档案 failed/backoff、父 `/proc/<pid>/limits`、容器 OOM／
+重启及系统 fd 约束。非 Linux 不支持显式 NoFile；过低值可能使启动失败，修正模板后重启。
+运行器不输出子进程原始错误或完整环境，材料和已有代理路由保留。CLI
+`list/status/stop/delete` 不受非法资源模板阻挡；错误配置时不要重复注册或改为直连。
+回滚：移除三个覆盖并重建对应容器，或回退镜像及工具版本；保留持久卷，无数据库迁移。
+已有进程退出后新进程恢复父环境／rlimit 继承，原有共享额度不变。
+
 ## 面板内置管理（v1.31.83）
 
 升级到 v1.31.83 的 Linux Docker 镜像后，在“代理管理”页点击“一键创建 WARP”创建
