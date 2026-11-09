@@ -5,6 +5,7 @@
 ## 1. 开始工作前
 
 - 先查看 `git status`、当前分支、关联远端和近期提交。
+- 开始前读取根目录 `LESSONS.md`，按经验索引路由读取本次任务适用的规范。
 - 保留用户已有的未提交改动；不要使用 `git reset --hard`、`git checkout --` 或覆盖式清理来处理脏工作区。
 - 修改前确认影响范围、测试入口和需要同步的文档。
 - 涉及部署、主机或凭据时，先阅读私有知识库的 `index.md` 和 `SCHEMA.md`；若文件不存在，说明缺失并仅读取完成任务所需的页面，不输出密钥、密码或 Token。
@@ -34,6 +35,7 @@
 - 前端改动：运行 `pnpm --dir frontend run build` 和 `pnpm --dir frontend test`。
 - .NET 改动：至少运行 `dotnet build TelegramPanel.sln -c Release --no-restore`；涉及测试时运行 `dotnet test TelegramPanel.sln -c Release --no-build` 或对应测试项目。
 - 文档改动：运行 `mkdocs build --strict`，确保链接、导航和 Markdown 结构有效。
+- 生成或修改报告、账本、PR/Release 正文或机器字段时，按 `docs/developer/evidence-integrity.md` 核验编码、原文、机器字段与留证。
 - 部署相关改动：必须完成容器启动、健康接口、登录态接口和本次功能的云端验收，并记录版本、镜像和结果。
 - 测试命令设置最大超时 60 秒；超时或环境缺失必须如实记录，不得将未执行写成通过。
 
@@ -67,6 +69,9 @@
 正式 Release 说明必须优先服务面板用户，不得直接依赖 GitHub 默认英文 `What's Changed` 作为主要内容。创建或修改发版相关提交、PR 标题、tag 发布说明和 `.github/workflows/release.yml` 时必须遵守：
 
 - Release 正文顶部必须是中文 `## 本次版本主要更新`，变更列表必须位于部署说明和资产说明之前。
+- Release 标题只使用 tag（例如 `v1.31.90`），不要附加中文摘要；中文说明全部写入正文。
+- 自动发布和发布后的正文修订统一使用 `tools/release_notes.py` 生成完整正文，再通过工作流或 `gh release edit --notes-file` 写入。以 v1.31.90 的正文结构为模板，保留分类 emoji、部署说明、资产列表和适用的升级提醒，不直接用临时文本替换完整模板。
+- 正文修订前保存原始标题和正文，修订后读取线上内容核对；仅修订说明不得移动 tag、替换资产或重新执行历史版本构建。
 - conventional commit 前缀只用于分类，不得作为用户可见标题原样保留；`fix:`、`feat:`、`release:` 等必须在 Release 条目中剥离。
 - 提交标题、PR squash 标题和 release 类型提交必须写中文业务摘要，例如 `fix: 修复导入分类与设备参数问题`，不得写 `fix: resolve issue sweep` 这类英文泛化标题。
 - Release 分类标题必须中文化，例如 `修复问题`、`新增功能`、`版本发布`、`构建发布`、`文档更新`；完整对比链接标题使用 `完整变更记录`。

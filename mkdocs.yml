@@ -37,10 +37,12 @@ nav:
       - 代理管理与账号出口: guides/proxy-management.md
       - 同步说明: guides/sync.md
   - 部署与运维:
+      - 隔离验收部署: deployment/isolated-acceptance.md
       - 反向代理: deployment/reverse-proxy.md
       - Bot Webhook: deployment/bot-webhook.md
       - 共享 WireGuard 运维工具: deployment/wgcf-wireproxy.md
   - 参考:
+      - 发布说明生成器: reference/release-notes.md
       - 配置与数据目录: reference/configuration.md
       - 数据库: reference/database.md
       - API: reference/api.md
@@ -52,4 +54,5 @@ nav:
       - 群组管理员移除: developer/group-admin-removal.md
       - WTelegram Layer 兼容性: developer/telegram-layer-compatibility.md
       - 文档维护: developer/documentation.md
+      - 工程证据完整性: developer/evidence-integrity.md
       - 开发发布流程: developer/release-process.md

@@ -317,5 +317,11 @@ timeout 60s docker exec -i telegram-panel python3 - http://127.0.0.1:5000 < tool
 
 GitHub Release 会自动生成完整变更记录，并在 Release 正文保留“本次版本主要更新”“部署与更新”“应用内更新资产”等固定段落。面板左上角版本弹窗会读取最新 Release Notes 并展示；如果页面没有显示更新内容，先点击“立即检查”，再打开对应 GitHub Release 页面确认正文是否为空。
 
-成功判据是 Release 页面不为空，面板版本弹窗能看到“Release Notes”。若自动生成内容缺失，检查 `.github/workflows/release.yml` 中 `generate_release_notes: true` 是否仍启用，以及发布 tag 是否包含合并提交。回滚只需恢复旧 release workflow，不影响运行时数据。
+Release 标题只显示版本号，正文沿用 v1.31.90 的分类与 emoji 格式。成功判据是 Release 页面有实际更新内容、部署说明及资产列表，面板版本弹窗能看到“Release Notes”。
+
+包含围栏修复的生成流程会保留更新说明代码示例里的重复行、缩进和空行。例如展示 Markdown 写法时，四反引号包围的三反引号示例应完整显示。若示例缺行，先核对 GitHub Release 原文，并将版本号及缺失内容交维护者检查；维护者应使用修复后的生成器从原摘要重新生成、逐字核对，必要时恢复修订前的正文备份，无需重新安装面板或修改运行数据。
+
+统一生成流程合入后的版本由 `tools/release_notes.py` 生成正文，也支持读取发布合并提交中的更新摘要。如果内容缺失或格式不同，维护者应核对 Release 工作流的 `Generate Chinese release notes`、`Verify published release notes` 步骤与 `release-notes` 构建产物，并确认发布后是否另行编辑过正文。当前工作流不使用 `generate_release_notes: true` 或 `.github/release.yml` 生成正文。
+
+历史发布页可按[开发发布流程](../developer/release-process.md)单独整理；v1.31.90 的现有正文保持不变。修订说明前需保存原始标题与正文，失败时恢复该备份即可，不移动 tag、不替换安装包，也不影响运行时数据。
 
