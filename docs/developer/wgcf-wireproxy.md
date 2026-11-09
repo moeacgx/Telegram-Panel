@@ -26,6 +26,38 @@
 
 ## 面板内置运行器
 
+### 可选逐进程软性资源模板（ALHE-23，dev 待发布）
+
+本节仅适用于包含 ALHE-23 实现的镜像／工具版本；历史版本的额度事实见下一节。
+`WgcfWireproxyResources` 把 `WgcfWarp:Wireproxy` 的三个可选配置转换为全部工具 CLI
+共用的全局参数，参数须放在子命令之前。Python `WireproxyResources` 是运行参数和
+Linux 父 hard limit 的校验点，`check-resources` 仅预检，不创建目录、材料或上游进程。
+字段及取值见[配置参考](../reference/configuration.md#wireproxy-resource-template)。
+
+不配置时原样继承环境（包括已经存在的 `GOMAXPROCS`、`GOMEMLIMIT`）及 rlimit；
+不启用环境白名单。显式值仅覆盖每个 wireproxy 的对应变量，应用于 `-n` 配置校验及
+监督器的每次启动／恢复，不改变 wgcf、Python 监督器、面板进程的资源限制。
+`GOMAXPROCS` 是 Go 并行度，`GOMEMLIMIT` 是 Go 管理内存的软目标；均不保证 CPU／RSS
+硬上限。`NoFile` 是 fd 总量限制，不能换算为精确连接数。
+
+Linux NOFILE 通过独立 Python 包装进程先 `setrlimit` 再 `execvpe`，PID 保持一致，
+不使用线程宿主的 `preexec_fn`。子进程 soft/hard 同时降到配置值，防止 Go 启动时把 soft
+重新抬至 hard；父级不变。超过父 hard limit、非 Linux 或非正整数明确失败，不无约束回退。
+面板预检失败通过现有可用性 `reason` 返回字段提示，不输出完整子进程环境或原始错误。
+启动失败仅记录对应档案 `failed`／`backoff`，其余档案继续；重试仍应用同一模板。
+CLI 的 `list/status/stop/delete` 即使资源模板错误也可执行，保留排查和停止通道。
+面板配置修改后须重启生效；错误配置下仍应保留档案材料，修正配置后再恢复。
+
+接口、DTO、数据库、档案持久化格式和固定 100 份数量保护不变。没有逐出口配置、cgroup
+委派或新权限。关闭覆盖只须删除三个配置并重启；回滚镜像保留持久卷，不需迁移注册材料。
+已运行进程不热更新，运维须安排维护窗口，避免在使用中的出口强行停止。
+
+离线成功标准：两个替身档案在配置校验、启动和重启时均观察到覆盖；关闭时继承父环境及
+rlimit；非法值在注册前失败；单档启动异常不杀监督器；Linux fd 耗尽产生 EMFILE、释放后
+重新分配成功；100 份边界的并发创建、幂等及恢复可用；既有无直连回退测试通过。
+运行下方 Python/.NET 检查；Linux 专项已纳入现有 wgcf-tool 工作流，Windows 显式跳过。
+替身的 fd 验证不能证明实际 wireproxy 的 EMFILE 行为，真实负载仍须按部署页独立验收。
+
 ### 资源额度归属（v1.31.83 起）
 
 按 `dev` 源码提交 `b753ccb4398e94e5bd5a200ccad89fbb64f7b509`（对应 `main`

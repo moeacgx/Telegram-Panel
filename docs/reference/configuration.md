@@ -358,6 +358,8 @@ v1.31.83 起，内置轻量 WARP 可显式共享给多个账号或用作全局�
 
 ## 轻量 WARP 配置与旧配置退役（v1.31.82）
 
+新版本的可选运行模板见[wireproxy 资源配置](#wireproxy-resource-template)。
+
 从 v1.31.81 起，所有新建 WARP 使用 Linux 主容器内置 wgcf＋wireproxy，固定 SOCKS5，
 无需开启 `Proxy:Warp:Enabled` 或挂载 Docker Socket。v1.31.82 已删除旧容器管理器、巡检和
 刷新接口，旧 `Proxy:Warp:*` / `Proxy__Warp__*` / `TP_WARP_*` 配置不再生效，应从部署环境
@@ -377,6 +379,30 @@ v1.31.83 支持将内置轻量出口作为 `Telegram:Proxy` 的已有代理引�
 排障时先检查实际镜像版本、内置运行器依赖、持久目录和网络，不要重新启用已退役配置。
 回滚至 v1.31.82 或更早版本前，先将受管共享及全局路由迁回其支持的路由，否则旧版会拒绝连接。
 保留新账号路由和注册材料备份；不能恢复迁移前数据库，以免账号重新引用已经删除的旧容器。
+
+<a id="wireproxy-resource-template"></a>
+
+## wireproxy 可选资源模板（ALHE-23，dev 待发布）
+
+适用于包含 ALHE-23 实现的版本；旧镜像不识别这些配置。面板在启动时读取，所有档案
+使用相同模板，不新增 UI/API 或数据库字段。默认均不覆盖，保留父环境和父 rlimit。
+
+| 面板配置键 | Docker 环境变量 | 独立工具全局参数 | 含义 |
+| --- | --- | --- | --- |
+| `WgcfWarp:Wireproxy:GoMaxProcs` | `WgcfWarp__Wireproxy__GoMaxProcs` | `--wireproxy-gomaxprocs` | 每个 wireproxy 的 `GOMAXPROCS`，Go 并行度 |
+| `WgcfWarp:Wireproxy:GoMemLimitMiB` | `WgcfWarp__Wireproxy__GoMemLimitMiB` | `--wireproxy-gomemlimit-mib` | 每个 wireproxy 的 `GOMEMLIMIT`，单位 MiB，Go 内存软目标 |
+| `WgcfWarp:Wireproxy:NoFile` | `WgcfWarp__Wireproxy__NoFile` | `--wireproxy-nofile` | Linux 子进程 NOFILE soft/hard fd 限制 |
+
+非空值须为 `1..2147483647` 的十进制整数；拒绝负数、小数、空白和带单位的字符串。
+面板空值按未设置处理；独立 CLI 使用省略参数表示未设置，显式空字符串会被拒绝。
+`NoFile` 还须不超过父 hard limit，且要求 Linux `resource.RLIMIT_NOFILE`。
+低值可能使解释器或 wireproxy 启动失败，应先在隔离环境选值，不能视作安全默认值。
+Go 参数不限制 wgcf 或 Python 监督器，也不构成 CPU／RSS 硬配额；fd 数不是连接数。
+工具 `check-resources` 可校验语法及父 hard limit；实际进程启动仍受系统其它约束影响。
+
+成功判据、故障排查和生效／回滚步骤见[部署与验收](../deployment/wgcf-wireproxy.md#wireproxy-soft-resources)。
+配置错误会阻止新建／启动并返回不可用原因，不静默忽略。移除覆盖并重启后恢复继承行为；
+不删除材料、不变更代理路由，不取消已有共享容器总额度。
 
 ## 计划任务随机延迟
 
